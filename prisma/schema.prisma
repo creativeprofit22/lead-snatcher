@@ -1,0 +1,225 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// User model for authentication (invite-only)
+model User {
+  id          String    @id @default(cuid())
+  email       String    @unique
+  password    String? // Null until user sets their password
+  name        String?
+  inviteToken String?   @unique // Token for setting password
+  invitedAt   DateTime  @default(now())
+  createdAt   DateTime? // Set when user completes signup
+  updatedAt   DateTime  @updatedAt
+
+  // User's data
+  apiKeys          ApiKey[]
+  businessSearches BusinessSearch[]
+  leads            Lead[]
+  tags             Tag[]
+  tasks            Task[]
+
+  @@index([email])
+  @@index([inviteToken])
+}
+
+// API Keys - stores encrypted API keys for different services per user
+model ApiKey {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  service   String // "rapidapi_maps"
+  key       String // encrypted API key
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, service])
+  @@index([userId])
+  @@index([service])
+}
+
+// Business Search - stores search queries
+model BusinessSearch {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  businessType String // e.g., "restaurant", "salon", "gym"
+  city         String
+  country      String   @default("au")
+  latitude     Float?
+  longitude    Float?
+  createdAt    DateTime @default(now())
+
+  // Results from this search
+  results BusinessSearchResult[]
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+// Business Search Results - raw results from API
+model BusinessSearchResult {
+  id       String         @id @default(cuid())
+  searchId String
+  search   BusinessSearch @relation(fields: [searchId], references: [id], onDelete: Cascade)
+
+  // Google Maps data
+  placeId     String // Google Place ID
+  name        String
+  address     String?
+  phone       String?
+  website     String?
+  rating      Float?
+  reviewCount Int?
+  types       String? // JSON array of business types (was String[])
+  photoUrl    String?
+  mapsUrl     String?
+
+  // Calculated scores
+  leadScore Int @default(0)
+
+  // Timestamps
+  createdAt DateTime @default(now())
+
+  @@unique([searchId, placeId])
+  @@index([searchId])
+  @@index([placeId])
+}
+
+// Saved Leads - businesses saved to CRM
+model Lead {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Business info
+  placeId      String // Google Place ID
+  name         String
+  address      String?
+  phone        String?
+  website      String?
+  rating       Float?
+  reviewCount  Int?
+  industryType String  @default("other")
+  photoUrl     String?
+  mapsUrl      String?
+
+  // Lead scoring
+  leadScore      Int     @default(0)
+  scoreBreakdown String? // JSON object (was Json?)
+
+  // CRM fields - status as string instead of enum for SQLite compatibility
+  // Values: new, contacted, called, proposal_sent, negotiating, won, lost, not_interested
+  status        String  @default("new")
+  notes         String?
+  opportunities String? // JSON array (was String[])
+
+  // Contact tracking
+  lastContactedAt DateTime?
+  nextFollowUpAt  DateTime?
+
+  // Timestamps
+  savedAt   DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Contact history
+  contactLogs ContactLog[]
+
+  // Tags (many-to-many)
+  tags LeadTag[]
+
+  // Tasks linked to this lead
+  tasks Task[]
+
+  // User can only save a business once
+  @@unique([userId, placeId])
+  @@index([userId])
+  @@index([status])
+  @@index([leadScore])
+  @@index([savedAt])
+}
+
+// Junction table for Lead-Tag many-to-many (SQLite compatible)
+model LeadTag {
+  id     String @id @default(cuid())
+  leadId String
+  tagId  String
+  lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  tag    Tag    @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@unique([leadId, tagId])
+  @@index([leadId])
+  @@index([tagId])
+}
+
+// Contact Log - track interactions with leads
+model ContactLog {
+  id     String @id @default(cuid())
+  leadId String
+  lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  type    String // email, call, meeting, note
+  summary String
+  outcome String? // positive, negative, neutral
+
+  createdAt DateTime @default(now())
+
+  @@index([leadId])
+  @@index([createdAt])
+}
+
+// Tag - custom labels for organizing leads
+model Tag {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name  String // Tag name
+  color String // Hex color (e.g., "#3b82f6")
+
+  // Many-to-many relation with Leads via junction table
+  leads LeadTag[]
+
+  createdAt DateTime @default(now())
+
+  // Each user can only have one tag with the same name
+  @@unique([userId, name])
+  @@index([userId])
+}
+
+// Task - reminders and to-do items
+model Task {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Task details
+  title       String
+  description String?
+  type        String @default("other") // call, email, meeting, follow_up, other
+
+  // Scheduling
+  dueAt    DateTime
+  priority String   @default("medium") // low, medium, high, urgent
+
+  // Completion tracking
+  completedAt DateTime?
+
+  // Optional lead association
+  leadId String?
+  lead   Lead?  @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  // Timestamps
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([leadId])
+  @@index([dueAt])
+}

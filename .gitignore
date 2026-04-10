@@ -1,0 +1,66 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files
+.env
+.env.*
+!.env.example
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# prisma generated
+/src/generated/prisma
+
+# database
+/data/
+
+# PostgreSQL / Docker (for local dev only)
+docker-compose.yml
+docker-compose*.yml
+Dockerfile
+.dockerignore
+
+# local dev files (not needed for open source)
+TODO.md
+crmredesign.md
+import-leads.ts
+Smart-opportunities.csv
+Smart-opportunities.json
+railway.json
+
+# Claude Code commands (personal)
+.claude/
