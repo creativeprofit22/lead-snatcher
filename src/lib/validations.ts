@@ -60,7 +60,7 @@ export const createLeadSchema = z.object({
   photoUrl: z.string().max(2000).nullish(),
   mapsUrl: z.string().max(2000).nullish(),
   leadScore: z.number().int().min(0).max(100).default(0),
-  scoreBreakdown: z.record(z.string(), z.number()).nullish(),
+  scoreBreakdown: z.record(z.string(), z.union([z.number(), z.boolean(), z.string(), z.array(z.string())])).nullish(),
   opportunities: z.array(z.string()).nullish(),
 });
 

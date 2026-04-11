@@ -34,6 +34,9 @@ export interface ScrapedWebsiteData {
   hasEcommerce: boolean;
   hasBlog: boolean;
 
+  // Contact info extracted from website
+  emails: string[]; // Business email addresses found on site
+
   // Social media presence
   socialLinks: {
     facebook?: string;
@@ -54,6 +57,18 @@ export interface ScrapedWebsiteData {
   hasModernDesign: boolean; // Based on CSS framework detection
   imageCount: number;
   hasVideo: boolean;
+
+  // Marketing signals - detected ad/tracking scripts
+  marketingSignals: {
+    hasGoogleAds: boolean; // AdSense, Google Ads conversion
+    hasFacebookAds: boolean; // Meta Pixel / Facebook Pixel
+    hasGoogleAnalytics: boolean; // GA4 / GTM
+    hasBingAds: boolean;
+    hasHotjar: boolean; // Paying for UX analytics
+    hasOtherAds: boolean; // Any other ad network
+    detectedPlatforms: string[]; // Human-readable list
+  };
+  hasMarketingBudget: boolean; // true if ANY ad platform detected
 
   // Errors
   error?: string;
@@ -109,6 +124,48 @@ const CHAT_PATTERNS = [
   /tidio/i,
 ];
 
+// Marketing / Ad platform detection
+const MARKETING_SIGNALS = {
+  googleAds: [
+    /googlesyndication\.com/i, // Google AdSense
+    /googleadservices\.com/i, // Google Ads conversion tracking
+    /adsbygoogle/i, // AdSense inline
+    /google_ad_client/i, // AdSense config
+    /googleads\.g\.doubleclick/i, // Google Ads remarketing
+  ],
+  facebookAds: [
+    /connect\.facebook\.net/i, // Facebook SDK (Pixel)
+    /fbq\s*\(/i, // Facebook Pixel function call
+    /facebook\.com\/tr/i, // Facebook tracking pixel
+    /meta.*pixel/i, // Meta Pixel
+  ],
+  googleAnalytics: [
+    /googletagmanager\.com/i, // Google Tag Manager
+    /google-analytics\.com/i, // Classic GA
+    /gtag\s*\(/i, // GA4 gtag
+    /analytics\.js/i, // Universal Analytics
+  ],
+  bingAds: [
+    /bat\.bing\.com/i, // Bing UET tag
+    /clarity\.ms/i, // Microsoft Clarity
+  ],
+  hotjar: [
+    /hotjar\.com/i, // Hotjar heatmaps
+    /static\.hotjar\.com/i,
+  ],
+  otherAds: [
+    /doubleclick\.net/i, // Google ad network
+    /adroll\.com/i, // AdRoll retargeting
+    /criteo/i, // Criteo ads
+    /taboola/i, // Taboola native ads
+    /outbrain/i, // Outbrain native ads
+    /linkedin\.com\/px/i, // LinkedIn Insight Tag
+    /snap\.licdn\.com/i, // LinkedIn tracking
+    /tiktok\.com\/i18n\/pixel/i, // TikTok Pixel
+    /ads-twitter\.com/i, // Twitter/X ads
+  ],
+} as const;
+
 const NEWSLETTER_PATTERNS = [
   /newsletter/i,
   /subscribe/i,
@@ -140,6 +197,7 @@ export async function scrapeWebsite(websiteUrl: string): Promise<ScrapedWebsiteD
     hasNewsletter: false,
     hasEcommerce: false,
     hasBlog: false,
+    emails: [],
     socialLinks: {},
     socialCount: 0,
     hasMobileViewport: false,
@@ -148,6 +206,16 @@ export async function scrapeWebsite(websiteUrl: string): Promise<ScrapedWebsiteD
     hasModernDesign: false,
     imageCount: 0,
     hasVideo: false,
+    marketingSignals: {
+      hasGoogleAds: false,
+      hasFacebookAds: false,
+      hasGoogleAnalytics: false,
+      hasBingAds: false,
+      hasHotjar: false,
+      hasOtherAds: false,
+      detectedPlatforms: [],
+    },
+    hasMarketingBudget: false,
     scrapedAt: new Date().toISOString(),
   };
 
@@ -172,7 +240,7 @@ export async function scrapeWebsite(websiteUrl: string): Promise<ScrapedWebsiteD
       signal: controller.signal,
       headers: {
         'User-Agent':
-          'Mozilla/5.0 (compatible; LeadScorer/1.0; +https://example.com/bot)',
+          'Mozilla/5.0 (compatible; LeadSnatcher/1.0)',
         Accept: 'text/html,application/xhtml+xml',
         'Accept-Language': 'en-US,en;q=0.9,de;q=0.8',
       },
@@ -194,9 +262,11 @@ export async function scrapeWebsite(websiteUrl: string): Promise<ScrapedWebsiteD
     extractBasicInfo(html, result);
     detectTechStack(html, result);
     detectFeatures(html, result);
+    extractEmails(html, result);
     extractSocialLinks(html, result);
     detectDesignQuality(html, result);
     estimateWebsiteAge(html, result);
+    detectMarketingSignals(html, result);
 
     return result;
   } catch (error) {
@@ -334,6 +404,59 @@ function detectFeatures(html: string, result: ScrapedWebsiteData): void {
   result.hasBlog = /blog/i.test(html) || /artikel/i.test(html) || /news/i.test(html);
 }
 
+function extractEmails(html: string, result: ScrapedWebsiteData): void {
+  // Match email addresses in mailto: links and visible text
+  const emailPattern = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+  const matches = html.match(emailPattern) || [];
+
+  // Filter out common junk/placeholder emails
+  const junkPatterns = [
+    /noreply/i,
+    /no-reply/i,
+    /example\.com/i,
+    /domain\.com/i,
+    /email\.com$/i,
+    /test@/i,
+    /user@/i,
+    /info@example/i,
+    /your-?email/i,
+    /name@/i,
+    /sentry/i,
+    /webpack/i,
+    /wixpress/i,
+    /wix\.com/i,
+    /wordpress/i,
+    /schema\.org/i,
+    /sentry\.io/i,
+    /placeholder/i,
+    /sample/i,
+    /\.png$/i,
+    /\.jpg$/i,
+    /\.jpeg$/i,
+    /\.gif$/i,
+    /\.svg$/i,
+    /\.webp$/i,
+    /\.js$/i,
+    /\.css$/i,
+    /\.woff/i,
+    /\.ttf$/i,
+    /protection@/i,
+    /abuse@/i,
+    /postmaster@/i,
+    /mailer-daemon/i,
+    /changeme/i,
+    /yourname/i,
+    /youremail/i,
+    /someone@/i,
+  ];
+
+  const uniqueEmails = [...new Set(matches)]
+    .filter((email) => !junkPatterns.some((p) => p.test(email)))
+    .slice(0, 5); // Max 5 emails
+
+  result.emails = uniqueEmails;
+}
+
 function extractSocialLinks(html: string, result: ScrapedWebsiteData): void {
   const socialPatterns = {
     facebook: /href=["']([^"']*facebook\.com[^"']*)["']/gi,
@@ -412,4 +535,36 @@ function estimateWebsiteAge(html: string, result: ScrapedWebsiteData): void {
       result.estimatedAge = 'ancient';
     }
   }
+}
+
+function detectMarketingSignals(html: string, result: ScrapedWebsiteData): void {
+  const signals = result.marketingSignals;
+  const platforms: string[] = [];
+
+  signals.hasGoogleAds = MARKETING_SIGNALS.googleAds.some((p) => p.test(html));
+  if (signals.hasGoogleAds) platforms.push('Google Ads');
+
+  signals.hasFacebookAds = MARKETING_SIGNALS.facebookAds.some((p) => p.test(html));
+  if (signals.hasFacebookAds) platforms.push('Facebook Ads');
+
+  signals.hasGoogleAnalytics = MARKETING_SIGNALS.googleAnalytics.some((p) => p.test(html));
+  if (signals.hasGoogleAnalytics) platforms.push('Google Analytics');
+
+  signals.hasBingAds = MARKETING_SIGNALS.bingAds.some((p) => p.test(html));
+  if (signals.hasBingAds) platforms.push('Bing Ads');
+
+  signals.hasHotjar = MARKETING_SIGNALS.hotjar.some((p) => p.test(html));
+  if (signals.hasHotjar) platforms.push('Hotjar');
+
+  signals.hasOtherAds = MARKETING_SIGNALS.otherAds.some((p) => p.test(html));
+  if (signals.hasOtherAds) platforms.push('Other Ad Networks');
+
+  signals.detectedPlatforms = platforms;
+
+  // Has marketing budget = running any paid ads (analytics alone doesn't count)
+  result.hasMarketingBudget =
+    signals.hasGoogleAds ||
+    signals.hasFacebookAds ||
+    signals.hasBingAds ||
+    signals.hasOtherAds;
 }

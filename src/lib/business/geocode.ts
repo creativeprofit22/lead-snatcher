@@ -30,7 +30,7 @@ export async function geocodeCity(
 
     const response = await fetch(`${NOMINATIM_BASE_URL}/search?${params}`, {
       headers: {
-        'User-Agent': 'SocialBusinesses/1.0',
+        'User-Agent': 'LeadSnatcher/1.0',
         'Accept-Language': 'en',
       },
     });

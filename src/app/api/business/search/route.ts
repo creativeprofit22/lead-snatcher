@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/db';
-import { geocodeCity, searchBusinesses } from '@/lib/business';
+import { geocodeCity, searchBusinesses, scoreArea } from '@/lib/business';
+import { estimateBudget, buildBudgetInput } from '@/lib/business/budget-estimate';
 import { getSearchQuery } from '@/lib/constants';
 import { ApiError } from '@/lib/errors';
 import { checkRateLimit, getClientIp, RATE_LIMITS } from '@/lib/rate-limit';
@@ -48,20 +49,38 @@ export async function POST(request: NextRequest) {
     // e.g., "real_estate" + "de" → "Immobilienmakler"
     const searchQuery = getSearchQuery(businessType as IndustryType, country);
 
-    // Search for businesses with optional website analysis
-    // Scraping is always enabled (fast, provides tech stack & features)
-    // PageSpeed analysis is optional (slower, provides performance metrics)
-    const results = await searchBusinesses(
-      session.user.id,
-      searchQuery,
-      geocodeResult.latitude,
-      geocodeResult.longitude,
-      limit,
-      {
-        enableWebsiteScraping: true, // Always scrape for tech stack & features
-        enableWebsiteAnalysis: deepAnalysis, // Optional PageSpeed analysis
-      }
-    );
+    // Run business search and area scoring in parallel
+    const [results, areaScore] = await Promise.all([
+      searchBusinesses(
+        session.user.id,
+        searchQuery,
+        geocodeResult.latitude,
+        geocodeResult.longitude,
+        limit,
+        {
+          enableWebsiteScraping: true, // Always scrape for tech stack & features
+          enableWebsiteAnalysis: deepAnalysis, // Optional PageSpeed analysis
+        }
+      ),
+      scoreArea(geocodeResult.latitude, geocodeResult.longitude),
+    ]);
+
+    // Enrich each result with budget estimate and area level
+    const enrichedResults = results.map((result) => {
+      const budgetInput = buildBudgetInput(
+        result.scoreBreakdown,
+        result.reviewCount || 0,
+        !!result.website,
+        result.contactPoints,
+        areaScore.score,
+        areaScore.level
+      );
+      return {
+        ...result,
+        budgetEstimate: estimateBudget(budgetInput),
+        areaLevel: areaScore.level,
+      };
+    });
 
     // Save search to database
     await prisma.businessSearch.create({
@@ -90,10 +109,29 @@ export async function POST(request: NextRequest) {
       },
     });
 
+    const count = enrichedResults.length;
+
+    // Market density from result count (business competition)
+    const competitionLevel = count >= 30 ? 'high' : count >= 15 ? 'medium' : 'low';
+
+    // Combined market intelligence
+    const marketDensity = {
+      count,
+      level: areaScore.level === 'premium' || areaScore.level === 'commercial' ? 'high'
+        : areaScore.level === 'moderate' ? 'medium'
+        : 'low',
+      label: areaScore.label,
+      description: areaScore.description,
+      areaScore: areaScore.score,
+      competition: competitionLevel,
+      amenities: areaScore.amenities,
+    };
+
     return NextResponse.json({
-      results,
+      results: enrichedResults,
       location: geocodeResult,
-      count: results.length,
+      count,
+      marketDensity,
     });
   } catch (error) {
     console.error('Business search error:', error);

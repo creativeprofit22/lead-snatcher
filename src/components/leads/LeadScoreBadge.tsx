@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Flame, Snowflake, Sparkles } from 'lucide-react';
+import { Flame, Snowflake, Sparkles, DollarSign, CircleSlash, TrendingUp, Minus, TrendingDown } from 'lucide-react';
 import type { ScoreBreakdown, WebsiteAnalysis } from '@/types';
 
 interface LeadScoreBadgeProps {
@@ -92,6 +92,64 @@ export function LeadScoreBadge({
         </button>
       </div>
 
+      {/* Signal Badges */}
+      {breakdown && (
+        <div className="flex items-center gap-1.5 flex-wrap justify-end">
+          {/* Marketing Budget */}
+          <div
+            className={`flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium ${
+              breakdown.hasMarketingBudget
+                ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400'
+                : 'bg-white/5 border border-white/10 text-gray-500'
+            }`}
+            title={
+              breakdown.hasMarketingBudget
+                ? `Runs: ${breakdown.marketingPlatforms.join(', ')}`
+                : 'No paid ads detected'
+            }
+          >
+            {breakdown.hasMarketingBudget ? (
+              <>
+                <DollarSign className="w-3 h-3" />
+                <span>Ad Spend</span>
+              </>
+            ) : (
+              <>
+                <CircleSlash className="w-3 h-3" />
+                <span>No Ads</span>
+              </>
+            )}
+          </div>
+
+          {/* Revenue Signal */}
+          <div
+            className={`flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium ${
+              breakdown.revenueSignal === 'high'
+                ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400'
+                : breakdown.revenueSignal === 'medium'
+                  ? 'bg-amber-500/10 border border-amber-500/20 text-amber-400'
+                  : 'bg-white/5 border border-white/10 text-gray-500'
+            }`}
+            title={breakdown.revenueLabel}
+          >
+            {breakdown.revenueSignal === 'high' ? (
+              <TrendingUp className="w-3 h-3" />
+            ) : breakdown.revenueSignal === 'medium' ? (
+              <Minus className="w-3 h-3" />
+            ) : (
+              <TrendingDown className="w-3 h-3" />
+            )}
+            <span>
+              {breakdown.revenueSignal === 'high'
+                ? 'High Revenue'
+                : breakdown.revenueSignal === 'medium'
+                  ? 'Established'
+                  : 'Low Traffic'}
+            </span>
+          </div>
+        </div>
+      )}
+
       {isExpanded && breakdown && (
         <div className="mt-2 p-3 bg-white/5 border border-white/10 rounded-lg text-xs w-full min-w-[280px]">
           <div className="font-medium mb-2 text-gray-300">Score Breakdown</div>
@@ -142,6 +200,61 @@ export function LeadScoreBadge({
               <ScoreRow label="No online booking" value={breakdown.noOnlineBooking} />
               <ScoreRow label="No social links" value={breakdown.noSocialLinks} />
               <ScoreRow label="Basic tech stack" value={breakdown.basicTechStack} />
+            </div>
+          </div>
+
+          {/* Marketing Intelligence */}
+          <div className="mb-2">
+            <div className="text-gray-500 text-[10px] uppercase tracking-wide mb-1">
+              Marketing Intelligence
+            </div>
+            {breakdown.hasMarketingBudget ? (
+              <div className="space-y-1">
+                <div className="flex items-center gap-1.5 text-emerald-400">
+                  <DollarSign className="w-3 h-3" />
+                  <span>Active marketing budget detected</span>
+                </div>
+                <div className="flex flex-wrap gap-1 mt-1">
+                  {breakdown.marketingPlatforms.map((platform) => (
+                    <span
+                      key={platform}
+                      className="px-1.5 py-0.5 bg-emerald-500/10 border border-emerald-500/20 rounded text-[10px] text-emerald-400"
+                    >
+                      {platform}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="text-gray-600 flex items-center gap-1.5">
+                <CircleSlash className="w-3 h-3" />
+                <span>No paid advertising detected</span>
+              </div>
+            )}
+          </div>
+
+          {/* Revenue Signal */}
+          <div className="mb-2">
+            <div className="text-gray-500 text-[10px] uppercase tracking-wide mb-1">
+              Revenue Signal
+            </div>
+            <div
+              className={`flex items-center gap-1.5 ${
+                breakdown.revenueSignal === 'high'
+                  ? 'text-emerald-400'
+                  : breakdown.revenueSignal === 'medium'
+                    ? 'text-amber-400'
+                    : 'text-gray-600'
+              }`}
+            >
+              {breakdown.revenueSignal === 'high' ? (
+                <TrendingUp className="w-3 h-3" />
+              ) : breakdown.revenueSignal === 'medium' ? (
+                <Minus className="w-3 h-3" />
+              ) : (
+                <TrendingDown className="w-3 h-3" />
+              )}
+              <span>{breakdown.revenueLabel}</span>
             </div>
           </div>
 

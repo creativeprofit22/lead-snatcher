@@ -116,8 +116,8 @@ export async function searchBusinesses(
     return transformBusinessResult(business, websiteAnalysis, scrapedData);
   });
 
-  // Sort by lead score (highest first)
-  results.sort((a, b) => b.leadScore - a.leadScore);
+  // Sort by lead score (highest first), then by contact points (more = better lead)
+  results.sort((a, b) => b.leadScore - a.leadScore || b.contactPoints - a.contactPoints);
 
   return results;
 }
@@ -171,11 +171,23 @@ function transformBusinessResult(
   // Get photo URL
   const photoUrl = business.photos_sample?.[0]?.photo_url || null;
 
-  // Generate Google Maps URL
-  const mapsUrl =
-    business.latitude && business.longitude
-      ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(business.name || '')}&query_place_id=${business.business_id}`
-      : null;
+  // Generate Google Maps URL - use name + address for reliable direct match
+  const mapsQuery = [business.name, business.full_address].filter(Boolean).join(', ');
+  const mapsUrl = mapsQuery
+    ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapsQuery)}`
+    : null;
+
+  // Extract email and social links from scraped data
+  const email = scrapedData?.emails?.[0] || undefined;
+  const socialLinks = scrapedData?.socialLinks || {};
+  const socialCount = scrapedData?.socialCount || 0;
+
+  // Count total contact points (more = easier to reach = better lead)
+  let contactPoints = 0;
+  if (business.phone_number) contactPoints++;
+  if (email) contactPoints++;
+  if (website) contactPoints++;
+  contactPoints += socialCount;
 
   return {
     placeId: business.business_id || '',
@@ -183,6 +195,9 @@ function transformBusinessResult(
     address: business.full_address || undefined,
     phone: business.phone_number || undefined,
     website: website || undefined,
+    email,
+    socialLinks,
+    contactPoints,
     rating: business.rating || undefined,
     reviewCount: business.review_count || undefined,
     photoCount,

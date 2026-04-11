@@ -44,6 +44,14 @@ export interface ScoreBreakdown {
   noSocialLinks: number; // +5 if no social media links on site
   basicTechStack: number; // +7 if using old/basic tech (plain HTML, old WordPress)
 
+  // Marketing Intelligence (not scored - informational)
+  hasMarketingBudget: boolean; // true if business runs paid ads
+  marketingPlatforms: string[]; // detected platforms list
+
+  // Revenue Signal (not scored - informational)
+  revenueSignal: 'high' | 'medium' | 'low'; // based on review count
+  revenueLabel: string; // human-readable label
+
   total: number;
 }
 
@@ -88,7 +96,18 @@ export interface ScrapedWebsiteData {
   socialCount: number;
   hasMobileViewport: boolean;
   isHttps: boolean;
+  emails: string[];
   hasModernDesign: boolean;
+  marketingSignals: {
+    hasGoogleAds: boolean;
+    hasFacebookAds: boolean;
+    hasGoogleAnalytics: boolean;
+    hasBingAds: boolean;
+    hasHotjar: boolean;
+    hasOtherAds: boolean;
+    detectedPlatforms: string[];
+  };
+  hasMarketingBudget: boolean;
   error?: string;
   scrapedAt: string;
 }
@@ -118,6 +137,24 @@ export interface BusinessSearchResult {
   types: string[];
   photoUrl?: string;
   mapsUrl?: string;
+  email?: string; // Primary email from scraping
+  socialLinks: {
+    facebook?: string;
+    instagram?: string;
+    twitter?: string;
+    linkedin?: string;
+    youtube?: string;
+    tiktok?: string;
+  };
+  contactPoints: number; // Total contact channels (phone, email, website, socials)
+  budgetEstimate?: {
+    min: number; // e.g. 1000
+    max: number; // e.g. 3000
+    label: string; // e.g. "$1K - $3K"
+    confidence: 'high' | 'medium' | 'low';
+    reasons: string[]; // why we think this
+  };
+  areaLevel?: string; // premium, commercial, moderate, developing
   leadScore: number;
   scoreBreakdown: ScoreBreakdown;
   opportunities: string[];

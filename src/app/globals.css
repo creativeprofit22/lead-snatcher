@@ -267,7 +267,7 @@ body {
   font-family: var(--font-orbitron);
 }
 
-/* Dark Theme - Social Businesses CRM (Pure Black) */
+/* Dark Theme - Lead Snatcher CRM (Pure Black) */
 .dark,
 :root {
   --background: oklch(0 0 0);                /* #000000 - Pure black */

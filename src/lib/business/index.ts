@@ -10,3 +10,5 @@ export { searchBusinesses } from './search';
 export type { SearchOptions } from './search';
 export { analyzeWebsite, analyzeWebsitesBatch } from './pagespeed';
 export { scrapeWebsite, scrapeWebsitesBatch } from './scraper';
+export { scoreArea } from './area-score';
+export type { AreaScore } from './area-score';
