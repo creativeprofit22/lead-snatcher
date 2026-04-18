@@ -19,6 +19,7 @@ import {
   ChevronDown,
   ChevronUp,
   Flame,
+  Activity,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { AnimatePresence, motion } from 'motion/react';
@@ -33,19 +34,31 @@ import {
 import { PreLoader } from '@/components/preloader';
 import { SlidingNumber } from '@/components/motion-primitives/sliding-number';
 import { GlowEffect } from '@/components/motion-primitives/glow-effect';
+import { HoloCard } from '@/components/ui/HoloCard';
 import {
   LeadScoreBadge,
   OpportunitiesList,
   SaveLeadModal,
+  FootTrafficSlot,
 } from '@/components/leads';
 import { SettingsModal } from '@/components/settings';
 import { UserMenu } from '@/components/auth';
 import { saveLastSearch, getLastSearch } from '@/lib/search-cache';
+import { INDUSTRY_TYPES } from '@/lib/constants';
+import { computeFitScore } from '@/lib/business/budget-estimate';
 import type { IndustryType, BusinessSearchResult } from '@/types';
+
+interface CachedPopularTimes {
+  weekly: number[][];
+  currentPopularity?: number;
+  timeSpent?: string;
+  dayLabels: string[];
+  scrapedAt: string;
+}
 import type { Zone } from '@/lib/business/zone-grid';
 
 type ViewMode = 'search' | 'results';
-type SortOption = 'score' | 'contactPoints' | 'reviews' | 'rating';
+type SortOption = 'fit' | 'score' | 'contactPoints' | 'reviews' | 'rating';
 type RadarPhase = 'off' | 'scanning' | 'revealing';
 
 const MIN_SCAN_DURATION_MS = 900;
@@ -72,6 +85,7 @@ function HomeInner() {
   const [searchResults, setSearchResults] = useState<BusinessSearchResult[]>([]);
   const [radarPhase, setRadarPhase] = useState<RadarPhase>('off');
   const [deepAnalysis, setDeepAnalysis] = useState(false);
+  const [enableEnrichment, setEnableEnrichment] = useState(false);
   const [marketDensity, setMarketDensity] = useState<{
     count: number;
     level: string;
@@ -99,7 +113,7 @@ function HomeInner() {
   const [rescanningZoneId, setRescanningZoneId] = useState<string | null>(null);
 
   // Filter & sort state
-  const [sortBy, setSortBy] = useState<SortOption>('score');
+  const [sortBy, setSortBy] = useState<SortOption>('fit');
   const [filterHasEmail, setFilterHasEmail] = useState(false);
   const [filterHasPhone, setFilterHasPhone] = useState(false);
   const [filterHasSocial, setFilterHasSocial] = useState(false);
@@ -139,6 +153,18 @@ function HomeInner() {
     return () => clearTimeout(t);
   }, [viewMode, searchResults.length]);
 
+  // Per-business Popular Times cache (search-session scope, not persisted
+  // until the user saves the lead). Keyed by placeId.
+  const [popularTimesMap, setPopularTimesMap] = useState<
+    Record<string, CachedPopularTimes>
+  >({});
+  const [popularTimesLoading, setPopularTimesLoading] = useState<Set<string>>(
+    new Set()
+  );
+  const [popularTimesError, setPopularTimesError] = useState<
+    Record<string, string>
+  >({});
+
   // Saving leads
   const [savingLeadIds, setSavingLeadIds] = useState<Set<string>>(new Set());
   const [savedLeadModal, setSavedLeadModal] = useState<{ isOpen: boolean; businessName: string }>({
@@ -153,6 +179,12 @@ function HomeInner() {
     const scanStart = Date.now();
     setIsSearching(true);
     setRadarPhase('scanning');
+    // Hard wall-clock cap — generous enough for dense cities running Deep
+    // Analysis (50 PageSpeed calls at ~5-10s each = ~3 min worst case).
+    // Past 5 min something is genuinely wrong, not just "London is big".
+    const SEARCH_HARD_TIMEOUT_MS = 5 * 60_000;
+    const abortController = new AbortController();
+    const abortTimer = setTimeout(() => abortController.abort(), SEARCH_HARD_TIMEOUT_MS);
     try {
       const response = await fetch('/api/business/search', {
         method: 'POST',
@@ -163,7 +195,9 @@ function HomeInner() {
           country,
           limit: 50,
           deepAnalysis,
+          enableEnrichment,
         }),
+        signal: abortController.signal,
       });
 
       const data = await response.json();
@@ -209,10 +243,15 @@ function HomeInner() {
       } else {
         toast.success(`Found ${data.results.length} businesses`);
       }
-    } catch {
-      toast.error('Search failed. Please try again.');
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        toast.error('Search exceeded 5 minutes — likely a backend issue, not your city size. Try again or check the server logs.');
+      } else {
+        toast.error('Search failed. Please try again.');
+      }
       setRadarPhase('off');
     } finally {
+      clearTimeout(abortTimer);
       setIsSearching(false);
     }
   };
@@ -222,16 +261,77 @@ function HomeInner() {
     setViewMode('results');
   };
 
+  // Per-card foot-traffic fetch (search-time scrape, no DB write).
+  // The result lands in popularTimesMap and is used by:
+  //   1. FootTrafficSlot's display
+  //   2. getEffectiveFitScore (live re-rank when sort=fit)
+  //   3. handleSaveLead (persisted to the new Lead row on save)
+  const handleFetchFootTraffic = async (business: BusinessSearchResult) => {
+    const id = business.placeId;
+    if (popularTimesLoading.has(id)) return;
+    setPopularTimesLoading((prev) => new Set(prev).add(id));
+    setPopularTimesError((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    try {
+      const response = await fetch('/api/business/popular-times', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: business.name,
+          address: business.address,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        setPopularTimesError((prev) => ({
+          ...prev,
+          [id]: payload.error ?? 'Could not fetch — Google may have changed their page, try again later',
+        }));
+        return;
+      }
+      setPopularTimesMap((prev) => ({
+        ...prev,
+        [id]: { ...payload.data, scrapedAt: payload.scrapedAt },
+      }));
+    } catch {
+      setPopularTimesError((prev) => ({
+        ...prev,
+        [id]: 'Network error while fetching foot traffic',
+      }));
+    } finally {
+      setPopularTimesLoading((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  };
+
   // Save lead
   const handleSaveLead = async (business: BusinessSearchResult) => {
     if (savingLeadIds.has(business.placeId)) return;
 
     setSavingLeadIds((prev) => new Set(prev).add(business.placeId));
     try {
+      const cachedPT = popularTimesMap[business.placeId];
       const response = await fetch('/api/leads', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(business),
+        body: JSON.stringify({
+          ...business,
+          popularTimesData: cachedPT
+            ? JSON.stringify({
+                weekly: cachedPT.weekly,
+                currentPopularity: cachedPT.currentPopularity,
+                timeSpent: cachedPT.timeSpent,
+                dayLabels: cachedPT.dayLabels,
+              })
+            : undefined,
+          popularTimesScrapedAt: cachedPT?.scrapedAt,
+        }),
       });
 
       const data = await response.json();
@@ -254,6 +354,21 @@ function HomeInner() {
     }
   };
 
+  // Live Fit Score per business — recomputes when foot-traffic data lands
+  // for that lead (peakBusyness adds up to +20 budget points).
+  const getEffectiveFitScore = (b: BusinessSearchResult): number => {
+    const cached = popularTimesMap[b.placeId];
+    if (!cached || !b.budgetEstimate) return b.fitScore ?? 0;
+    const peakBusyness = Math.max(0, ...cached.weekly.flat());
+    // Same scoring as estimateBudget: 75+→20, 50+→13, 25+→6, else 0
+    let bonus = 0;
+    if (peakBusyness >= 75) bonus = 20;
+    else if (peakBusyness >= 50) bonus = 13;
+    else if (peakBusyness >= 25) bonus = 6;
+    const newPoints = Math.min(100, b.budgetEstimate.points + bonus);
+    return computeFitScore(b.leadScore, newPoints);
+  };
+
   // Filter and sort results
   const filteredResults = searchResults
     .filter((b) => {
@@ -266,12 +381,16 @@ function HomeInner() {
     })
     .sort((a, b) => {
       switch (sortBy) {
+        case 'fit':
+          return getEffectiveFitScore(b) - getEffectiveFitScore(a) || b.leadScore - a.leadScore;
         case 'contactPoints':
           return b.contactPoints - a.contactPoints || b.leadScore - a.leadScore;
         case 'reviews':
           return (b.reviewCount || 0) - (a.reviewCount || 0);
         case 'rating':
           return (b.rating || 0) - (a.rating || 0);
+        case 'score':
+          return b.leadScore - a.leadScore || b.contactPoints - a.contactPoints;
         default:
           return b.leadScore - a.leadScore || b.contactPoints - a.contactPoints;
       }
@@ -305,6 +424,7 @@ function HomeInner() {
           country,
           limit: 50,
           deepAnalysis,
+          enableEnrichment,
           searchLat: zone.latitude,
           searchLng: zone.longitude,
           zoneLabel: zone.label,
@@ -359,12 +479,12 @@ function HomeInner() {
                 Back
               </button>
               <h1 className="text-lg sm:text-2xl font-semibold text-white">
-                {selectedIndustry} in {city}
+                {INDUSTRY_TYPES.find((t) => t.id === selectedIndustry)?.label ?? selectedIndustry} in {city}
               </h1>
-              <p className="mt-1 flex items-center gap-1.5 text-xs text-white/60 sm:text-sm">
+              <div className="mt-1 flex items-center gap-1.5 text-xs text-white/60 sm:text-sm">
                 <SlidingNumber value={resultsCount} />
                 <span>businesses found</span>
-              </p>
+              </div>
             </div>
             <Link
               href="/crm"
@@ -401,8 +521,8 @@ function HomeInner() {
             </div>
           )}
 
-          {/* Filters & Sort */}
-          <div className="mb-4 flex flex-col sm:flex-row items-start sm:items-center gap-3 p-3 bg-surface/60 border border-border-bright/50 rounded-xl backdrop-blur-sm">
+          {/* Filters & Sort — HUD panel */}
+          <div className="hud-panel mb-4 flex flex-col sm:flex-row items-start sm:items-center gap-3 p-3 bg-surface/60 border border-border-bright/50 rounded-xl backdrop-blur-sm">
             {/* Sort */}
             <div className="flex items-center gap-2">
               <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-white/40">
@@ -413,6 +533,7 @@ function HomeInner() {
                 onChange={(e) => setSortBy(e.target.value as SortOption)}
                 className="cursor-pointer rounded-lg border border-border-bright/60 bg-surface-elevated/80 px-2.5 py-1.5 text-xs text-white/85 outline-none transition-colors hover:bg-surface-hover/80 focus:border-sky-400/60"
               >
+                <option value="fit">Best Fit</option>
                 <option value="score">Lead Score</option>
                 <option value="contactPoints">Contact Points</option>
                 <option value="reviews">Reviews</option>
@@ -444,12 +565,22 @@ function HomeInner() {
               </select>
             </div>
 
-            {/* Count */}
-            <span className="inline-flex items-center gap-1.5 rounded-full border border-border-bright/50 bg-surface/60 px-2.5 py-1 font-mono text-[11px] text-white/50 sm:ml-auto">
-              <span className="h-1.5 w-1.5 rounded-full bg-sky-400" />
-              {filteredResults.length}/{searchResults.length} shown
-            </span>
+            {/* Tier distribution readout */}
+            <TierDistribution results={filteredResults} total={searchResults.length} />
           </div>
+
+          {/* Workflow hint — only shown when no popular times have been fetched yet */}
+          {Object.keys(popularTimesMap).length === 0 && (
+            <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-sky-500/20 bg-sky-500/[0.04] px-4 py-3 text-xs text-sky-200/85">
+              <Activity className="mt-0.5 h-4 w-4 flex-shrink-0 text-sky-400" />
+              <p className="leading-relaxed">
+                <span className="font-semibold text-sky-100">Spot something promising?</span>{' '}
+                Click the <span className="font-semibold">Fetch Foot Traffic</span> icon on any
+                card to enrich it with Google&apos;s real busyness data — your Best Fit Score
+                updates live, then you decide which leads to save.
+              </p>
+            </div>
+          )}
 
           <div
             className={`grid gap-4 transition-opacity duration-300 ${
@@ -482,7 +613,7 @@ function HomeInner() {
                   data-heat={tier}
                   data-rank={rank}
                   style={{ ['--i' as string]: index }}
-                  className={`lead-card lead-tier-${tier} bg-surface-elevated/60 border border-border-bright/60 rounded-xl p-4 sm:p-5 backdrop-blur-sm`}
+                  className="relative"
                 >
                 {rank <= 3 && (
                   <span className={`lead-rank-pip lead-rank-${rank}`}>
@@ -491,12 +622,30 @@ function HomeInner() {
                     {rank === 1 && ' HOT LEAD'}
                   </span>
                 )}
+                <HoloCard
+                  className={`lead-card lead-tier-${tier} bg-surface-elevated/60 border border-border-bright/60 rounded-xl p-4 sm:p-5 backdrop-blur-sm`}
+                  spotlightColor={
+                    tier === 'hot'
+                      ? 'rgba(253, 186, 116, 0.32)'
+                      : tier === 'mid'
+                        ? 'rgba(125, 211, 252, 0.28)'
+                        : 'rgba(148, 163, 184, 0.22)'
+                  }
+                  glareColor={
+                    tier === 'hot'
+                      ? '#fdba74'
+                      : tier === 'mid'
+                        ? '#9be8ff'
+                        : '#cbd5e1'
+                  }
+                  glareOpacity={tier === 'hot' ? 0.4 : 0.3}
+                >
                 <div className="flex flex-col lg:flex-row gap-4">
                   {/* Main info */}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start justify-between gap-3 mb-3">
                       <div className="min-w-0">
-                        <h3 className="text-lg font-semibold text-white truncate">
+                        <h3 className="lead-card-name text-lg font-semibold truncate">
                           {business.name}
                         </h3>
                         {business.address && (
@@ -597,28 +746,49 @@ function HomeInner() {
                     )}
 
                     {/* Stats */}
-                    <div className="flex items-center gap-4 text-sm text-gray-400">
+                    <div className="lead-stats flex items-center gap-3 text-sm text-gray-400">
                       {business.rating && (
-                        <span className="flex items-center gap-1">
-                          <Star className="w-4 h-4 text-yellow-500" />
-                          {business.rating.toFixed(1)}
+                        <span className="lead-stat flex items-center gap-1.5">
+                          <Star className="w-4 h-4 text-yellow-400 drop-shadow-[0_0_6px_rgba(250,204,21,0.55)]" />
+                          <span className="tabular-nums font-medium text-white/85">
+                            {business.rating.toFixed(1)}
+                          </span>
                         </span>
+                      )}
+                      {typeof business.priceLevel === 'number' && business.priceLevel > 0 && (
+                        <PriceTier level={business.priceLevel} />
                       )}
                       {business.reviewCount !== undefined && (
-                        <span className="flex items-center gap-1">
-                          <MessageSquare className="w-4 h-4" />
-                          {business.reviewCount} reviews
+                        <span className="lead-stat flex items-center gap-1.5">
+                          <MessageSquare className="w-4 h-4 text-white/40" />
+                          <span className="tabular-nums font-medium text-white/75">
+                            {business.reviewCount}
+                          </span>
+                          <span className="text-white/40">reviews</span>
                         </span>
                       )}
-                      <span className="flex items-center gap-1" title="Contact channels available">
-                        <Users className="w-4 h-4" />
-                        {business.contactPoints} contact {business.contactPoints === 1 ? 'point' : 'points'}
+                      <span className="lead-stat flex items-center gap-1.5" title="Contact channels available">
+                        <Users className="w-4 h-4 text-white/40" />
+                        <span className="tabular-nums font-medium text-white/75">
+                          {business.contactPoints}
+                        </span>
+                        <span className="text-white/40">
+                          contact {business.contactPoints === 1 ? 'point' : 'points'}
+                        </span>
                       </span>
                     </div>
                   </div>
 
                   {/* Budget & Opportunities */}
                   <div className="lg:w-80 flex flex-col gap-3">
+                    {/* Foot Traffic — opt-in per-card enrichment */}
+                    <FootTrafficSlot
+                      data={popularTimesMap[business.placeId]}
+                      loading={popularTimesLoading.has(business.placeId)}
+                      error={popularTimesError[business.placeId]}
+                      onFetch={() => handleFetchFootTraffic(business)}
+                    />
+
                     {/* Budget Estimate */}
                     {business.budgetEstimate && (
                       <BudgetCard estimate={business.budgetEstimate} />
@@ -644,6 +814,7 @@ function HomeInner() {
                     </div>
                   </div>
                 </div>
+                </HoloCard>
                 </motion.div>
                 );
               })}
@@ -731,6 +902,40 @@ function HomeInner() {
                   </span>
                 </div>
               </label>
+
+              {/* Deep Enrichment Toggle */}
+              <label className="flex items-center gap-3 cursor-pointer group">
+                <div className="relative">
+                  <input
+                    type="checkbox"
+                    checked={enableEnrichment}
+                    onChange={(e) => setEnableEnrichment(e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-gray-700 rounded-full peer peer-checked:bg-sky-600 transition-colors" />
+                  <div className="absolute left-1 top-1 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-5" />
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-sm text-white group-hover:text-white/90">
+                    Deep Enrichment
+                  </span>
+                  <span className="text-xs text-gray-500">
+                    Find hidden websites + socials when Maps is missing them (burns RapidAPI quota — 100/mo free)
+                  </span>
+                </div>
+              </label>
+
+              {/* Pacing notice — sets expectations so dense-city scans
+                  don't feel like they're broken. Only really matters
+                  when one of the slow toggles is on. */}
+              {(deepAnalysis || enableEnrichment) && (
+                <p className="text-[11px] text-amber-300/70 leading-relaxed">
+                  Heads-up: dense cities (London, NYC, Tokyo) with{' '}
+                  {deepAnalysis ? 'Deep Analysis' : 'Deep Enrichment'} on can take{' '}
+                  <span className="font-medium text-amber-300">2–4 minutes</span>{' '}
+                  to scan all 50 leads. Smaller cities finish in under a minute.
+                </p>
+              )}
             </>
           )}
         </div>
@@ -774,15 +979,18 @@ function BudgetCard({
         : 'text-gray-400 bg-white/5 border-white/10';
 
   return (
-    <div className={`rounded-lg border p-3 ${confidenceColor}`}>
+    <div className={`budget-card relative overflow-hidden rounded-lg border p-3 ${confidenceColor}`}>
+      <div className="budget-card-shine" aria-hidden />
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center justify-between"
+        className="relative w-full flex items-center justify-between"
       >
         <div className="flex items-center gap-2">
-          <Wallet className="w-4 h-4" />
-          <span className="text-sm font-semibold">{estimate.label}</span>
-          <span className="text-[10px] uppercase opacity-60">{estimate.confidence} conf.</span>
+          <Wallet className="w-4 h-4 drop-shadow-[0_0_6px_currentColor]" />
+          <span className="text-sm font-semibold tracking-wide">{estimate.label}</span>
+          <span className="font-mono text-[9px] uppercase tracking-[0.18em] opacity-55">
+            {estimate.confidence} conf.
+          </span>
         </div>
         {expanded ? (
           <ChevronUp className="w-3.5 h-3.5 opacity-50" />
@@ -791,7 +999,7 @@ function BudgetCard({
         )}
       </button>
       {expanded && (
-        <div className="mt-2 pt-2 border-t border-current/10 space-y-1">
+        <div className="relative mt-2 pt-2 border-t border-current/10 space-y-1">
           {estimate.reasons.map((reason, i) => (
             <div key={i} className="flex items-start gap-1.5 text-[11px] opacity-80">
               <span className="mt-0.5 w-1 h-1 rounded-full bg-current flex-shrink-0" />
@@ -814,6 +1022,45 @@ function isRealEmail(email: string): boolean {
   return !junk.some((p) => p.test(email));
 }
 
+function PriceTier({ level }: { level: number }) {
+  const capped = Math.max(1, Math.min(4, Math.round(level)));
+  const tierConfig: Record<number, { label: string; color: string; glow: string; tip: string }> = {
+    1: {
+      label: '$',
+      color: 'text-slate-400',
+      glow: '',
+      tip: 'Budget pricing — tight margins',
+    },
+    2: {
+      label: '$$',
+      color: 'text-emerald-300',
+      glow: 'drop-shadow-[0_0_4px_rgba(52,211,153,0.5)]',
+      tip: 'Mid-range pricing',
+    },
+    3: {
+      label: '$$$',
+      color: 'text-amber-300',
+      glow: 'drop-shadow-[0_0_6px_rgba(252,211,77,0.6)]',
+      tip: 'Upscale pricing — solid budget',
+    },
+    4: {
+      label: '$$$$',
+      color: 'text-yellow-200',
+      glow: 'drop-shadow-[0_0_8px_rgba(253,224,71,0.85)]',
+      tip: 'Premium pricing — deep pockets',
+    },
+  };
+  const cfg = tierConfig[capped];
+  return (
+    <span
+      className={`lead-stat flex items-center gap-1 font-mono font-semibold tabular-nums ${cfg.color} ${cfg.glow}`}
+      title={cfg.tip}
+    >
+      {cfg.label}
+    </span>
+  );
+}
+
 function FilterToggle({
   label,
   active,
@@ -826,13 +1073,74 @@ function FilterToggle({
   return (
     <button
       onClick={onClick}
-      className={`rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-all ${
+      className={`filter-toggle relative rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-all ${
         active
-          ? 'border-sky-400/55 bg-sky-500/15 text-sky-200 shadow-[0_0_14px_rgba(56,189,248,0.3)]'
+          ? 'filter-toggle-active border-sky-400/60 bg-sky-500/15 text-sky-200 shadow-[0_0_18px_rgba(56,189,248,0.35)]'
           : 'border-border-bright/45 bg-surface/40 text-white/50 hover:border-border-bright hover:bg-surface-hover/60 hover:text-white/85'
       }`}
     >
       {label}
     </button>
+  );
+}
+
+function TierDistribution({
+  results,
+  total,
+}: {
+  results: BusinessSearchResult[];
+  total: number;
+}) {
+  const hot = results.filter((b) => b.leadScore >= 55).length;
+  const mid = results.filter((b) => b.leadScore >= 35 && b.leadScore < 55).length;
+  const cold = results.filter((b) => b.leadScore < 35).length;
+  const shown = results.length;
+  const hotPct = shown > 0 ? (hot / shown) * 100 : 0;
+  const midPct = shown > 0 ? (mid / shown) * 100 : 0;
+  const coldPct = shown > 0 ? (cold / shown) * 100 : 0;
+
+  return (
+    <div className="tier-readout sm:ml-auto flex items-center gap-3">
+      <span className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-white/40">
+        <span className="relative inline-flex h-1.5 w-1.5">
+          <span className="absolute inline-flex h-full w-full rounded-full bg-sky-400 opacity-70 animate-ping" />
+          <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-sky-400" />
+        </span>
+        Live
+      </span>
+      <div className="tier-bar relative h-1.5 w-32 overflow-hidden rounded-full bg-white/5">
+        <div
+          className="absolute inset-y-0 left-0 bg-gradient-to-r from-orange-400 to-amber-400"
+          style={{ width: `${hotPct}%` }}
+        />
+        <div
+          className="absolute inset-y-0 bg-gradient-to-r from-sky-400 to-cyan-400"
+          style={{ left: `${hotPct}%`, width: `${midPct}%` }}
+        />
+        <div
+          className="absolute inset-y-0 bg-gradient-to-r from-slate-500 to-slate-400"
+          style={{ left: `${hotPct + midPct}%`, width: `${coldPct}%` }}
+        />
+      </div>
+      <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.14em]">
+        <span className="inline-flex items-center gap-1 text-orange-300">
+          <span className="h-1.5 w-1.5 rounded-full bg-orange-400 shadow-[0_0_6px_rgba(251,146,60,0.8)]" />
+          <span className="tabular-nums">{hot}</span>
+        </span>
+        <span className="inline-flex items-center gap-1 text-sky-300">
+          <span className="h-1.5 w-1.5 rounded-full bg-sky-400 shadow-[0_0_6px_rgba(56,189,248,0.7)]" />
+          <span className="tabular-nums">{mid}</span>
+        </span>
+        <span className="inline-flex items-center gap-1 text-slate-400">
+          <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
+          <span className="tabular-nums">{cold}</span>
+        </span>
+      </div>
+      <span className="font-mono text-[10px] text-white/35">
+        <span className="tabular-nums text-white/60">{shown}</span>
+        <span>/</span>
+        <span className="tabular-nums">{total}</span>
+      </span>
+    </div>
   );
 }

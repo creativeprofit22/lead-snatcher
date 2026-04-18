@@ -105,7 +105,6 @@ export function NeighborhoodChips({
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
-      lastFetchedRef.current = cacheKey;
 
       try {
         const response = await fetch(
@@ -117,9 +116,14 @@ export function NeighborhoodChips({
           return;
         }
         const data = await response.json();
-        setNeighborhoods(
-          Array.isArray(data.neighborhoods) ? data.neighborhoods : []
-        );
+        const list = Array.isArray(data.neighborhoods) ? data.neighborhoods : [];
+        setNeighborhoods(list);
+        // Only mark this city as "done" when we actually got chips back.
+        // An empty result usually means Overpass was down — let the next
+        // keystroke retry instead of pinning a permanent empty state.
+        if (list.length > 0) {
+          lastFetchedRef.current = cacheKey;
+        }
       } catch (err) {
         if (err instanceof Error && err.name !== 'AbortError') {
           setNeighborhoods([]);

@@ -124,6 +124,10 @@ model Lead {
   lastContactedAt DateTime?
   nextFollowUpAt  DateTime?
 
+  // Popular Times enrichment (opt-in, manual scrape from CRM detail view)
+  popularTimesData      String?   // JSON: { currentPopularity?, weekly: [...], timeSpent? }
+  popularTimesScrapedAt DateTime?
+
   // Timestamps
   savedAt   DateTime @default(now())
   updatedAt DateTime @updatedAt

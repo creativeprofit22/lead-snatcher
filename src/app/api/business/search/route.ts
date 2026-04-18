@@ -6,8 +6,9 @@ import {
   searchBusinesses,
   scanCityZones,
 } from '@/lib/business';
+import { getPageSpeedKey } from '@/lib/business/pagespeed-key';
 import type { Zone, ZoneLevel } from '@/lib/business/zone-grid';
-import { estimateBudget, buildBudgetInput } from '@/lib/business/budget-estimate';
+import { estimateBudget, buildBudgetInput, computeFitScore } from '@/lib/business/budget-estimate';
 import { getSearchQuery } from '@/lib/constants';
 import { ApiError } from '@/lib/errors';
 import { checkRateLimit, getClientIp, RATE_LIMITS } from '@/lib/rate-limit';
@@ -101,6 +102,7 @@ export async function POST(request: NextRequest) {
       country,
       limit,
       deepAnalysis,
+      enableEnrichment,
       searchLat,
       searchLng,
       zoneLabel,
@@ -129,6 +131,12 @@ export async function POST(request: NextRequest) {
     // e.g., "real_estate" + "de" → "Immobilienmakler"
     const searchQuery = getSearchQuery(businessType as IndustryType, country);
 
+    // Pull the user's PageSpeed key (optional; falls back to env, then to
+    // the unauthenticated endpoint which Google rate-limits hard).
+    const pageSpeedApiKey = deepAnalysis
+      ? await getPageSpeedKey(session.user.id)
+      : undefined;
+
     // Run business search and city zone scan in parallel. Zone scan is free
     // (one Overpass call, cached 7d per city) and now serves as the single
     // source of truth for area density — no separate scoreArea call that
@@ -143,6 +151,9 @@ export async function POST(request: NextRequest) {
         {
           enableWebsiteScraping: true, // Always scrape for tech stack & features
           enableWebsiteAnalysis: deepAnalysis, // Optional PageSpeed analysis
+          enableEnrichment, // Optional web-search + social fallback for missing data
+          pageSpeedApiKey,
+          city,
         }
       ),
       scanCityZones(
@@ -182,7 +193,7 @@ export async function POST(request: NextRequest) {
         distanceFromCenterMeters: 0,
       };
 
-    // Enrich each result with budget estimate and area level
+    // Enrich each result with budget estimate, area level, and Fit Score
     const enrichedResults = results.map((result) => {
       const budgetInput = buildBudgetInput(
         result.scoreBreakdown,
@@ -190,12 +201,17 @@ export async function POST(request: NextRequest) {
         !!result.website,
         result.contactPoints,
         focusedZone.score,
-        focusedZone.level
+        focusedZone.level,
+        result.priceLevel
+        // peakBusyness omitted — Popular Times is opt-in per-card on the
+        // search page; fitScore is recomputed client-side when it arrives.
       );
+      const budgetEstimate = estimateBudget(budgetInput);
       return {
         ...result,
-        budgetEstimate: estimateBudget(budgetInput),
+        budgetEstimate,
         areaLevel: focusedZone.level,
+        fitScore: computeFitScore(result.leadScore, budgetEstimate.points),
       };
     });
 

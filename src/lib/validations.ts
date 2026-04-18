@@ -17,7 +17,7 @@ export const contactOutcomeSchema = z.enum(['positive', 'negative', 'neutral']);
 export const taskTypeSchema = z.enum(['call', 'email', 'meeting', 'follow_up', 'other']);
 export const taskPrioritySchema = z.enum(['low', 'medium', 'high', 'urgent']);
 
-export const apiKeyServiceSchema = z.enum(['youtube', 'rapidapi', 'openrouter']);
+export const apiKeyServiceSchema = z.enum(['youtube', 'rapidapi', 'openrouter', 'pagespeed']);
 
 // ─── Route schemas ──────────────────────────────────────────────
 
@@ -45,6 +45,7 @@ export const businessSearchSchema = z.object({
   country: z.string().min(2).max(5).default('au'),
   limit: z.number().int().min(1).max(50).default(20),
   deepAnalysis: z.boolean().default(false),
+  enableEnrichment: z.boolean().default(false),
   // Optional zone-targeted rescan: skip city geocoding and aim the Maps
   // search + area score at these exact coords instead.
   searchLat: z.number().min(-90).max(90).optional(),
@@ -67,6 +68,9 @@ export const createLeadSchema = z.object({
   leadScore: z.number().int().min(0).max(100).default(0),
   scoreBreakdown: z.record(z.string(), z.union([z.number(), z.boolean(), z.string(), z.array(z.string())])).nullish(),
   opportunities: z.array(z.string()).nullish(),
+  /** Optional: pre-scraped Popular Times data from search-time enrichment. */
+  popularTimesData: z.string().max(50_000).nullish(),
+  popularTimesScrapedAt: z.string().datetime().nullish(),
 });
 
 // PATCH /api/leads/[id]

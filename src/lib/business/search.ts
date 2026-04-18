@@ -3,6 +3,12 @@ import { calculateLeadScore } from './scoring';
 import { generateOpportunities, detectIndustryType } from './opportunities';
 import { analyzeWebsitesBatch } from './pagespeed';
 import { scrapeWebsitesBatch, type ScrapedWebsiteData } from './scraper';
+import {
+  discoverWebsite,
+  discoverSocials,
+  runBatch,
+  type DiscoveredSocials,
+} from './enrichment';
 import type { BusinessSearchResult, WebsiteAnalysis, ExtendedBusinessData } from '@/types';
 
 const MAPS_API_HOST = 'maps-data.p.rapidapi.com';
@@ -24,13 +30,50 @@ interface MapsBusinessResult {
   photos_sample?: { photo_url?: string }[];
   latitude?: number;
   longitude?: number;
+  // Google-style price tier. Providers serve this under a few different
+  // keys — capture all of them; parsed into a 0-4 number downstream.
+  price_level?: number | string;
+  price_range?: string;
+  priceLevel?: number | string;
+}
+
+// Parse any of the shapes a Maps provider might return for price tier
+// into a canonical 0-4 integer. Returns undefined when absent/unusable.
+function parsePriceLevel(
+  raw: MapsBusinessResult
+): number | undefined {
+  const candidate = raw.price_level ?? raw.priceLevel ?? raw.price_range;
+  if (typeof candidate === 'number') {
+    return candidate >= 0 && candidate <= 4 ? Math.round(candidate) : undefined;
+  }
+  if (typeof candidate === 'string') {
+    // Google's enum form: PRICE_LEVEL_FREE/_INEXPENSIVE/_MODERATE/_EXPENSIVE/_VERY_EXPENSIVE
+    const enumMap: Record<string, number> = {
+      PRICE_LEVEL_FREE: 0,
+      PRICE_LEVEL_INEXPENSIVE: 1,
+      PRICE_LEVEL_MODERATE: 2,
+      PRICE_LEVEL_EXPENSIVE: 3,
+      PRICE_LEVEL_VERY_EXPENSIVE: 4,
+    };
+    if (candidate in enumMap) return enumMap[candidate];
+    // Yelp/other "$"/"$$"/"$$$"/"$$$$" style
+    const dollarMatch = /^\${1,4}$/.test(candidate.trim());
+    if (dollarMatch) return candidate.trim().length;
+    // Numeric string
+    const n = parseInt(candidate, 10);
+    if (Number.isFinite(n) && n >= 0 && n <= 4) return n;
+  }
+  return undefined;
 }
 
 // Search options
 export interface SearchOptions {
   enableWebsiteAnalysis?: boolean; // PageSpeed API (slower, more accurate)
   enableWebsiteScraping?: boolean; // HTML scraping (faster, more data)
+  enableEnrichment?: boolean; // Web search + social lookup fallback for missing data
   pageSpeedApiKey?: string;
+  /** City name — used as disambiguator for enrichment queries. */
+  city?: string;
 }
 
 /**
@@ -67,7 +110,26 @@ export async function searchBusinesses(
     (business) => business.name && business.business_id
   );
 
-  // Collect websites for analysis
+  // --- Enrichment pass 1: discover missing websites -----------------
+  // When enabled, businesses that Google Maps has no website for get
+  // queried against letscrape's real-time web search. A plausible match
+  // is attached to `business.website` so the rest of the pipeline
+  // (scoring, scraping, display) treats them as if Maps had returned it.
+  if (options.enableEnrichment && options.city) {
+    const noWebsiteCandidates = validBusinesses.filter((b) => !b.website && b.name);
+    if (noWebsiteCandidates.length > 0) {
+      const discovered = await runBatch(
+        noWebsiteCandidates,
+        (b) => discoverWebsite(userId, b.name!, options.city!),
+        5
+      );
+      noWebsiteCandidates.forEach((b, i) => {
+        if (discovered[i]) b.website = discovered[i] ?? undefined;
+      });
+    }
+  }
+
+  // Collect websites for analysis (now includes any enrichment-discovered ones)
   const websites = validBusinesses
     .map((b) => b.website)
     .filter((w): w is string => !!w);
@@ -100,6 +162,37 @@ export async function searchBusinesses(
     await Promise.all(analysisPromises);
   }
 
+  // --- Enrichment pass 2: discover missing socials ------------------
+  // For any business whose scraping yielded zero socials (or that has
+  // no website to scrape at all), fall back to letscrape's social
+  // links search. The discovered map is keyed by business_id so the
+  // transform step can merge cleanly.
+  const enrichedSocialsMap = new Map<string, DiscoveredSocials>();
+  if (options.enableEnrichment && options.city) {
+    const socialCandidates = validBusinesses.filter((b) => {
+      if (!b.business_id || !b.name) return false;
+      const url = b.website;
+      const normalized = url?.startsWith('http') ? url : url ? `https://${url}` : undefined;
+      const scraped = url
+        ? scrapedDataMap.get(url) || (normalized ? scrapedDataMap.get(normalized) : undefined)
+        : undefined;
+      return !scraped || scraped.socialCount === 0;
+    });
+    if (socialCandidates.length > 0) {
+      const socials = await runBatch(
+        socialCandidates,
+        (b) => discoverSocials(userId, b.name!, options.city!),
+        5
+      );
+      socialCandidates.forEach((b, i) => {
+        const result = socials[i];
+        if (result && Object.keys(result).length > 0) {
+          enrichedSocialsMap.set(b.business_id!, result);
+        }
+      });
+    }
+  }
+
   // Transform and score results with all data
   const results: BusinessSearchResult[] = validBusinesses.map((business) => {
     const websiteUrl = business.website;
@@ -113,7 +206,11 @@ export async function searchBusinesses(
       ? scrapedDataMap.get(websiteUrl) || scrapedDataMap.get(normalizedUrl)
       : undefined;
 
-    return transformBusinessResult(business, websiteAnalysis, scrapedData);
+    const enrichedSocials = business.business_id
+      ? enrichedSocialsMap.get(business.business_id)
+      : undefined;
+
+    return transformBusinessResult(business, websiteAnalysis, scrapedData, enrichedSocials);
   });
 
   // Sort by lead score (highest first), then by contact points (more = better lead)
@@ -128,7 +225,8 @@ export async function searchBusinesses(
 function transformBusinessResult(
   business: MapsBusinessResult,
   websiteAnalysis?: WebsiteAnalysis,
-  scrapedData?: ScrapedWebsiteData
+  scrapedData?: ScrapedWebsiteData,
+  enrichedSocials?: DiscoveredSocials
 ): BusinessSearchResult {
   const types = business.types || [];
   const industryType = detectIndustryType(types);
@@ -177,10 +275,14 @@ function transformBusinessResult(
     ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapsQuery)}`
     : null;
 
-  // Extract email and social links from scraped data
+  // Extract email and social links from scraped data, then fill any
+  // gaps from enrichment. Scraper data is authoritative when present.
   const email = scrapedData?.emails?.[0] || undefined;
-  const socialLinks = scrapedData?.socialLinks || {};
-  const socialCount = scrapedData?.socialCount || 0;
+  const socialLinks: BusinessSearchResult['socialLinks'] = {
+    ...(enrichedSocials ?? {}),
+    ...(scrapedData?.socialLinks ?? {}),
+  };
+  const socialCount = Object.values(socialLinks).filter(Boolean).length;
 
   // Count total contact points (more = easier to reach = better lead)
   let contactPoints = 0;
@@ -188,6 +290,8 @@ function transformBusinessResult(
   if (email) contactPoints++;
   if (website) contactPoints++;
   contactPoints += socialCount;
+
+  const priceLevel = parsePriceLevel(business);
 
   return {
     placeId: business.business_id || '',
@@ -200,6 +304,7 @@ function transformBusinessResult(
     email,
     socialLinks,
     contactPoints,
+    priceLevel,
     rating: business.rating || undefined,
     reviewCount: business.review_count || undefined,
     photoCount,

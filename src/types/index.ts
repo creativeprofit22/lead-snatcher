@@ -149,15 +149,20 @@ export interface BusinessSearchResult {
     tiktok?: string;
   };
   contactPoints: number; // Total contact channels (phone, email, website, socials)
+  /** Google-style price tier, 0-4 (0=free, 1=$, 2=$$, 3=$$$, 4=$$$$). Undefined when Maps provider didn't return it. */
+  priceLevel?: number;
   budgetEstimate?: {
     min: number; // e.g. 1000
     max: number; // e.g. 3000
     label: string; // e.g. "$1K - $3K"
     confidence: 'high' | 'medium' | 'low';
     reasons: string[]; // why we think this
+    points: number; // raw 0-100 score
   };
   areaLevel?: string; // premium, commercial, moderate, developing
   leadScore: number;
+  /** Combined need × capacity score 0-100 — used for "Best Fit" sort */
+  fitScore?: number;
   scoreBreakdown: ScoreBreakdown;
   opportunities: string[];
   industryType: IndustryType;
@@ -175,6 +180,10 @@ export interface Lead extends BusinessSearchResult {
   savedAt: string;
   updatedAt: string;
   tags?: Tag[];
+  /** Cached Popular Times scrape — JSON string conforming to PopularTimesData */
+  popularTimesData?: string | null;
+  /** ISO date of last Popular Times scrape */
+  popularTimesScrapedAt?: string | null;
 }
 
 // Contact log entry

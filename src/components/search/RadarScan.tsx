@@ -178,6 +178,27 @@ export function RadarScan({
     });
   }, [zones, effectiveBbox]);
 
+  // Ambient scanner pings — small "noise" dots that pop in/out at stable
+  // random positions across the radar during sweep + bloom, making the scan
+  // feel alive even before real data lands.
+  const ambientPings = useMemo(() => {
+    const count = 14;
+    return Array.from({ length: count }, (_, i) => {
+      // Deterministic pseudo-random — stable across renders
+      const seed = (i * 9301 + 49297) % 233280;
+      const r1 = seed / 233280;
+      const r2 = ((seed * 7) % 1000) / 1000;
+      const angle = r1 * Math.PI * 2;
+      const dist = 0.2 + r2 * 0.72; // 0.2..0.92 of radius
+      return {
+        id: `ping-${i}`,
+        x: RADAR_CENTER + Math.cos(angle) * RADAR_RADIUS * dist,
+        y: RADAR_CENTER + Math.sin(angle) * RADAR_RADIUS * dist,
+        delay: (i * 0.17) % 2.4,
+      };
+    });
+  }, []);
+
   // Prepare business pins
   const pins: Pin[] = useMemo(() => {
     if (!results || results.length === 0) return [];
@@ -454,15 +475,16 @@ export function RadarScan({
             strokeDasharray="2 4"
           />
 
-          <motion.g
-            style={{ transformOrigin: `${RADAR_CENTER}px ${RADAR_CENTER}px` }}
-            animate={{ rotate: 360 }}
-            transition={{
-              duration: SWEEP_DURATION_MS / 1000,
-              repeat: Infinity,
-              ease: 'linear',
-            }}
-          >
+          <g>
+            <animateTransform
+              attributeName="transform"
+              attributeType="XML"
+              type="rotate"
+              from={`0 ${RADAR_CENTER} ${RADAR_CENTER}`}
+              to={`360 ${RADAR_CENTER} ${RADAR_CENTER}`}
+              dur={`${SWEEP_DURATION_MS / 1000}s`}
+              repeatCount="indefinite"
+            />
             <path
               d={`M ${RADAR_CENTER} ${RADAR_CENTER} L ${RADAR_CENTER + RADAR_RADIUS} ${RADAR_CENTER} A ${RADAR_RADIUS} ${RADAR_RADIUS} 0 0 0 ${wedgeEndX} ${wedgeEndY} Z`}
               fill="url(#sweep-grad)"
@@ -477,7 +499,7 @@ export function RadarScan({
               strokeWidth="1.5"
               strokeOpacity="0.9"
             />
-          </motion.g>
+          </g>
 
           <circle cx={RADAR_CENTER} cy={RADAR_CENTER} r="4" fill="#38bdf8" />
           <circle
@@ -497,6 +519,27 @@ export function RadarScan({
               repeatCount="indefinite"
             />
           </circle>
+
+          {/* Ambient scanner pings — only during sweep + bloom phases */}
+          {(phase === 'sweep' || phase === 'bloom') &&
+            ambientPings.map((p) => (
+              <circle key={p.id} cx={p.x} cy={p.y} fill="#7dd3fc" r="0" opacity="0">
+                <animate
+                  attributeName="r"
+                  values="0;2.5;0"
+                  dur="2.4s"
+                  begin={`${p.delay}s`}
+                  repeatCount="indefinite"
+                />
+                <animate
+                  attributeName="opacity"
+                  values="0;0.6;0"
+                  dur="2.4s"
+                  begin={`${p.delay}s`}
+                  repeatCount="indefinite"
+                />
+              </circle>
+            ))}
 
           {/* Zone dots — visible during bloom, fade non-top zones on lock-in */}
           {(phase === 'bloom' ||
@@ -633,12 +676,12 @@ export function RadarScan({
                 }}
               >
                 <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-sky-100 font-semibold">
-                  <TextEffect as="span" per="char" preset="fade-in-blur" speedReveal={3}>
+                  <TextEffect as="span" per="word" preset="fade" speedReveal={3}>
                     {z.label}
                   </TextEffect>
                 </div>
                 <div className="font-mono text-[10px] text-sky-300/80">
-                  <TextEffect as="span" per="char" preset="fade-in-blur" speedReveal={4} delay={0.15}>
+                  <TextEffect as="span" per="word" preset="fade" speedReveal={4} delay={0.15}>
                     {String(z.score)}
                   </TextEffect>
                 </div>

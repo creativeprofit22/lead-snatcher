@@ -189,6 +189,8 @@ export async function POST(request: Request) {
       leadScore,
       scoreBreakdown,
       opportunities,
+      popularTimesData,
+      popularTimesScrapedAt,
     } = parsed.data;
 
     // Check if already saved
@@ -226,6 +228,10 @@ export async function POST(request: Request) {
         scoreBreakdown: scoreBreakdown ? JSON.stringify(scoreBreakdown) : null,
         opportunities: opportunities ? JSON.stringify(opportunities) : '[]',
         status: 'new',
+        popularTimesData: popularTimesData ?? undefined,
+        popularTimesScrapedAt: popularTimesScrapedAt
+          ? new Date(popularTimesScrapedAt)
+          : undefined,
       },
     });
 

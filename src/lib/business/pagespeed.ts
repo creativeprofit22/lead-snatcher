@@ -57,6 +57,13 @@ export async function analyzeWebsite(
 
     if (!response.ok) {
       console.error(`PageSpeed API error: ${response.status}`);
+      // Surface 429 distinctly so the batch caller can short-circuit
+      // instead of grinding through every URL when Google has cut us off.
+      if (response.status === 429) {
+        const err = new Error('PageSpeed rate limited (429)');
+        err.name = 'PageSpeedRateLimited';
+        throw err;
+      }
       return createErrorAnalysis(url);
     }
 
@@ -88,6 +95,9 @@ export async function analyzeWebsite(
       analyzedAt: new Date().toISOString(),
     };
   } catch (error) {
+    if (error instanceof Error && error.name === 'PageSpeedRateLimited') {
+      throw error; // bubbles up to the batch loop for short-circuit
+    }
     console.error('Website analysis failed:', error);
     return createErrorAnalysis(websiteUrl);
   }
@@ -120,24 +130,35 @@ export async function analyzeWebsitesBatch(
   const results = new Map<string, WebsiteAnalysis>();
   const validWebsites = websites.filter((url) => url && !isSocialOnlyWebsite(url));
 
-  // Process in batches
+  // Process in batches. Track 429s — if Google has cut us off, every
+  // remaining URL will fail the same way, so abort the batch instead of
+  // wasting search time on certain failures (with no key, free quota
+  // exhausts in seconds).
+  let rateLimited = false;
   for (let i = 0; i < validWebsites.length; i += concurrency) {
+    if (rateLimited) break;
     const batch = validWebsites.slice(i, i + concurrency);
-    const batchResults = await Promise.all(
+    const batchResults = await Promise.allSettled(
       batch.map(async (url) => {
         const analysis = await analyzeWebsite(url, apiKey);
         return { url, analysis };
       })
     );
 
-    for (const { url, analysis } of batchResults) {
-      if (analysis) {
-        results.set(url, analysis);
+    for (const outcome of batchResults) {
+      if (outcome.status === 'fulfilled' && outcome.value.analysis) {
+        results.set(outcome.value.url, outcome.value.analysis);
+      } else if (
+        outcome.status === 'rejected' &&
+        outcome.reason instanceof Error &&
+        outcome.reason.name === 'PageSpeedRateLimited'
+      ) {
+        rateLimited = true;
       }
     }
 
     // Small delay between batches to avoid rate limiting
-    if (i + concurrency < validWebsites.length) {
+    if (!rateLimited && i + concurrency < validWebsites.length) {
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
   }
