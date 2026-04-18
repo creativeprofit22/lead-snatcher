@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -13,18 +13,26 @@ import {
   Star,
   MessageSquare,
   MapPin,
-  TrendingUp,
-  TrendingDown,
-  Minus,
   Mail,
   Users,
   Wallet,
   ChevronDown,
   ChevronUp,
+  Flame,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { WelcomeHeader, BusinessTypeSelector, CityInput } from '@/components/search';
+import { AnimatePresence, motion } from 'motion/react';
+import {
+  WelcomeHeader,
+  BusinessTypeSelector,
+  CityInput,
+  RadarScan,
+  AreaDensityMeter,
+  ZoneChipsStrip,
+} from '@/components/search';
 import { PreLoader } from '@/components/preloader';
+import { SlidingNumber } from '@/components/motion-primitives/sliding-number';
+import { GlowEffect } from '@/components/motion-primitives/glow-effect';
 import {
   LeadScoreBadge,
   OpportunitiesList,
@@ -34,11 +42,23 @@ import { SettingsModal } from '@/components/settings';
 import { UserMenu } from '@/components/auth';
 import { saveLastSearch, getLastSearch } from '@/lib/search-cache';
 import type { IndustryType, BusinessSearchResult } from '@/types';
+import type { Zone } from '@/lib/business/zone-grid';
 
 type ViewMode = 'search' | 'results';
 type SortOption = 'score' | 'contactPoints' | 'reviews' | 'rating';
+type RadarPhase = 'off' | 'scanning' | 'revealing';
+
+const MIN_SCAN_DURATION_MS = 900;
 
 export default function Home() {
+  return (
+    <Suspense fallback={null}>
+      <HomeInner />
+    </Suspense>
+  );
+}
+
+function HomeInner() {
   const searchParams = useSearchParams();
   const [showPreLoader, setShowPreLoader] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>('search');
@@ -50,6 +70,7 @@ export default function Home() {
   const [country, setCountry] = useState('us');
   const [isSearching, setIsSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<BusinessSearchResult[]>([]);
+  const [radarPhase, setRadarPhase] = useState<RadarPhase>('off');
   const [deepAnalysis, setDeepAnalysis] = useState(false);
   const [marketDensity, setMarketDensity] = useState<{
     count: number;
@@ -69,6 +90,13 @@ export default function Home() {
       total: number;
     };
   } | null>(null);
+  const [zones, setZones] = useState<Zone[]>([]);
+  const [zoneBbox, setZoneBbox] = useState<
+    [number, number, number, number] | null
+  >(null);
+  const [singleZone, setSingleZone] = useState(false);
+  const [focusedZoneId, setFocusedZoneId] = useState<string | null>(null);
+  const [rescanningZoneId, setRescanningZoneId] = useState<string | null>(null);
 
   // Filter & sort state
   const [sortBy, setSortBy] = useState<SortOption>('score');
@@ -87,11 +115,29 @@ export default function Home() {
         setSelectedIndustry(cached.industry);
         setCity(cached.city);
         setCountry(cached.country);
+        // Restore zone + density state so the chip strip and meter come back
+        // when the user navigates away and returns via ?view=results.
+        if (cached.zones) setZones(cached.zones);
+        if (cached.zoneBbox !== undefined) setZoneBbox(cached.zoneBbox);
+        if (typeof cached.singleZone === 'boolean') setSingleZone(cached.singleZone);
+        if (cached.focusedZoneId !== undefined) setFocusedZoneId(cached.focusedZoneId);
+        if (cached.marketDensity !== undefined) setMarketDensity(cached.marketDensity);
         setViewMode('results');
         setShowPreLoader(false);
       }
     }
   }, [searchParams]);
+
+  // Count-up for "N businesses found"
+  const [resultsCount, setResultsCount] = useState(0);
+  useEffect(() => {
+    if (viewMode !== 'results') return;
+    const target = searchResults.length;
+    const start = target >= 10 ? 10 : 0;
+    setResultsCount(start);
+    const t = setTimeout(() => setResultsCount(target), 180);
+    return () => clearTimeout(t);
+  }, [viewMode, searchResults.length]);
 
   // Saving leads
   const [savingLeadIds, setSavingLeadIds] = useState<Set<string>>(new Set());
@@ -104,7 +150,9 @@ export default function Home() {
   const handleSearch = async () => {
     if (!selectedIndustry || !city.trim() || isSearching) return;
 
+    const scanStart = Date.now();
     setIsSearching(true);
+    setRadarPhase('scanning');
     try {
       const response = await fetch('/api/business/search', {
         method: 'POST',
@@ -122,33 +170,56 @@ export default function Home() {
 
       if (!response.ok) {
         toast.error(data.error || 'Search failed');
+        setRadarPhase('off');
         return;
+      }
+
+      const elapsed = Date.now() - scanStart;
+      if (elapsed < MIN_SCAN_DURATION_MS) {
+        await new Promise((r) => setTimeout(r, MIN_SCAN_DURATION_MS - elapsed));
       }
 
       setSearchResults(data.results || []);
       setMarketDensity(data.marketDensity || null);
-      setViewMode('results');
+      const nextZones: Zone[] = data.zones || [];
+      setZones(nextZones);
+      setZoneBbox(Array.isArray(data.zoneBbox) ? data.zoneBbox : null);
+      setSingleZone(Boolean(data.singleZone));
+      // First search — focus the top-scoring zone by default
+      setFocusedZoneId(nextZones[0]?.id ?? null);
+      setRadarPhase('revealing');
 
-      // Cache search results for later access
       if (data.results?.length > 0) {
         saveLastSearch({
           results: data.results,
           industry: selectedIndustry,
           city: city.trim(),
           country,
+          zones: nextZones,
+          zoneBbox: Array.isArray(data.zoneBbox) ? data.zoneBbox : null,
+          singleZone: Boolean(data.singleZone),
+          focusedZoneId: nextZones[0]?.id ?? null,
+          marketDensity: data.marketDensity || null,
         });
       }
 
       if (data.results?.length === 0) {
         toast.error('No businesses found');
+        setRadarPhase('off');
       } else {
         toast.success(`Found ${data.results.length} businesses`);
       }
     } catch {
       toast.error('Search failed. Please try again.');
+      setRadarPhase('off');
     } finally {
       setIsSearching(false);
     }
+  };
+
+  const handleRadarComplete = () => {
+    setRadarPhase('off');
+    setViewMode('results');
   };
 
   // Save lead
@@ -210,6 +281,67 @@ export default function Home() {
     setViewMode('search');
     setSearchResults([]);
     setMarketDensity(null);
+    setZones([]);
+    setZoneBbox(null);
+    setSingleZone(false);
+    setFocusedZoneId(null);
+    setRescanningZoneId(null);
+  };
+
+  // Tap-to-rescan a different zone without leaving the results page.
+  // Reuses zones from the initial scan; only the Maps search + density update.
+  const handleZoneSwitch = async (zone: Zone) => {
+    if (!selectedIndustry || rescanningZoneId) return;
+    if (focusedZoneId === zone.id) return;
+
+    setRescanningZoneId(zone.id);
+    try {
+      const response = await fetch('/api/business/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          businessType: selectedIndustry,
+          city: city.trim(),
+          country,
+          limit: 50,
+          deepAnalysis,
+          searchLat: zone.latitude,
+          searchLng: zone.longitude,
+          zoneLabel: zone.label,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        toast.error(data.error || 'Zone rescan failed');
+        return;
+      }
+      setSearchResults(data.results || []);
+      setMarketDensity(data.marketDensity || null);
+      if (Array.isArray(data.zones) && data.zones.length > 0) {
+        setZones(data.zones);
+      }
+      setFocusedZoneId(zone.id);
+      if (data.results?.length === 0) {
+        toast.info(`No businesses in ${zone.label}`);
+      } else {
+        toast.success(`Scanning ${zone.label} — ${data.results.length} found`);
+      }
+      saveLastSearch({
+        results: data.results || [],
+        industry: selectedIndustry,
+        city: city.trim(),
+        country,
+        zones: Array.isArray(data.zones) && data.zones.length > 0 ? data.zones : zones,
+        zoneBbox: Array.isArray(data.zoneBbox) ? data.zoneBbox : zoneBbox,
+        singleZone,
+        focusedZoneId: zone.id,
+        marketDensity: data.marketDensity || null,
+      });
+    } catch {
+      toast.error('Zone rescan failed');
+    } finally {
+      setRescanningZoneId(null);
+    }
   };
 
   // Render results view
@@ -229,92 +361,57 @@ export default function Home() {
               <h1 className="text-lg sm:text-2xl font-semibold text-white">
                 {selectedIndustry} in {city}
               </h1>
-              <p className="text-xs sm:text-sm text-white/60 mt-1">
-                {searchResults.length} businesses found
+              <p className="mt-1 flex items-center gap-1.5 text-xs text-white/60 sm:text-sm">
+                <SlidingNumber value={resultsCount} />
+                <span>businesses found</span>
               </p>
-              {marketDensity && (
-                <div className="mt-2 flex flex-col gap-2">
-                  {/* Area Quality Badge */}
-                  <div
-                    className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium border ${
-                      marketDensity.level === 'high'
-                        ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
-                        : marketDensity.level === 'medium'
-                          ? 'bg-amber-500/10 border-amber-500/20 text-amber-400'
-                          : 'bg-blue-500/10 border-blue-500/20 text-blue-400'
-                    }`}
-                  >
-                    {marketDensity.level === 'high' ? (
-                      <TrendingUp className="w-3.5 h-3.5" />
-                    ) : marketDensity.level === 'medium' ? (
-                      <Minus className="w-3.5 h-3.5" />
-                    ) : (
-                      <TrendingDown className="w-3.5 h-3.5" />
-                    )}
-                    {marketDensity.label}
-                    {marketDensity.areaScore !== undefined && (
-                      <span className="opacity-60">({marketDensity.areaScore}/100)</span>
-                    )}
-                    <span className="text-white/40">—</span>
-                    <span className="font-normal opacity-80">{marketDensity.description}</span>
-                  </div>
-
-                  {/* Amenity breakdown chips */}
-                  {marketDensity.amenities && marketDensity.amenities.total > 0 && (
-                    <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
-                      <span className="text-gray-500">Nearby:</span>
-                      {marketDensity.amenities.banks > 0 && (
-                        <span className="px-2 py-0.5 rounded bg-white/5 border border-white/10 text-gray-400">
-                          {marketDensity.amenities.banks} banks
-                        </span>
-                      )}
-                      {marketDensity.amenities.hotels > 0 && (
-                        <span className="px-2 py-0.5 rounded bg-white/5 border border-white/10 text-gray-400">
-                          {marketDensity.amenities.hotels} hotels
-                        </span>
-                      )}
-                      {marketDensity.amenities.hospitals > 0 && (
-                        <span className="px-2 py-0.5 rounded bg-white/5 border border-white/10 text-gray-400">
-                          {marketDensity.amenities.hospitals} hospitals
-                        </span>
-                      )}
-                      {marketDensity.amenities.pharmacies > 0 && (
-                        <span className="px-2 py-0.5 rounded bg-white/5 border border-white/10 text-gray-400">
-                          {marketDensity.amenities.pharmacies} pharmacies
-                        </span>
-                      )}
-                      {marketDensity.amenities.supermarkets > 0 && (
-                        <span className="px-2 py-0.5 rounded bg-white/5 border border-white/10 text-gray-400">
-                          {marketDensity.amenities.supermarkets} supermarkets
-                        </span>
-                      )}
-                      {marketDensity.amenities.affluenceSpots > 0 && (
-                        <span className="px-2 py-0.5 rounded bg-white/5 border border-white/10 text-gray-400">
-                          {marketDensity.amenities.affluenceSpots} leisure
-                        </span>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
             </div>
             <Link
               href="/crm"
-              className="flex items-center gap-2 rounded-lg bg-white text-black px-4 py-2 text-sm font-medium hover:bg-gray-200 transition-colors"
+              className="flex items-center gap-2 rounded-lg bg-accent text-accent-foreground px-4 py-2 text-sm font-medium hover:bg-accent-hover transition-colors shadow-[0_0_20px_oklch(0.65_0.18_250/0.25)]"
             >
               View My Leads
             </Link>
           </div>
 
+          {zones.length > 1 && (
+            <ZoneChipsStrip
+              zones={zones}
+              focusedZoneId={focusedZoneId}
+              rescanningZoneId={rescanningZoneId}
+              onZoneSelect={handleZoneSwitch}
+              disabled={!!rescanningZoneId}
+            />
+          )}
+
+          {marketDensity && marketDensity.areaScore !== undefined && (
+            <div className="mb-6">
+              <AreaDensityMeter
+                score={marketDensity.areaScore}
+                level={marketDensity.level}
+                label={marketDensity.label}
+                description={marketDensity.description}
+                amenities={marketDensity.amenities}
+                focusedZone={
+                  zones.find((z) => z.id === focusedZoneId) ?? zones[0]
+                }
+                cityLabel={city}
+                singleZone={singleZone}
+              />
+            </div>
+          )}
+
           {/* Filters & Sort */}
-          <div className="mb-4 flex flex-col sm:flex-row items-start sm:items-center gap-3 p-3 bg-gray-800/30 border border-gray-700/50 rounded-xl">
+          <div className="mb-4 flex flex-col sm:flex-row items-start sm:items-center gap-3 p-3 bg-surface/60 border border-border-bright/50 rounded-xl backdrop-blur-sm">
             {/* Sort */}
             <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-500">Sort:</span>
+              <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-white/40">
+                Sort
+              </span>
               <select
                 value={sortBy}
                 onChange={(e) => setSortBy(e.target.value as SortOption)}
-                className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-300 outline-none focus:border-white/20"
+                className="cursor-pointer rounded-lg border border-border-bright/60 bg-surface-elevated/80 px-2.5 py-1.5 text-xs text-white/85 outline-none transition-colors hover:bg-surface-hover/80 focus:border-sky-400/60"
               >
                 <option value="score">Lead Score</option>
                 <option value="contactPoints">Contact Points</option>
@@ -323,11 +420,13 @@ export default function Home() {
               </select>
             </div>
 
-            <div className="h-4 w-px bg-gray-700 hidden sm:block" />
+            <div className="hidden h-5 w-px bg-border-bright/50 sm:block" />
 
             {/* Filters */}
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-xs text-gray-500">Filter:</span>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-white/40">
+                Filter
+              </span>
               <FilterToggle label="Has Email" active={filterHasEmail} onClick={() => setFilterHasEmail(!filterHasEmail)} />
               <FilterToggle label="Has Phone" active={filterHasPhone} onClick={() => setFilterHasPhone(!filterHasPhone)} />
               <FilterToggle label="Has Social" active={filterHasSocial} onClick={() => setFilterHasSocial(!filterHasSocial)} />
@@ -335,7 +434,7 @@ export default function Home() {
               <select
                 value={filterMinBudget}
                 onChange={(e) => setFilterMinBudget(Number(e.target.value))}
-                className="bg-gray-800 border border-gray-700 rounded-lg px-2 py-1 text-xs text-gray-300 outline-none focus:border-white/20"
+                className="cursor-pointer rounded-lg border border-border-bright/60 bg-surface-elevated/80 px-2.5 py-1.5 text-xs text-white/85 outline-none transition-colors hover:bg-surface-hover/80 focus:border-sky-400/60"
               >
                 <option value={0}>Any Budget</option>
                 <option value={500}>$500+</option>
@@ -346,17 +445,52 @@ export default function Home() {
             </div>
 
             {/* Count */}
-            <span className="text-xs text-gray-500 sm:ml-auto">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-border-bright/50 bg-surface/60 px-2.5 py-1 font-mono text-[11px] text-white/50 sm:ml-auto">
+              <span className="h-1.5 w-1.5 rounded-full bg-sky-400" />
               {filteredResults.length}/{searchResults.length} shown
             </span>
           </div>
 
-          <div className="grid gap-4">
-            {filteredResults.map((business) => (
-              <div
-                key={business.placeId}
-                className="bg-gray-800/50 border border-gray-700 rounded-xl p-4 sm:p-5"
-              >
+          <div
+            className={`grid gap-4 transition-opacity duration-300 ${
+              rescanningZoneId ? 'pointer-events-none opacity-40' : 'opacity-100'
+            }`}
+          >
+            <AnimatePresence mode="popLayout" initial={false}>
+              {filteredResults.map((business, index) => {
+                const tier =
+                  business.leadScore >= 55
+                    ? 'hot'
+                    : business.leadScore >= 35
+                      ? 'mid'
+                      : 'cold';
+                const rank = index + 1;
+                return (
+                <motion.div
+                  key={business.placeId}
+                  layout
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.96 }}
+                  transition={{
+                    type: 'spring',
+                    stiffness: 320,
+                    damping: 32,
+                    mass: 0.6,
+                    delay: Math.min(index, 16) * 0.04,
+                  }}
+                  data-heat={tier}
+                  data-rank={rank}
+                  style={{ ['--i' as string]: index }}
+                  className={`lead-card lead-tier-${tier} bg-surface-elevated/60 border border-border-bright/60 rounded-xl p-4 sm:p-5 backdrop-blur-sm`}
+                >
+                {rank <= 3 && (
+                  <span className={`lead-rank-pip lead-rank-${rank}`}>
+                    {rank === 1 && <Flame className="w-3 h-3" />}
+                    #{rank}
+                    {rank === 1 && ' HOT LEAD'}
+                  </span>
+                )}
                 <div className="flex flex-col lg:flex-row gap-4">
                   {/* Main info */}
                   <div className="flex-1 min-w-0">
@@ -384,7 +518,7 @@ export default function Home() {
                       {business.phone && (
                         <a
                           href={`tel:${business.phone}`}
-                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-gray-700/50 text-sm text-gray-300 hover:text-white hover:bg-gray-700 transition-colors"
+                          className="lead-chip inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-sm"
                         >
                           <Phone className="w-3.5 h-3.5" />
                           {business.phone}
@@ -393,7 +527,7 @@ export default function Home() {
                       {business.email && isRealEmail(business.email) && (
                         <a
                           href={`mailto:${business.email}`}
-                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-gray-700/50 text-sm text-gray-300 hover:text-white hover:bg-gray-700 transition-colors"
+                          className="lead-chip inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-sm"
                         >
                           <Mail className="w-3.5 h-3.5" />
                           {business.email}
@@ -404,7 +538,7 @@ export default function Home() {
                           href={business.website}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-gray-700/50 text-sm text-gray-300 hover:text-white hover:bg-gray-700 transition-colors"
+                          className="lead-chip inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-sm"
                         >
                           <Globe className="w-3.5 h-3.5" />
                           Website
@@ -416,7 +550,7 @@ export default function Home() {
                           href={business.mapsUrl}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-gray-700/50 text-sm text-gray-300 hover:text-white hover:bg-gray-700 transition-colors"
+                          className="lead-chip inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-sm"
                         >
                           <MapPin className="w-3.5 h-3.5" />
                           Maps
@@ -491,18 +625,29 @@ export default function Home() {
                     )}
 
                     <OpportunitiesList opportunities={business.opportunities} maxVisible={2} />
-                    <button
-                      onClick={() => handleSaveLead(business)}
-                      disabled={savingLeadIds.has(business.placeId)}
-                      className="flex items-center justify-center gap-2 w-full py-2 rounded-lg bg-green-600 text-white font-medium text-sm hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      <Plus className="w-4 h-4" />
-                      {savingLeadIds.has(business.placeId) ? 'Saving...' : 'Save Lead'}
-                    </button>
+                    <div className="group relative">
+                      <GlowEffect
+                        colors={['#10b981', '#14b8a6', '#06b6d4', '#10b981']}
+                        mode="colorShift"
+                        blur="soft"
+                        duration={3.5}
+                        className="rounded-lg opacity-0 transition-opacity duration-300 group-hover:opacity-65"
+                      />
+                      <button
+                        onClick={() => handleSaveLead(business)}
+                        disabled={savingLeadIds.has(business.placeId)}
+                        className="relative flex w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 px-4 py-2.5 text-sm font-medium text-white shadow-[0_4px_16px_rgba(16,185,129,0.25)] transition-all hover:from-emerald-400 hover:to-teal-500 hover:shadow-[0_6px_24px_rgba(16,185,129,0.4)] disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <Plus className="h-4 w-4" />
+                        {savingLeadIds.has(business.placeId) ? 'Saving...' : 'Save Lead'}
+                      </button>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+                </motion.div>
+                );
+              })}
+            </AnimatePresence>
           </div>
         </div>
 
@@ -591,6 +736,19 @@ export default function Home() {
         </div>
       </div>
       <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
+      <AnimatePresence>
+        {radarPhase !== 'off' && (
+          <RadarScan
+            key="radar"
+            city={city}
+            results={radarPhase === 'revealing' ? searchResults : null}
+            zones={radarPhase === 'revealing' ? zones : null}
+            zoneBbox={radarPhase === 'revealing' ? zoneBbox : null}
+            singleZone={singleZone}
+            onComplete={handleRadarComplete}
+          />
+        )}
+      </AnimatePresence>
     </>
   );
 }
@@ -668,10 +826,10 @@ function FilterToggle({
   return (
     <button
       onClick={onClick}
-      className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors ${
+      className={`rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-all ${
         active
-          ? 'bg-white/10 border-white/20 text-white'
-          : 'bg-transparent border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600'
+          ? 'border-sky-400/55 bg-sky-500/15 text-sky-200 shadow-[0_0_14px_rgba(56,189,248,0.3)]'
+          : 'border-border-bright/45 bg-surface/40 text-white/50 hover:border-border-bright hover:bg-surface-hover/60 hover:text-white/85'
       }`}
     >
       {label}

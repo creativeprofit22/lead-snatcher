@@ -89,3 +89,20 @@ If changes require server restart (not hot-reloadable):
 1. Restart server: `npm run dev`
 2. Read server output/logs
 3. Fix ALL warnings/errors before continuing
+
+## Current Focus
+
+Visual theatrical overhaul for social-media demos (per `/mnt/e/Projects/CONTENT_PLAYBOOK.md`). Three "beats" + Foundation skin layer now deployed. Pending: user eyeball in browser and decide whether to dial intensity up.
+
+## Last Session (2026-04-16)
+- **Beat 2 (score reveal)**: ported motion-primitives MIT — `sliding-number`, `text-effect`, `glow-effect` into `src/components/motion-primitives/`; wired into `LeadScoreBadge.tsx` for odometer count-up + char-by-char chip reveal + pulsing halo
+- **Beat 1 (radar scan)**: new `src/components/search/RadarScan.tsx` — SVG radar with rotating sweep, pin-drop at real lat/lng. Added `latitude/longitude` to `BusinessSearchResult` type + `search.ts` transform. `page.tsx` has `radarPhase` state machine ('off'|'scanning'|'revealing') with 900ms min scan duration.
+- **Beat 3 (area density)**: ported animata `gauge-chart.tsx` (MIT) to `src/components/animata/`; built `AreaDensityMeter.tsx` with central radial + 7 orbital amenity glyphs. Replaced flat chip list in `page.tsx`.
+- **Foundation**: `@tsparticles/react` + `@tsparticles/slim` installed, `AmbientParticles.tsx` mounted globally in `layout.tsx`. FLIP layout animations on business result cards via `motion.div layout` + `AnimatePresence`. Archon palette ported into `globals.css` (MIT, coleam00/Archon) — blue-gray bg, cyan accent, new semantic tokens (`surface`, `surface-elevated`, `border-bright`, `accent-bright`, etc.). Cards + filter bar upgraded to glass treatment.
+- **Stopped at**: Audit confirmed all edits landed + Tailwind v4 emitted new utilities. Dev server won't boot in this sandbox (exit 144, WSL signal quirk). User needs to run `npm run dev` locally and eyeball.
+
+## Next Steps
+1. User runs `npm run dev` + hard-refresh, checks all beats + Archon skin render correctly
+2. If visuals underwhelming, dial intensity (candidates: bump particle opacity 2×, stronger cyan card-hover glow, add inner highlight line on card tops, raise surface contrast)
+3. Fix pre-existing `useSearchParams()` Suspense boundary issue in `page.tsx` (blocks prod build, not dev)
+4. Record short-form demos per CONTENT_PLAYBOOK once visuals pass bar

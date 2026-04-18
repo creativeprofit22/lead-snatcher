@@ -193,6 +193,8 @@ function transformBusinessResult(
     placeId: business.business_id || '',
     name: business.name || '',
     address: business.full_address || undefined,
+    latitude: business.latitude,
+    longitude: business.longitude,
     phone: business.phone_number || undefined,
     website: website || undefined,
     email,

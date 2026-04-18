@@ -24,6 +24,21 @@
   --color-bg-hover: rgb(var(--bg-hover));
   --color-text-primary: rgb(var(--text-primary));
   --color-text-secondary: rgb(var(--text-secondary));
+
+  /* Archon semantic tokens (MIT, coleam00/Archon) */
+  --color-surface: var(--surface);
+  --color-surface-elevated: var(--surface-elevated);
+  --color-surface-inset: var(--surface-inset);
+  --color-surface-hover: var(--surface-hover);
+  --color-border-bright: var(--border-bright);
+  --color-text-tertiary: var(--text-tertiary);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-muted: var(--accent-muted);
+  --color-accent-bright: var(--accent-bright);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-error: var(--error);
+
   --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
@@ -205,15 +220,29 @@
 /* Base styles */
 html {
   color-scheme: dark;
-  background-color: #000;
+  background-color: var(--background);
 }
 
 body {
-  background-color: #000;
-  background: rgb(var(--bg-primary));
-  color: #f3f4f6;
-  color: rgb(var(--text-primary));
+  background-color: var(--background);
+  color: var(--foreground);
   font-family: var(--font-sans);
+}
+
+/* Archon-style scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: var(--background);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-bright);
 }
 
 /* Prevent mobile zoom on input focus - requires 16px+ font size */
@@ -267,47 +296,58 @@ body {
   font-family: var(--font-orbitron);
 }
 
-/* Dark Theme - Lead Snatcher CRM (Pure Black) */
+/* Archon-inspired Dark Theme (MIT, coleam00/Archon) */
 .dark,
 :root {
-  --background: oklch(0 0 0);                /* #000000 - Pure black */
-  --foreground: oklch(0.9 0 0);              /* ~gray-200 */
-  --card: oklch(0.15 0 0);                   /* #222222 - Elevated cards */
-  --card-foreground: oklch(0.9 0 0);
-  --popover: oklch(0.1 0 0);                 /* Slightly lighter for popovers */
-  --popover-foreground: oklch(0.9 0 0);
-  --primary: oklch(0.9 0 0);                 /* White-ish for primary actions */
-  --primary-foreground: oklch(0.1 0 0);
-  --secondary: oklch(0.15 0 0);              /* Very dark gray */
-  --secondary-foreground: oklch(0.9 0 0);
-  --muted: oklch(0.15 0 0);                  /* Muted background */
-  --muted-foreground: oklch(0.55 0 0);       /* ~gray-500 */
-  --accent: oklch(0.12 0 0);                 /* Accent background */
-  --accent-foreground: oklch(0.9 0 0);
-  --destructive: oklch(0.65 0.2 25);         /* Red for destructive */
-  --border: oklch(1 0 0 / 10%);              /* white/10 borders */
-  --input: oklch(1 0 0 / 5%);                /* Input background */
-  --ring: oklch(0.5 0 0);                    /* Focus ring */
+  --background: oklch(0.14 0.005 260);       /* deep blue-gray, replaces pure black */
+  --foreground: oklch(0.93 0.005 260);
+  --card: oklch(0.18 0.008 260);
+  --card-foreground: oklch(0.93 0.005 260);
+  --popover: oklch(0.18 0.008 260);
+  --popover-foreground: oklch(0.93 0.005 260);
+  --primary: oklch(0.65 0.18 250);           /* cyan-blue accent */
+  --primary-foreground: oklch(0.98 0.005 260);
+  --secondary: oklch(0.22 0.01 260);
+  --secondary-foreground: oklch(0.93 0.005 260);
+  --muted: oklch(0.22 0.01 260);
+  --muted-foreground: oklch(0.65 0.01 260);
+  --accent: oklch(0.65 0.18 250);            /* was flat dark — now saturated accent */
+  --accent-foreground: oklch(0.98 0.005 260);
+  --destructive: oklch(0.6 0.2 25);
+  --border: oklch(0.28 0.01 260);
+  --input: oklch(0.28 0.01 260);
+  --ring: oklch(0.65 0.18 250);
 
-  /* Success color for "Won" status */
-  --success: oklch(0.75 0.18 145);           /* green-400 */
+  /* Archon extended palette */
+  --surface: oklch(0.18 0.008 260);
+  --surface-elevated: oklch(0.22 0.01 260);
+  --surface-inset: oklch(0.12 0.005 260);
+  --surface-hover: oklch(0.24 0.01 260);
+  --border-bright: oklch(0.35 0.015 260);
+  --text-primary-new: oklch(0.93 0.005 260);
+  --text-secondary-new: oklch(0.65 0.01 260);
+  --text-tertiary: oklch(0.45 0.01 260);
+  --accent-hover: oklch(0.58 0.18 250);
+  --accent-muted: oklch(0.3 0.08 250);
+  --accent-bright: oklch(0.72 0.18 250);
+  --success: oklch(0.65 0.17 155);
+  --warning: oklch(0.75 0.15 75);
+  --error: oklch(0.6 0.2 25);
 
-  /* Chart colors (monochrome) */
-  --chart-1: oklch(0.9 0 0);
-  --chart-2: oklch(0.7 0 0);
-  --chart-3: oklch(0.5 0 0);
-  --chart-4: oklch(0.3 0 0);
-  --chart-5: oklch(0.2 0 0);
+  --chart-1: oklch(0.65 0.18 250);
+  --chart-2: oklch(0.65 0.17 155);
+  --chart-3: oklch(0.75 0.15 75);
+  --chart-4: oklch(0.6 0.2 25);
+  --chart-5: oklch(0.58 0.18 250);
 
-  /* Sidebar */
-  --sidebar: oklch(0 0 0);
-  --sidebar-foreground: oklch(0.9 0 0);
-  --sidebar-primary: oklch(0.9 0 0);
-  --sidebar-primary-foreground: oklch(0.1 0 0);
-  --sidebar-accent: oklch(0.12 0 0);
-  --sidebar-accent-foreground: oklch(0.9 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.5 0 0);
+  --sidebar: oklch(0.18 0.008 260);
+  --sidebar-foreground: oklch(0.93 0.005 260);
+  --sidebar-primary: oklch(0.65 0.18 250);
+  --sidebar-primary-foreground: oklch(0.98 0.005 260);
+  --sidebar-accent: oklch(0.25 0.06 250);
+  --sidebar-accent-foreground: oklch(0.93 0.005 260);
+  --sidebar-border: oklch(0.28 0.01 260);
+  --sidebar-ring: oklch(0.65 0.18 250);
 }
 
 @layer base {
@@ -317,4 +357,179 @@ body {
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* ------------------------------------------------------------------
+ * Lead card polish — shared compositor-layer glow
+ * One @keyframes drives all N cards via currentColor. Tier classes
+ * differ only in `color:`, so a single GPU timeline covers 50 cards.
+ * Per-card stagger comes from `--i` custom prop on the element.
+ * ------------------------------------------------------------------ */
+
+.lead-card {
+  position: relative;
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.4),
+    0 2px 8px rgba(6, 182, 212, 0.1),
+    inset 0 1px 1px rgba(255, 255, 255, 0.06);
+  contain: layout paint;
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.lead-card:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    0 14px 42px rgba(0, 0, 0, 0.45),
+    0 4px 18px rgba(6, 182, 212, 0.18),
+    inset 0 1px 1px rgba(255, 255, 255, 0.1);
+}
+
+.lead-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  box-shadow: 0 0 0 0 transparent;
+  animation: lead-heat-pulse 4.8s ease-in-out infinite;
+  animation-delay: calc(var(--i, 0) * 0.15s);
+}
+
+@keyframes lead-heat-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+  50% {
+    box-shadow:
+      0 0 26px -4px currentColor,
+      inset 0 0 0 1px currentColor;
+  }
+}
+
+.lead-tier-hot {
+  color: rgba(251, 146, 60, 0.6);
+}
+.lead-tier-mid {
+  color: rgba(96, 165, 250, 0.32);
+}
+.lead-tier-cold {
+  color: rgba(100, 116, 139, 0.15);
+}
+
+/* Rank pip for top 3 cards */
+.lead-rank-pip {
+  position: absolute;
+  top: -10px;
+  left: 18px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-family: var(--font-orbitron), ui-sans-serif, sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid;
+  backdrop-filter: blur(8px);
+  z-index: 2;
+}
+
+.lead-rank-1 {
+  background: linear-gradient(
+    135deg,
+    rgba(251, 146, 60, 0.22),
+    rgba(249, 115, 22, 0.08)
+  );
+  border-color: rgba(251, 146, 60, 0.45);
+  color: rgb(253, 186, 116);
+  box-shadow: 0 0 18px rgba(249, 115, 22, 0.28);
+}
+
+.lead-rank-2 {
+  background: linear-gradient(
+    135deg,
+    rgba(56, 189, 248, 0.2),
+    rgba(14, 165, 233, 0.06)
+  );
+  border-color: rgba(56, 189, 248, 0.4);
+  color: rgb(125, 211, 252);
+  box-shadow: 0 0 14px rgba(56, 189, 248, 0.22);
+}
+
+.lead-rank-3 {
+  background: linear-gradient(
+    135deg,
+    rgba(148, 163, 184, 0.18),
+    rgba(100, 116, 139, 0.06)
+  );
+  border-color: rgba(148, 163, 184, 0.35);
+  color: rgb(203, 213, 225);
+}
+
+/* Contact chip — cyan halo on hover, no noise otherwise */
+.lead-chip {
+  background-color: rgb(55 65 81 / 0.5);
+  color: rgb(209 213 219);
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+.lead-chip:hover {
+  background-color: rgb(55 65 81 / 0.85);
+  color: white;
+  box-shadow: 0 0 16px rgba(56, 189, 248, 0.3);
+}
+
+/* Area density gauge — breathing halo driven by --halo CSS custom prop */
+@keyframes gauge-halo-breathe {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 14px rgba(var(--halo, 52, 211, 153), 0.18));
+  }
+  50% {
+    filter: drop-shadow(0 0 36px rgba(var(--halo, 52, 211, 153), 0.45));
+  }
+}
+
+.gauge-halo {
+  animation: gauge-halo-breathe 4.8s ease-in-out infinite;
+  will-change: filter;
+}
+
+/* Radar pin ping — one-shot on mount via class. Pin only mounts
+ * when the sweep's leading edge has crossed its angle. */
+@keyframes radar-pin-ripple {
+  0% {
+    r: 2;
+    opacity: 0.9;
+  }
+  100% {
+    r: 28;
+    opacity: 0;
+  }
+}
+
+@keyframes radar-pin-dot {
+  0% {
+    r: 0;
+  }
+  45% {
+    r: 5;
+  }
+  100% {
+    r: 3;
+  }
+}
+
+.radar-pin-ripple {
+  animation: radar-pin-ripple 1.2s ease-out forwards;
+}
+
+.radar-pin-dot {
+  animation: radar-pin-dot 0.5s cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }

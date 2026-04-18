@@ -1,7 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Flame, Snowflake, Sparkles, DollarSign, CircleSlash, TrendingUp, Minus, TrendingDown } from 'lucide-react';
+import { SlidingNumber } from '@/components/motion-primitives/sliding-number';
+import { TextEffect } from '@/components/motion-primitives/text-effect';
+import { GlowEffect } from '@/components/motion-primitives/glow-effect';
 import type { ScoreBreakdown, WebsiteAnalysis } from '@/types';
 
 interface LeadScoreBadgeProps {
@@ -47,6 +50,16 @@ export function LeadScoreBadge({
 }: LeadScoreBadgeProps) {
   const [isExpanded, setIsExpanded] = useState(false);
 
+  // Keep digit count stable during count-up so SlidingNumber doesn't remount
+  const targetLen = String(score).length;
+  const startValue = targetLen > 1 ? Math.pow(10, targetLen - 1) : 0;
+  const [displayScore, setDisplayScore] = useState(startValue);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDisplayScore(score), 120);
+    return () => clearTimeout(t);
+  }, [score]);
+
   // Score styling with color accents
   const getScoreStyle = (s: number) => {
     if (s >= 55) {
@@ -55,6 +68,7 @@ export function LeadScoreBadge({
         border: 'border-orange-500/30',
         bg: 'bg-orange-500/10',
         glow: 'shadow-[0_0_10px_rgba(249,115,22,0.15)]',
+        glowColors: ['#f97316', '#fb923c', '#fbbf24', '#f97316'],
       };
     }
     if (s >= 35) {
@@ -63,6 +77,7 @@ export function LeadScoreBadge({
         border: 'border-white/10',
         bg: 'bg-white/5',
         glow: '',
+        glowColors: ['#fbbf24', '#f59e0b', '#facc15', '#fbbf24'],
       };
     }
     return {
@@ -70,6 +85,7 @@ export function LeadScoreBadge({
       border: 'border-blue-500/20',
       bg: 'bg-blue-500/5',
       glow: '',
+      glowColors: ['#60a5fa', '#3b82f6', '#38bdf8', '#60a5fa'],
     };
   };
 
@@ -83,13 +99,23 @@ export function LeadScoreBadge({
         {score >= 35 && score < 55 && <NeutralLeadIcon />}
         {score < 35 && <ColdLeadIcon />}
 
-        <button
-          onClick={() => breakdown && setIsExpanded(!isExpanded)}
-          className={`flex items-center justify-center w-10 h-10 rounded-lg font-mono text-lg transition-all hover:bg-white/10 ${style.text} ${style.border} ${style.bg} ${style.glow}`}
-          title={breakdown ? 'Click for details' : undefined}
-        >
-          {score}
-        </button>
+        <div className="relative">
+          <GlowEffect
+            colors={style.glowColors}
+            mode="pulse"
+            blur="soft"
+            scale={0.9}
+            duration={3}
+            className="rounded-lg opacity-50"
+          />
+          <button
+            onClick={() => breakdown && setIsExpanded(!isExpanded)}
+            className={`relative flex items-center justify-center min-w-[44px] h-10 px-1 rounded-lg font-mono text-lg transition-all hover:bg-white/10 ${style.text} ${style.border} ${style.bg} ${style.glow}`}
+            title={breakdown ? 'Click for details' : undefined}
+          >
+            <SlidingNumber value={displayScore} />
+          </button>
+        </div>
       </div>
 
       {/* Signal Badges */}
@@ -111,12 +137,16 @@ export function LeadScoreBadge({
             {breakdown.hasMarketingBudget ? (
               <>
                 <DollarSign className="w-3 h-3" />
-                <span>Ad Spend</span>
+                <TextEffect as="span" per="char" preset="fade-in-blur" speedReveal={2} delay={0.4}>
+                  Ad Spend
+                </TextEffect>
               </>
             ) : (
               <>
                 <CircleSlash className="w-3 h-3" />
-                <span>No Ads</span>
+                <TextEffect as="span" per="char" preset="fade-in-blur" speedReveal={2} delay={0.4}>
+                  No Ads
+                </TextEffect>
               </>
             )}
           </div>
@@ -139,13 +169,13 @@ export function LeadScoreBadge({
             ) : (
               <TrendingDown className="w-3 h-3" />
             )}
-            <span>
+            <TextEffect as="span" per="char" preset="fade-in-blur" speedReveal={2} delay={0.55}>
               {breakdown.revenueSignal === 'high'
                 ? 'High Revenue'
                 : breakdown.revenueSignal === 'medium'
                   ? 'Established'
                   : 'Low Traffic'}
-            </span>
+            </TextEffect>
           </div>
         </div>
       )}

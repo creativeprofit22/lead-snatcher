@@ -3,6 +3,7 @@
 import { useState, useMemo, useRef, useEffect } from 'react';
 import { MapPin, ChevronDown, Check } from 'lucide-react';
 import { COUNTRIES } from '@/lib/constants';
+import { NeighborhoodChips } from './NeighborhoodChips';
 
 interface CityInputProps {
   city: string;
@@ -117,6 +118,13 @@ export function CityInput({
           )}
         </div>
       </div>
+      <NeighborhoodChips
+        city={city}
+        country={country}
+        onNeighborhoodSelect={onCityChange}
+        disabled={isLoading}
+      />
+
       <button
         onClick={onSearch}
         disabled={!city.trim() || isLoading}

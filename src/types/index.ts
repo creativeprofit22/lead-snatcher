@@ -129,6 +129,8 @@ export interface BusinessSearchResult {
   placeId: string;
   name: string;
   address?: string;
+  latitude?: number;
+  longitude?: number;
   phone?: string;
   website?: string;
   rating?: number;
@@ -232,6 +234,8 @@ export interface GeocodeResult {
   longitude: number;
   displayName: string;
   country: string;
+  /** Bounding box: [south, north, west, east] in decimal degrees */
+  bbox?: [number, number, number, number];
 }
 
 // Task types

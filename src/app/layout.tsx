@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next';
 import { Inter, Doto, Orbitron } from 'next/font/google';
 import { Toaster } from 'sonner';
 import { SessionProvider } from '@/components/providers/SessionProvider';
+import { AmbientParticles } from '@/components/atmosphere/AmbientParticles';
 import './globals.css';
 
 const inter = Inter({
@@ -39,8 +40,9 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark bg-black">
-      <body className={`${inter.variable} ${doto.variable} ${orbitron.variable} antialiased bg-black min-h-screen`}>
+    <html lang="en" className="dark">
+      <body className={`${inter.variable} ${doto.variable} ${orbitron.variable} antialiased min-h-screen`}>
+        <AmbientParticles />
         <SessionProvider>{children}</SessionProvider>
         <Toaster
           position="bottom-right"

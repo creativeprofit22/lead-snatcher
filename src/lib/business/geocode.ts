@@ -6,6 +6,7 @@ interface NominatimResult {
   lat: string;
   lon: string;
   display_name: string;
+  boundingbox?: [string, string, string, string]; // [south, north, west, east]
   address?: {
     country_code?: string;
   };
@@ -48,11 +49,20 @@ export async function geocodeCity(
 
     const result = results[0];
 
+    let bbox: [number, number, number, number] | undefined;
+    if (result.boundingbox && result.boundingbox.length === 4) {
+      const parsed = result.boundingbox.map(parseFloat);
+      if (parsed.every((n) => Number.isFinite(n))) {
+        bbox = [parsed[0], parsed[1], parsed[2], parsed[3]];
+      }
+    }
+
     return {
       latitude: parseFloat(result.lat),
       longitude: parseFloat(result.lon),
       displayName: result.display_name,
       country: result.address?.country_code?.toUpperCase() || countryCode.toUpperCase(),
+      bbox,
     };
   } catch (error) {
     console.error('Geocoding error:', error);

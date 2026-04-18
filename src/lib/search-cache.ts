@@ -1,8 +1,28 @@
 import type { BusinessSearchResult, IndustryType } from '@/types';
+import type { Zone } from '@/lib/business/zone-grid';
 
 const LAST_SEARCH_KEY = 'lead-snatcher-last-search';
 /** Cache TTL: 30 minutes */
 const CACHE_TTL_MS = 30 * 60 * 1000;
+
+export interface CachedMarketDensity {
+  count: number;
+  level: string;
+  label: string;
+  description: string;
+  areaScore?: number;
+  competition?: string;
+  amenities?: {
+    banks: number;
+    hotels: number;
+    hospitals: number;
+    pharmacies: number;
+    supermarkets: number;
+    fuelStations: number;
+    affluenceSpots: number;
+    total: number;
+  };
+}
 
 export interface CachedSearch {
   results: BusinessSearchResult[];
@@ -10,6 +30,13 @@ export interface CachedSearch {
   city: string;
   country: string;
   timestamp: number;
+  // Extra state so a hop to /crm and back keeps the zone strip + density
+  // meter intact. All optional for backward-compat with older cache blobs.
+  zones?: Zone[];
+  zoneBbox?: [number, number, number, number] | null;
+  singleZone?: boolean;
+  focusedZoneId?: string | null;
+  marketDensity?: CachedMarketDensity | null;
 }
 
 export function saveLastSearch(data: Omit<CachedSearch, 'timestamp'>): void {
