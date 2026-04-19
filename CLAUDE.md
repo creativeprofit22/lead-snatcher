@@ -92,17 +92,41 @@ If changes require server restart (not hot-reloadable):
 
 ## Current Focus
 
-Visual theatrical overhaul for social-media demos (per `/mnt/e/Projects/CONTENT_PLAYBOOK.md`). Three "beats" + Foundation skin layer now deployed. Pending: user eyeball in browser and decide whether to dial intensity up.
+Search reliability + perf. Overpass + PageSpeed have been the two biggest pain points; both are now hardened, cached, and tiered. User PC restart pending — needs to test the full search loop on bare metal (WSL was OOMing during compile).
 
-## Last Session (2026-04-16)
-- **Beat 2 (score reveal)**: ported motion-primitives MIT — `sliding-number`, `text-effect`, `glow-effect` into `src/components/motion-primitives/`; wired into `LeadScoreBadge.tsx` for odometer count-up + char-by-char chip reveal + pulsing halo
-- **Beat 1 (radar scan)**: new `src/components/search/RadarScan.tsx` — SVG radar with rotating sweep, pin-drop at real lat/lng. Added `latitude/longitude` to `BusinessSearchResult` type + `search.ts` transform. `page.tsx` has `radarPhase` state machine ('off'|'scanning'|'revealing') with 900ms min scan duration.
-- **Beat 3 (area density)**: ported animata `gauge-chart.tsx` (MIT) to `src/components/animata/`; built `AreaDensityMeter.tsx` with central radial + 7 orbital amenity glyphs. Replaced flat chip list in `page.tsx`.
-- **Foundation**: `@tsparticles/react` + `@tsparticles/slim` installed, `AmbientParticles.tsx` mounted globally in `layout.tsx`. FLIP layout animations on business result cards via `motion.div layout` + `AnimatePresence`. Archon palette ported into `globals.css` (MIT, coleam00/Archon) — blue-gray bg, cyan accent, new semantic tokens (`surface`, `surface-elevated`, `border-bright`, `accent-bright`, etc.). Cards + filter bar upgraded to glass treatment.
-- **Stopped at**: Audit confirmed all edits landed + Tailwind v4 emitted new utilities. Dev server won't boot in this sandbox (exit 144, WSL signal quirk). User needs to run `npm run dev` locally and eyeball.
+## Last Session (2026-04-18) — performance + resilience pass
+Two commits landed: `1ca1650` (Overpass + PageSpeed wiring), `d1bbb2e` (perf wins).
 
-## Next Steps
-1. User runs `npm run dev` + hard-refresh, checks all beats + Archon skin render correctly
-2. If visuals underwhelming, dial intensity (candidates: bump particle opacity 2×, stronger cyan card-hover glow, add inner highlight line on card tops, raise surface contrast)
-3. Fix pre-existing `useSearchParams()` Suspense boundary issue in `page.tsx` (blocks prod build, not dev)
-4. Record short-form demos per CONTENT_PLAYBOOK once visuals pass bar
+**Overpass / zone scanning** (`src/lib/business/zone-grid.ts`):
+- Mirror list re-ordered: OSM-FR + OSM-CH first (the `.de` mirrors and kumi were globally 504/timeout). All 5 stay in the pool.
+- `Promise.any` race now cancels losing siblings on first win (prevents 20s hang waiting for kumi after .de 504s in 200ms).
+- New singleflight via `inFlight` Map keyed by `country|city` — neighborhoods autocomplete + search button no longer double-fire Overpass.
+- `200 + 0 elements` now counts as failure for the race (osm.ch silently truncates dense bboxes).
+- Server-side `[timeout:N]` 7s → 20s, client cap 8s → 12s — was too tight for greater London.
+- On total failure, `synthesizeEmptyZone` returns inline instead of recursing into `buildSingleZone` (which would have made another Overpass call → 40s).
+- Empty results cached for 60s only (not 7d) so transient Overpass outages auto-recover.
+
+**PageSpeed wiring** (multi-key Settings UI + flow):
+- `apiKeyServiceSchema` + settings route accept new `'pagespeed'` service.
+- `src/lib/business/pagespeed-key.ts`: mirrors `getRapidApiKey` (cache → DB → `PAGESPEED_API_KEY` env).
+- Search route fetches the key only when `deepAnalysis` is on, passes via `pageSpeedApiKey` option.
+- `pagespeed.ts` throws tagged `PageSpeedRateLimited` on 429; batch loop short-circuits after first 429 (no more 50-URL grind on dead quota).
+- `SettingsModal.tsx` rewritten as registry-driven (`SERVICES` array) — adding future keys is one entry.
+
+**Search performance** (`d1bbb2e`):
+- Lighthouse JSON parse scoped to a tight block in `pagespeed.ts` so the 1–5MB tree dies before return → ~80% peak heap reduction during 50-site batches.
+- Scraper concurrency 15 → 8 (eased WSL socket pressure that was contributing to OOMs).
+- **PageSpeed tiering**: scrape all sites first, score every business with scraping data only, then run PageSpeed on **top-20 by preliminary score**. Cuts the slow path from ~3min to ~30s.
+- New `UrlAnalysisCache` SQLite table + `src/lib/business/url-cache.ts` helper. Persistent 7d cache keyed by canonicalized URL for both `'pagespeed'` and `'scrape'` services. Repeat searches of the same city drop from ~30s to ~5s on the analysis pass.
+- Frontend `handleSearch` timeout 60s → 5min, with amber UI hint shown when slow toggles are on.
+
+**Frontend bug fix** (`src/components/search/NeighborhoodChips.tsx`):
+- `lastFetchedRef` cache key now only set on **non-empty** success — empty results no longer permanently lock out a city's autocomplete.
+
+**Stopped at**: User's WSL dev server died mid-compile (silent OOM, no logs). Recommended fix is `NODE_OPTIONS="--max-old-space-size=8192" PORT=3001 npm run dev` (or drop `--turbopack`). User opted to restart PC and resume in fresh session.
+
+## Next Steps (resume here)
+1. Start dev server with bumped heap: `cd /mnt/e/Projects/aloo && NODE_OPTIONS="--max-old-space-size=8192" PORT=3001 npm run dev`
+2. Test London search **twice** — first run validates #5 (top-20 tiering, target ~30s), second validates #2 (URL cache, target ~5s). Settings → ensure RapidAPI key is set; PageSpeed key optional but recommended (https://console.cloud.google.com/apis/credentials → API key → restrict to PageSpeed Insights API).
+3. If perf is still rough, the deferred #4 (streaming results) is queued — needs UX rework of `RadarScan` to handle progressive reveal. Skip if 30s/5s feels acceptable.
+4. Pre-existing issues unrelated to this session: `useSearchParams()` Suspense boundary in `page.tsx` (blocks prod build, not dev); old visual-overhaul beats from 2026-04-16 still need user eyeball.
