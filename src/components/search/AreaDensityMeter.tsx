@@ -155,13 +155,15 @@ export function AreaDensityMeter({
           className="relative shrink-0"
           style={{ width: CONTAINER_SIZE, height: CONTAINER_SIZE }}
         >
-          {/* Outer ambient sweep ring */}
+          {/* Outer ambient sweep ring — mask is anchored to ORBITAL_RADIUS
+              so the visible band passes through the centers of the amenity
+              icons on its rim. */}
           <div
             className="pointer-events-none absolute inset-0 animate-[spin_9s_linear_infinite]"
             style={{
               background: `conic-gradient(from 0deg at 50% 50%, transparent 62%, ${colors.sweep} 94%, transparent 100%)`,
-              maskImage: `radial-gradient(circle, transparent ${CONTAINER_SIZE / 2 - 14}px, black ${CONTAINER_SIZE / 2 - 11}px, black ${CONTAINER_SIZE / 2 - 3}px, transparent ${CONTAINER_SIZE / 2}px)`,
-              WebkitMaskImage: `radial-gradient(circle, transparent ${CONTAINER_SIZE / 2 - 14}px, black ${CONTAINER_SIZE / 2 - 11}px, black ${CONTAINER_SIZE / 2 - 3}px, transparent ${CONTAINER_SIZE / 2}px)`,
+              maskImage: `radial-gradient(circle, transparent ${ORBITAL_RADIUS - 7}px, black ${ORBITAL_RADIUS - 4}px, black ${ORBITAL_RADIUS + 4}px, transparent ${ORBITAL_RADIUS + 7}px)`,
+              WebkitMaskImage: `radial-gradient(circle, transparent ${ORBITAL_RADIUS - 7}px, black ${ORBITAL_RADIUS - 4}px, black ${ORBITAL_RADIUS + 4}px, transparent ${ORBITAL_RADIUS + 7}px)`,
               opacity: 0.55,
             }}
           />
@@ -260,8 +262,13 @@ export function AreaDensityMeter({
                       duration: 0.45,
                       ease: [0.22, 1, 0.36, 1],
                     }}
-                    className="flex flex-col items-center"
+                    className="relative"
                   >
+                    {/* Icon disk: this is what the parent's -50%/-50% translate
+                        is centering on the calculated orbital point. The label
+                        below MUST stay absolutely positioned (out of normal
+                        flow) — if it sits in the column it pushes the disk
+                        upward off the ring. */}
                     <div
                       className={`relative flex h-11 w-11 items-center justify-center rounded-full border backdrop-blur-sm ${
                         dim
@@ -280,7 +287,7 @@ export function AreaDensityMeter({
                         </div>
                       )}
                     </div>
-                    <div className="mt-1.5 whitespace-nowrap font-mono text-[10px] uppercase tracking-[0.15em] text-gray-500">
+                    <div className="absolute left-1/2 top-full mt-1.5 -translate-x-1/2 whitespace-nowrap font-mono text-[10px] uppercase tracking-[0.15em] text-gray-500">
                       {a.label}
                     </div>
                   </motion.div>

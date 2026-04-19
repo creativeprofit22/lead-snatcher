@@ -18,7 +18,6 @@ import {
   ChevronDown,
   ChevronUp,
   Flame,
-  Activity,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { AnimatePresence, motion } from 'motion/react';
@@ -39,7 +38,6 @@ import {
   LeadScoreBadge,
   OpportunitiesList,
   SaveLeadModal,
-  FootTrafficSlot,
 } from '@/components/leads';
 import { EnrichButton } from '@/components/leads/EnrichButton';
 import { BatchEnrichBar } from '@/components/leads/BatchEnrichBar';
@@ -57,16 +55,7 @@ import {
   updateLastSearchEnrichment,
 } from '@/lib/search-cache';
 import { INDUSTRY_TYPES } from '@/lib/constants';
-import { computeFitScore } from '@/lib/business/budget-estimate';
 import type { IndustryType, BusinessSearchResult } from '@/types';
-
-interface CachedPopularTimes {
-  weekly: number[][];
-  currentPopularity?: number;
-  timeSpent?: string;
-  dayLabels: string[];
-  scrapedAt: string;
-}
 import type { Zone } from '@/lib/business/zone-grid';
 
 type ViewMode = 'search' | 'results';
@@ -257,18 +246,6 @@ function HomeInner() {
     return () => clearTimeout(t);
   }, [viewMode, searchResults.length]);
 
-  // Per-business Popular Times cache (search-session scope, not persisted
-  // until the user saves the lead). Keyed by placeId.
-  const [popularTimesMap, setPopularTimesMap] = useState<
-    Record<string, CachedPopularTimes>
-  >({});
-  const [popularTimesLoading, setPopularTimesLoading] = useState<Set<string>>(
-    new Set()
-  );
-  const [popularTimesError, setPopularTimesError] = useState<
-    Record<string, string>
-  >({});
-
   // Enrichment state (user-triggered, per-card). The hook owns the
   // NDJSON stream + status/result maps; this component owns selection
   // + the first-time explainer gate.
@@ -447,77 +424,16 @@ function HomeInner() {
     setViewMode('results');
   };
 
-  // Per-card foot-traffic fetch (search-time scrape, no DB write).
-  // The result lands in popularTimesMap and is used by:
-  //   1. FootTrafficSlot's display
-  //   2. getEffectiveFitScore (live re-rank when sort=fit)
-  //   3. handleSaveLead (persisted to the new Lead row on save)
-  const handleFetchFootTraffic = async (business: BusinessSearchResult) => {
-    const id = business.placeId;
-    if (popularTimesLoading.has(id)) return;
-    setPopularTimesLoading((prev) => new Set(prev).add(id));
-    setPopularTimesError((prev) => {
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
-    try {
-      const response = await fetch('/api/business/popular-times', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: business.name,
-          address: business.address,
-        }),
-      });
-      const payload = await response.json();
-      if (!response.ok) {
-        setPopularTimesError((prev) => ({
-          ...prev,
-          [id]: payload.error ?? 'Could not fetch — Google may have changed their page, try again later',
-        }));
-        return;
-      }
-      setPopularTimesMap((prev) => ({
-        ...prev,
-        [id]: { ...payload.data, scrapedAt: payload.scrapedAt },
-      }));
-    } catch {
-      setPopularTimesError((prev) => ({
-        ...prev,
-        [id]: 'Network error while fetching foot traffic',
-      }));
-    } finally {
-      setPopularTimesLoading((prev) => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
-    }
-  };
-
   // Save lead
   const handleSaveLead = async (business: BusinessSearchResult) => {
     if (savingLeadIds.has(business.placeId)) return;
 
     setSavingLeadIds((prev) => new Set(prev).add(business.placeId));
     try {
-      const cachedPT = popularTimesMap[business.placeId];
       const response = await fetch('/api/leads', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...business,
-          popularTimesData: cachedPT
-            ? JSON.stringify({
-                weekly: cachedPT.weekly,
-                currentPopularity: cachedPT.currentPopularity,
-                timeSpent: cachedPT.timeSpent,
-                dayLabels: cachedPT.dayLabels,
-              })
-            : undefined,
-          popularTimesScrapedAt: cachedPT?.scrapedAt,
-        }),
+        body: JSON.stringify(business),
       });
 
       const data = await response.json();
@@ -538,21 +454,6 @@ function HomeInner() {
         return next;
       });
     }
-  };
-
-  // Live Fit Score per business — recomputes when foot-traffic data lands
-  // for that lead (peakBusyness adds up to +20 budget points).
-  const getEffectiveFitScore = (b: BusinessSearchResult): number => {
-    const cached = popularTimesMap[b.placeId];
-    if (!cached || !b.budgetEstimate) return b.fitScore ?? 0;
-    const peakBusyness = Math.max(0, ...cached.weekly.flat());
-    // Same scoring as estimateBudget: 75+→20, 50+→13, 25+→6, else 0
-    let bonus = 0;
-    if (peakBusyness >= 75) bonus = 20;
-    else if (peakBusyness >= 50) bonus = 13;
-    else if (peakBusyness >= 25) bonus = 6;
-    const newPoints = Math.min(100, b.budgetEstimate.points + bonus);
-    return computeFitScore(b.leadScore, newPoints);
   };
 
   // Merge any post-sweep enrichment results (website + socials) into
@@ -620,7 +521,7 @@ function HomeInner() {
     .sort((a, b) => {
       switch (sortBy) {
         case 'fit':
-          return getEffectiveFitScore(b) - getEffectiveFitScore(a) || b.leadScore - a.leadScore;
+          return (b.fitScore ?? 0) - (a.fitScore ?? 0) || b.leadScore - a.leadScore;
         case 'contactPoints':
           return b.contactPoints - a.contactPoints || b.leadScore - a.leadScore;
         case 'reviews':
@@ -707,9 +608,49 @@ function HomeInner() {
     }
   };
 
+  // Floating UI shared by both results view and home view: the batch
+  // enrichment bar (appears when leads are selected) and the explainer
+  // modal (gates first-time enrichment). Defined before the early
+  // return so both branches mount it — otherwise clicking Enrich from
+  // the results view sets explainerOpen=true with no modal in the tree.
+  const enrichmentFloatingUI = (
+    <>
+      <BatchEnrichBar
+        selectedLeads={enrichedResults.filter((l) =>
+          selectedForEnrich.has(l.placeId)
+        )}
+        cachedCount={
+          enrichedResults.filter(
+            (l) =>
+              selectedForEnrich.has(l.placeId) &&
+              enrichResultMap[l.placeId]?.cached
+          ).length
+        }
+        onEnrich={() => {
+          const fire = () => handleBatchEnrich();
+          if (!gateEnrichment(fire)) fire();
+        }}
+        onClear={() => setSelectedForEnrich(new Set())}
+        isBusy={Object.values(enrichStatusMap).some((s) => s === 'enriching')}
+      />
+      <EnrichmentExplainer
+        isOpen={explainerOpen}
+        onClose={() => {
+          setExplainerOpen(false);
+          setPendingEnrichAction(null);
+        }}
+        onContinue={() => {
+          pendingEnrichAction?.();
+          setPendingEnrichAction(null);
+        }}
+      />
+    </>
+  );
+
   // Render results view
   if (viewMode === 'results') {
     return (
+      <>
       <div className="min-h-screen px-3 sm:px-4 py-4 sm:py-8">
         <div className="mx-auto max-w-7xl">
           <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -811,19 +752,6 @@ function HomeInner() {
             {/* Tier distribution readout */}
             <TierDistribution results={filteredResults} total={searchResults.length} />
           </div>
-
-          {/* Workflow hint — only shown when no popular times have been fetched yet */}
-          {Object.keys(popularTimesMap).length === 0 && (
-            <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-sky-500/20 bg-sky-500/[0.04] px-4 py-3 text-xs text-sky-200/85">
-              <Activity className="mt-0.5 h-4 w-4 flex-shrink-0 text-sky-400" />
-              <p className="leading-relaxed">
-                <span className="font-semibold text-sky-100">Spot something promising?</span>{' '}
-                Click the <span className="font-semibold">Fetch Foot Traffic</span> icon on any
-                card to enrich it with Google&apos;s real busyness data — your Best Fit Score
-                updates live, then you decide which leads to save.
-              </p>
-            </div>
-          )}
 
           {searchBannerError && (
             <ErrorBanner
@@ -1126,14 +1054,6 @@ function HomeInner() {
 
                   {/* Budget & Opportunities */}
                   <div className="lg:w-80 flex flex-col gap-3">
-                    {/* Foot Traffic — opt-in per-card enrichment */}
-                    <FootTrafficSlot
-                      data={popularTimesMap[business.placeId]}
-                      loading={popularTimesLoading.has(business.placeId)}
-                      error={popularTimesError[business.placeId]}
-                      onFetch={() => handleFetchFootTraffic(business)}
-                    />
-
                     {/* Budget Estimate */}
                     {business.budgetEstimate && (
                       <BudgetCard estimate={business.budgetEstimate} />
@@ -1178,6 +1098,8 @@ function HomeInner() {
           }}
         />
       </div>
+      {enrichmentFloatingUI}
+      </>
     );
   }
 
@@ -1280,40 +1202,7 @@ function HomeInner() {
       </div>
       <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
 
-      {/* Batch enrichment bar — floats above results when any lead is
-          checked. Truthful call count (minus cache hits) is computed
-          inside the bar. */}
-      <BatchEnrichBar
-        selectedLeads={enrichedResults.filter((l) =>
-          selectedForEnrich.has(l.placeId)
-        )}
-        cachedCount={
-          enrichedResults.filter(
-            (l) =>
-              selectedForEnrich.has(l.placeId) &&
-              enrichResultMap[l.placeId]?.cached
-          ).length
-        }
-        onEnrich={() => {
-          // Route through the explainer gate — same UX as per-card click.
-          const fire = () => handleBatchEnrich();
-          if (!gateEnrichment(fire)) fire();
-        }}
-        onClear={() => setSelectedForEnrich(new Set())}
-        isBusy={Object.values(enrichStatusMap).some((s) => s === 'enriching')}
-      />
-
-      <EnrichmentExplainer
-        isOpen={explainerOpen}
-        onClose={() => {
-          setExplainerOpen(false);
-          setPendingEnrichAction(null);
-        }}
-        onContinue={() => {
-          pendingEnrichAction?.();
-          setPendingEnrichAction(null);
-        }}
-      />
+      {enrichmentFloatingUI}
 
       <AnimatePresence>
         {radarPhase !== 'off' && (

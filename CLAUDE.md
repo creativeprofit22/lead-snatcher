@@ -92,34 +92,23 @@ If changes require server restart (not hot-reloadable):
 
 ## Current Focus
 
-Website-quality scoring (deterministic, no LLM) — adding a Layer 5 to the lead score that uses signals we already collect but don't score. Sweep cost stays at 1 RapidAPI call; PageSpeed payload stays at 20 URLs/search. Goal: make "shit website" a concrete, defensible sales pitch ("no mobile viewport, 87 words, Wix free template, accessibility 42").
+Post-launch UX polish + reliability. Layer 5 scoring shipped. Sweep is now fast + WSL-safe. Remaining: fix the render-tree bug that breaks Enrich from the results view, a minor visual alignment, and decide fate of foot traffic.
 
-Dev server: `NEXTAUTH_URL` / `AUTH_URL` now set to `http://localhost:3002`. Start with:
+Dev server: `NEXTAUTH_URL` / `AUTH_URL` set to `http://localhost:3002`. Start with:
 `NODE_OPTIONS="--max-old-space-size=8192" PORT=3002 npm run dev`
 
-## Last Session (2026-04-19) — enrichment redesign + auth port fix
+## Last Session (2026-04-19) — persistence, UX fixes, WSL memory fix
 
-**Auth fix**: `.env` updated — `NEXTAUTH_URL` was `:3000`, now `:3002` (and added v5-style `AUTH_SECRET` + `AUTH_URL` aliases). Fixes the "Unexpected token '<'" client error on `/api/auth/session`.
+- **Session + cross-session persistence** — `src/lib/search-cache.ts` (2h localStorage, enrichment state included) + new `LastSearchSession` DB model (`prisma/schema.prisma`) + `GET/POST/DELETE /api/business/last-search` + `ResumeSearchCard` on home screen.
+- **Dead-click fix** — `useEnrichmentStream.enrichLeads` now flips spinner BEFORE filtering, toasts + sets `bannerError` on every failure path (401/429/5xx/network/stream drop). `ErrorBanner` component renders above results with actionable buttons (e.g., "Log in" on 401).
+- **WSL OOM fix** — PageSpeed `fields` URL parameter cuts response ~100× (~5MB → ~15KB). Concurrency dropped 3→2. Scrape + PageSpeed pipelines wrapped in try/catch so a blow-up degrades to Maps-only results, never eats the sweep.
+- **Search timeout + banner** — 2-min cap (5-min if Deep Analysis on). Timeout / disconnect / non-200 all now show a persistent `searchBannerError` with honest copy.
 
-**Enrichment redesign (11 tasks, all complete)** — decoupled enrichment from the sweep. RapidAPI usage dropped from ~100 calls/sweep → 1 (sweep) + ~2 per lead the user chooses to enrich. First paint ~90s → ~30s.
+**Stopped at**: Identified 3 remaining issues (see Next Steps). User chose to tackle one-by-one. Nothing implemented yet on those three.
 
-- **Schema**: `BusinessEnrichmentCache` (keyed by `businessId`, 7d TTL) — `prisma/schema.prisma`.
-- **Helpers**: `src/lib/business/enrichment-cache.ts`, `src/lib/business/enrichment-preview.ts` (drives all user-facing copy).
-- **Endpoint**: `POST /api/business/enrich` — NDJSON stream, concurrency-capped at 5, cache-first, per-row rate limiting via new `RATE_LIMITS.enrich` bucket.
-- **Sweep**: `src/lib/business/search.ts` — deleted both enrichment passes; `enableEnrichment` option + UI toggle removed from `validations.ts`, `search/route.ts`, `page.tsx`.
-- **UI**: `EnrichButton` (per-card, dynamic tooltip from `previewEnrichment`), `BatchEnrichBar` (floating, live call-count minus cache hits), `EnrichmentExplainer` (first-time modal, `localStorage`-gated), `useEnrichmentStream` hook (NDJSON reader + status/result maps).
-- **Card wiring** (`src/app/page.tsx`): checkbox per card, enrich button in chips row, 3s success chip (`+ website, + Instagram`) or honest `No public contact data found`, `enrichedResults` merges live website + socials into filter/sort pipeline.
-- **Scoring preserved**: `calculateLeadScore`, `estimateBudget`, `computeFitScore`, `generateOpportunities` all untouched — leads without Maps websites now score higher (correctly — "+45 pts no website").
+## Next Steps
 
-**Stopped at**: User approved the Layer 5 website-quality scoring spec (deterministic, zero extra API calls). Ready to implement.
-
-## Next Steps (resume here)
-
-1. **Extend scraper** (`src/lib/business/scraper.ts`) to detect: missing `<meta viewport>`, table-based layout, word count <150, no `<form>`, no schema.org JSON-LD, no Open Graph, deprecated tags (`<marquee>`, `<center>`, `<font>`, inline `bgcolor`), fixed pixel widths, missing `<html lang>`, jQuery <2, template fingerprints (`wix.com`, `godaddysites.com`, `weebly.com`, `business.site`, `jimdo.com`).
-2. **Expand PageSpeed** (`src/lib/business/pagespeed.ts`) — currently requests `category=performance` only. Change to request all four categories and surface Accessibility, SEO, Best Practices scores + LCP + CLS in `WebsiteAnalysis`. Single API call still.
-3. **Add Layer 5 to `calculateLeadScore`** (`src/lib/business/scoring.ts`) with point table:
-   - No viewport +10, table layout +8, word count <150 +6, deprecated tags +6, template fingerprint +7, no form +5, fixed px width +4, jQuery <2 +4, no schema +4, no OG +3, no lang +2
-   - PageSpeed: accessibility <70 +6, SEO <70 +6, best-practices <80 +4, LCP >4s +5, CLS >0.25 +3
-4. **Surface top 2-3 triggered quality signals** on each card as chips ("No mobile viewport", "Wix template", "Accessibility 42"). Same style as existing lead-chip.
-5. **Test**: London sweep, verify a Wix / GoDaddy site ranks higher and shows the concrete chips.
-6. **Pre-existing issue**: `useSearchParams()` Suspense boundary in `page.tsx` blocks prod build (dev works fine).
+1. **Fix Enrich render-tree bug (CRITICAL)** — `<EnrichmentExplainer>` (page.tsx:1306) and `<BatchEnrichBar>` (page.tsx:1286) are rendered AFTER the `if (viewMode === 'results') return …` early return at page.tsx:711. Clicking Enrich from the results view sets `explainerOpen=true` but the modal isn't mounted → nothing happens until user navigates home. Move both to render regardless of viewMode (wrap both branches in a fragment with the floating UI, or refactor to a single return).
+2. **Ring alignment on area-score dial** — the rotating outer ring doesn't pass through the centers of the amenity icons on its rim. Pure visual. Check `src/components/search/AreaDensityMeter.tsx`.
+3. **Foot traffic — rip it out** (user decision). Remove `FootTrafficSlot` UI + fetch button, remove the peak-busyness bonus in `getEffectiveFitScore` / `computeFitScore`. Keep `Lead.popularTimesData`/`popularTimesScrapedAt` DB fields for possible revival; just delete the UI surface area.
+4. **(Nice-to-have)** Include the failing URL in `PageSpeed API error: 400` log line (`src/lib/business/pagespeed.ts`).

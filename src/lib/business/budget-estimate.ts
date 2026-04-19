@@ -19,8 +19,6 @@ interface BudgetInput {
   revenueSignal: 'high' | 'medium' | 'low';
   /** Google-style price tier, 0-4. Single strongest income proxy when present. */
   priceLevel?: number;
-  /** Peak weekly busyness 0-100 from Popular Times scrape. Real foot-traffic proxy. */
-  peakBusyness?: number;
 }
 
 export interface BudgetEstimate {
@@ -48,21 +46,6 @@ export function estimateBudget(input: BudgetInput): BudgetEstimate {
     const labels = ['Free / non-commercial', 'Budget pricing ($)', 'Mid-range pricing ($$)', 'Upscale pricing ($$$)', 'Premium pricing ($$$$)'];
     if (input.priceLevel >= 1) {
       reasons.push(labels[input.priceLevel]);
-    }
-  }
-
-  // Foot traffic — peak weekly busyness from Popular Times (0-20 points).
-  // The single best "are they actually making money" signal we can collect.
-  if (typeof input.peakBusyness === 'number' && input.peakBusyness > 0) {
-    if (input.peakBusyness >= 75) {
-      budgetPoints += 20;
-      reasons.push(`Packed at peak hours (${input.peakBusyness}% busy)`);
-    } else if (input.peakBusyness >= 50) {
-      budgetPoints += 13;
-      reasons.push(`Steady foot traffic (${input.peakBusyness}% peak)`);
-    } else if (input.peakBusyness >= 25) {
-      budgetPoints += 6;
-      reasons.push(`Moderate foot traffic (${input.peakBusyness}% peak)`);
     }
   }
 
@@ -161,8 +144,7 @@ export function buildBudgetInput(
   contactPoints: number,
   areaScore: number,
   areaLevel: string,
-  priceLevel?: number,
-  peakBusyness?: number
+  priceLevel?: number
 ): BudgetInput {
   return {
     areaScore,
@@ -173,7 +155,6 @@ export function buildBudgetInput(
     contactPoints,
     revenueSignal: breakdown.revenueSignal,
     priceLevel,
-    peakBusyness,
   };
 }
 

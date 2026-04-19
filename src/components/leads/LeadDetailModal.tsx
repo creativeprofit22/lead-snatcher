@@ -24,7 +24,6 @@ import { LeadScoreBadge } from './LeadScoreBadge';
 import { StatusBadge } from '@/components/crm';
 import { StatusSelector } from './StatusSelector';
 import { OpportunitiesList } from './OpportunitiesList';
-import { PopularTimesPanel } from './PopularTimesPanel';
 import { TaskList, TaskModal } from '@/components/tasks';
 import type { Lead, LeadStatus, ContactLogEntry, Task } from '@/types';
 
@@ -448,13 +447,6 @@ export function LeadDetailModal({ lead, isOpen, onClose, onUpdate }: LeadDetailM
                   </div>
                 )}
               </div>
-
-              {/* Popular Times — opt-in foot-traffic enrichment */}
-              <PopularTimesPanel
-                leadId={lead.id}
-                initialData={lead.popularTimesData}
-                initialScrapedAt={lead.popularTimesScrapedAt}
-              />
 
               {/* Opportunities */}
               {lead.opportunities && lead.opportunities.length > 0 && (

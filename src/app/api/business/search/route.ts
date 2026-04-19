@@ -201,8 +201,6 @@ export async function POST(request: NextRequest) {
         focusedZone.score,
         focusedZone.level,
         result.priceLevel
-        // peakBusyness omitted — Popular Times is opt-in per-card on the
-        // search page; fitScore is recomputed client-side when it arrives.
       );
       const budgetEstimate = estimateBudget(budgetInput);
       return {
