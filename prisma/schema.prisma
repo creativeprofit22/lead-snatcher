@@ -29,6 +29,22 @@ model User {
   @@index([inviteToken])
 }
 
+// Cached results from per-URL analysis pipelines (PageSpeed, scraping).
+// Keyed by service + url so a single URL can hold both a "pagespeed"
+// and a "scrape" entry. Survives across searches and across users so
+// dense cities don't pay the analysis cost twice.
+model UrlAnalysisCache {
+  id        String   @id @default(cuid())
+  service   String // "pagespeed" | "scrape"
+  url       String // canonical URL (normalized to https://, no trailing slash)
+  payload   String // JSON-serialized result blob
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@unique([service, url])
+  @@index([expiresAt])
+}
+
 // API Keys - stores encrypted API keys for different services per user
 model ApiKey {
   id        String   @id @default(cuid())

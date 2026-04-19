@@ -3,6 +3,8 @@
  * Extracts useful data from business websites for lead scoring
  */
 
+import { getCachedMany, putCached } from './url-cache';
+
 export interface ScrapedWebsiteData {
   url: string;
   isReachable: boolean;
@@ -291,11 +293,18 @@ export async function scrapeWebsitesBatch(
 ): Promise<Map<string, ScrapedWebsiteData>> {
   const results = new Map<string, ScrapedWebsiteData>();
   const validUrls = urls.filter((url) => url && !isSocialMediaUrl(url));
+  if (validUrls.length === 0) return results;
+
+  // Cache hit pass — scraped HTML data is stable enough to reuse for a
+  // week. Keeps repeat scans of the same city near-instant on this step.
+  const cached = await getCachedMany<ScrapedWebsiteData>('scrape', validUrls);
+  for (const [url, data] of cached) results.set(url, data);
+  const toFetch = validUrls.filter((u) => !cached.has(u));
 
   // Process all URLs in parallel batches without delays
   const chunks: string[][] = [];
-  for (let i = 0; i < validUrls.length; i += concurrency) {
-    chunks.push(validUrls.slice(i, i + concurrency));
+  for (let i = 0; i < toFetch.length; i += concurrency) {
+    chunks.push(toFetch.slice(i, i + concurrency));
   }
 
   // Process chunks in parallel (all at once for speed)
@@ -315,6 +324,9 @@ export async function scrapeWebsitesBatch(
   for (const chunkResults of allResults) {
     for (const { url, data } of chunkResults) {
       results.set(url, data);
+      // Persist for future searches. Fire-and-forget — caching never
+      // blocks the search hot path.
+      void putCached('scrape', url, data);
     }
   }
 

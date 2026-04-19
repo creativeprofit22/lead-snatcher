@@ -134,32 +134,63 @@ export async function searchBusinesses(
     .map((b) => b.website)
     .filter((w): w is string => !!w);
 
-  // Run website analysis in parallel
   let websiteAnalysisMap: Map<string, WebsiteAnalysis> = new Map();
   let scrapedDataMap: Map<string, ScrapedWebsiteData> = new Map();
 
   if (websites.length > 0) {
-    const analysisPromises: Promise<void>[] = [];
-
-    // PageSpeed analysis (slower, performance metrics)
-    if (options.enableWebsiteAnalysis) {
-      analysisPromises.push(
-        analyzeWebsitesBatch(websites, options.pageSpeedApiKey, 3).then((results) => {
-          websiteAnalysisMap = results;
-        })
-      );
-    }
-
-    // HTML scraping (faster, tech stack & features)
+    // Step A: scrape every site first. Scraping is fast (~30s for 50
+    // sites at concurrency 8) and feeds the preliminary score that
+    // decides which leads are worth running PageSpeed on.
     if (options.enableWebsiteScraping) {
-      analysisPromises.push(
-        scrapeWebsitesBatch(websites, 15).then((results) => {
-          scrapedDataMap = results;
-        })
-      );
+      // Concurrency 8 keeps WSL socket pressure manageable (15 was
+      // causing intermittent EAI_AGAIN / file-descriptor pile-ups during
+      // dense-city scans) while still finishing a 50-site batch in <30s.
+      scrapedDataMap = await scrapeWebsitesBatch(websites, 8);
     }
 
-    await Promise.all(analysisPromises);
+    // Step B: tier the PageSpeed pass. Lighthouse is the slowest part of
+    // the search (~3 min for 50 sites even with a key) and we don't care
+    // about performance metrics for a lead we'd never call. Score every
+    // business with what we have so far, then only run PageSpeed on the
+    // top 20 — cuts a 3-min worst case down to ~30s.
+    if (options.enableWebsiteAnalysis) {
+      const ranked = validBusinesses
+        .map((b) => {
+          const websiteUrl = b.website;
+          const normalized = websiteUrl?.startsWith('http')
+            ? websiteUrl
+            : websiteUrl
+              ? `https://${websiteUrl}`
+              : undefined;
+          const scraped = websiteUrl
+            ? scrapedDataMap.get(websiteUrl) ||
+              (normalized ? scrapedDataMap.get(normalized) : undefined)
+            : undefined;
+          const prelim: ExtendedBusinessData = {
+            photoCount: b.photos_sample?.length ?? 0,
+            website: b.website,
+            phone: b.phone_number,
+            rating: b.rating,
+            reviewCount: b.review_count,
+            industryType: detectIndustryType(b.types ?? []),
+            websiteAnalysis: null,
+            scrapedData: scraped ?? null,
+          };
+          return { website: b.website, score: calculateLeadScore(prelim).total };
+        })
+        .filter((x): x is { website: string; score: number } => !!x.website)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 20)
+        .map((x) => x.website);
+
+      if (ranked.length > 0) {
+        websiteAnalysisMap = await analyzeWebsitesBatch(
+          ranked,
+          options.pageSpeedApiKey,
+          3
+        );
+      }
+    }
   }
 
   // --- Enrichment pass 2: discover missing socials ------------------
