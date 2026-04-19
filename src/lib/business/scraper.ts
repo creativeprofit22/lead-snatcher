@@ -72,6 +72,23 @@ export interface ScrapedWebsiteData {
   };
   hasMarketingBudget: boolean; // true if ANY ad platform detected
 
+  // Deep HTML quality signals — Layer 5 inputs. Every field is a
+  // concrete, non-subjective thing we can put in a sales email.
+  qualitySignals: {
+    hasTableLayout: boolean;
+    wordCount: number;
+    hasAnyForm: boolean;
+    hasSchemaOrg: boolean;
+    hasOpenGraph: boolean;
+    hasDeprecatedTags: boolean;
+    deprecatedTagsFound: string[];
+    hasFixedPixelWidth: boolean;
+    hasLangAttribute: boolean;
+    jqueryVersion: string | null;
+    isOldJquery: boolean;
+    templateFingerprint: string | null;
+  };
+
   // Errors
   error?: string;
   scrapedAt: string;
@@ -218,6 +235,20 @@ export async function scrapeWebsite(websiteUrl: string): Promise<ScrapedWebsiteD
       detectedPlatforms: [],
     },
     hasMarketingBudget: false,
+    qualitySignals: {
+      hasTableLayout: false,
+      wordCount: 0,
+      hasAnyForm: false,
+      hasSchemaOrg: false,
+      hasOpenGraph: false,
+      hasDeprecatedTags: false,
+      deprecatedTagsFound: [],
+      hasFixedPixelWidth: false,
+      hasLangAttribute: false,
+      jqueryVersion: null,
+      isOldJquery: false,
+      templateFingerprint: null,
+    },
     scrapedAt: new Date().toISOString(),
   };
 
@@ -269,6 +300,7 @@ export async function scrapeWebsite(websiteUrl: string): Promise<ScrapedWebsiteD
     detectDesignQuality(html, result);
     estimateWebsiteAge(html, result);
     detectMarketingSignals(html, result);
+    detectQualitySignals(html, result);
 
     return result;
   } catch (error) {
@@ -579,4 +611,90 @@ function detectMarketingSignals(html: string, result: ScrapedWebsiteData): void 
     signals.hasFacebookAds ||
     signals.hasBingAds ||
     signals.hasOtherAds;
+}
+
+// Template fingerprints — pointed at the specific builder so the chip
+// on the card reads "Wix template" instead of a generic "low-quality site".
+const TEMPLATE_FINGERPRINTS: Array<{ label: string; patterns: RegExp[] }> = [
+  { label: 'Wix', patterns: [/wix\.com/i, /wixstatic/i, /_wixCIDX/i] },
+  { label: 'GoDaddy Sites', patterns: [/godaddysites\.com/i, /img1\.wsimg\.com/i] },
+  { label: 'Weebly', patterns: [/weebly\.com/i, /editmysite/i] },
+  { label: 'Google Business Site', patterns: [/business\.site/i, /sites\.google\.com/i] },
+  { label: 'Jimdo', patterns: [/jimdo(site)?\.com/i, /jimstatic/i] },
+];
+
+// Deprecated / layout-table / hard-coded-style tags. Presence on a
+// modern production site is a strong "template last touched in 2012"
+// tell — exactly the kind of defensible pitch point the user asked for.
+const DEPRECATED_TAG_PATTERNS: Array<{ label: string; pattern: RegExp }> = [
+  { label: '<marquee>', pattern: /<marquee\b/i },
+  { label: '<center>', pattern: /<center\b/i },
+  { label: '<font>', pattern: /<font\b/i },
+  { label: 'bgcolor=', pattern: /\sbgcolor\s*=/i },
+];
+
+function detectQualitySignals(html: string, result: ScrapedWebsiteData): void {
+  const q = result.qualitySignals;
+
+  // Table-based layout — <table> with a role other than "presentation"
+  // is common, but *nested* tables / tables wrapping the <body> are the
+  // smoking gun. Heuristic: the page has 2+ <table> tags and no modern
+  // layout CSS (display:flex/grid) detected.
+  const tableOpens = (html.match(/<table\b/gi) || []).length;
+  const hasFlexOrGrid = /display\s*:\s*(flex|grid)/i.test(html) || /\bclass\s*=\s*"[^"]*(flex|grid)\b/i.test(html);
+  q.hasTableLayout = tableOpens >= 2 && !hasFlexOrGrid;
+
+  // Word count of visible body text — strip script/style then tags.
+  const stripped = html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<noscript\b[^>]*>[\s\S]*?<\/noscript>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&[a-z#0-9]+;/gi, ' ');
+  const words = stripped.split(/\s+/).filter((w) => w.length > 1);
+  q.wordCount = words.length;
+
+  // Any <form> anywhere on the page
+  q.hasAnyForm = /<form\b/i.test(html);
+
+  // schema.org JSON-LD structured data
+  q.hasSchemaOrg =
+    /<script[^>]+type=["']application\/ld\+json["']/i.test(html) ||
+    /schema\.org/i.test(html);
+
+  // Open Graph tags
+  q.hasOpenGraph = /<meta[^>]+property=["']og:/i.test(html);
+
+  // Deprecated tags
+  const foundDeprecated: string[] = [];
+  for (const { label, pattern } of DEPRECATED_TAG_PATTERNS) {
+    if (pattern.test(html)) foundDeprecated.push(label);
+  }
+  // Inline style with fixed pixel widths on layout blocks
+  const fixedWidthMatches = html.match(/(width\s*=\s*["']?\d{3,4}["']?|width\s*:\s*\d{3,4}\s*px)/gi) || [];
+  q.hasFixedPixelWidth = fixedWidthMatches.length >= 3;
+  q.deprecatedTagsFound = foundDeprecated;
+  q.hasDeprecatedTags = foundDeprecated.length > 0;
+
+  // <html lang="...">
+  q.hasLangAttribute = /<html[^>]+\blang\s*=/i.test(html);
+
+  // jQuery version — grab the first version-looking string near a jquery reference.
+  const jqMatch =
+    html.match(/jquery[-/.](\d+)\.(\d+)(?:\.(\d+))?/i) ||
+    html.match(/jquery@(\d+)\.(\d+)(?:\.(\d+))?/i);
+  if (jqMatch) {
+    const major = parseInt(jqMatch[1], 10);
+    const minor = parseInt(jqMatch[2], 10);
+    q.jqueryVersion = `${jqMatch[1]}.${jqMatch[2]}${jqMatch[3] ? `.${jqMatch[3]}` : ''}`;
+    q.isOldJquery = major < 2 || (major === 2 && minor === 0);
+  }
+
+  // Template fingerprint — first match wins
+  for (const { label, patterns } of TEMPLATE_FINGERPRINTS) {
+    if (patterns.some((p) => p.test(html))) {
+      q.templateFingerprint = label;
+      break;
+    }
+  }
 }

@@ -44,6 +44,27 @@ export interface ScoreBreakdown {
   noSocialLinks: number; // +5 if no social media links on site
   basicTechStack: number; // +7 if using old/basic tech (plain HTML, old WordPress)
 
+  // Layer 5: Website Quality (HTML + PageSpeed deep signals)
+  noViewport: number; // +10 no <meta viewport>
+  tableLayout: number; // +8 table-based layout
+  thinContent: number; // +6 body word count <150
+  deprecatedTags: number; // +6 <marquee>/<center>/<font>/bgcolor/inline HTML styling
+  templateFingerprint: number; // +7 wix/godaddysites/weebly/business.site/jimdo
+  noForm: number; // +5 no <form> anywhere
+  fixedPixelWidth: number; // +4 fixed pixel widths on layout
+  outdatedJquery: number; // +4 jQuery <2
+  noSchemaOrg: number; // +4 no JSON-LD structured data
+  noOpenGraph: number; // +3 no og: tags
+  noLangAttribute: number; // +2 <html> missing lang
+  lowAccessibility: number; // +6 Lighthouse accessibility <70
+  lowSeo: number; // +6 Lighthouse SEO <70
+  lowBestPractices: number; // +4 Lighthouse best-practices <80
+  slowLcp: number; // +5 LCP > 4s
+  highCls: number; // +3 CLS > 0.25
+
+  // Human-readable chips for the top triggered Layer 5 signals
+  qualityChips: string[];
+
   // Marketing Intelligence (not scored - informational)
   hasMarketingBudget: boolean; // true if business runs paid ads
   marketingPlatforms: string[]; // detected platforms list
@@ -60,6 +81,13 @@ export interface WebsiteAnalysis {
   url: string;
   isHttps: boolean;
   performanceScore: number; // 0-100
+  accessibilityScore?: number; // 0-100
+  seoScore?: number; // 0-100
+  bestPracticesScore?: number; // 0-100
+  /** Largest Contentful Paint, milliseconds */
+  largestContentfulPaint?: number;
+  /** Cumulative Layout Shift, unitless */
+  cumulativeLayoutShift?: number;
   isMobileFriendly: boolean;
   responseTime: number; // ms
   hasErrors: boolean;
@@ -108,6 +136,21 @@ export interface ScrapedWebsiteData {
     detectedPlatforms: string[];
   };
   hasMarketingBudget: boolean;
+  // Deep HTML quality signals (Layer 5 inputs)
+  qualitySignals?: {
+    hasTableLayout: boolean;
+    wordCount: number;
+    hasAnyForm: boolean;
+    hasSchemaOrg: boolean;
+    hasOpenGraph: boolean;
+    hasDeprecatedTags: boolean;
+    deprecatedTagsFound: string[];
+    hasFixedPixelWidth: boolean;
+    hasLangAttribute: boolean;
+    jqueryVersion: string | null;
+    isOldJquery: boolean;
+    templateFingerprint: string | null; // 'Wix' | 'GoDaddy Sites' | 'Weebly' | 'Google Business Site' | 'Jimdo' | null
+  };
   error?: string;
   scrapedAt: string;
 }

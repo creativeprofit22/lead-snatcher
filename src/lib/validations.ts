@@ -45,12 +45,33 @@ export const businessSearchSchema = z.object({
   country: z.string().min(2).max(5).default('au'),
   limit: z.number().int().min(1).max(50).default(20),
   deepAnalysis: z.boolean().default(false),
-  enableEnrichment: z.boolean().default(false),
   // Optional zone-targeted rescan: skip city geocoding and aim the Maps
   // search + area score at these exact coords instead.
   searchLat: z.number().min(-90).max(90).optional(),
   searchLng: z.number().min(-180).max(180).optional(),
   zoneLabel: z.string().max(200).optional(),
+});
+
+// POST /api/business/enrich
+export const businessEnrichSchema = z.object({
+  // Businesses to enrich. Each item carries its own name/city/country
+  // because enrichment searches the open web — we don't want to fetch
+  // from the DB search row (which might be from a different search).
+  leads: z
+    .array(
+      z.object({
+        businessId: z.string().min(1, 'businessId is required'),
+        name: z.string().min(1).max(500),
+        // Whether each target actually needs to run. Client-computed
+        // from previewEnrichment to avoid redundant calls.
+        needsWebsite: z.boolean(),
+        needsSocials: z.boolean(),
+      })
+    )
+    .min(1, 'At least one lead is required')
+    .max(50, 'Max 50 leads per request'),
+  city: z.string().min(1).max(200),
+  country: z.string().min(2).max(5).default('au'),
 });
 
 // POST /api/leads

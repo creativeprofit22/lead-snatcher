@@ -7,11 +7,16 @@ interface PageSpeedResponse {
   lighthouseResult?: {
     categories?: {
       performance?: { score?: number };
+      accessibility?: { score?: number };
+      seo?: { score?: number };
+      'best-practices'?: { score?: number };
     };
     audits?: {
       'server-response-time'?: { numericValue?: number };
       'is-on-https'?: { score?: number };
       viewport?: { score?: number };
+      'largest-contentful-paint'?: { numericValue?: number };
+      'cumulative-layout-shift'?: { numericValue?: number };
     };
   };
   loadingExperience?: {
@@ -38,12 +43,16 @@ export async function analyzeWebsite(
       url = `https://${url}`;
     }
 
-    // Build API URL
+    // Build API URL — one request, all four Lighthouse categories.
+    // Google returns everything in the same payload, so we pay one RTT
+    // for four scores instead of four.
     const params = new URLSearchParams({
       url,
       strategy: 'mobile', // Mobile-first analysis
-      category: 'performance',
     });
+    for (const category of ['performance', 'accessibility', 'seo', 'best-practices']) {
+      params.append('category', category);
+    }
 
     if (apiKey) {
       params.append('key', apiKey);
@@ -80,7 +89,14 @@ export async function analyzeWebsite(
       }
       const lighthouse = raw.lighthouseResult;
       if (!lighthouse) return null;
+      const toScore = (raw01: number | undefined) =>
+        raw01 === undefined ? undefined : Math.round(raw01 * 100);
       const performanceScore = Math.round((lighthouse.categories?.performance?.score || 0) * 100);
+      const accessibilityScore = toScore(lighthouse.categories?.accessibility?.score);
+      const seoScore = toScore(lighthouse.categories?.seo?.score);
+      const bestPracticesScore = toScore(lighthouse.categories?.['best-practices']?.score);
+      const largestContentfulPaint = lighthouse.audits?.['largest-contentful-paint']?.numericValue;
+      const cumulativeLayoutShift = lighthouse.audits?.['cumulative-layout-shift']?.numericValue;
       const responseTime = Math.round(
         lighthouse.audits?.['server-response-time']?.numericValue || 0
       );
@@ -90,6 +106,15 @@ export async function analyzeWebsite(
         url,
         isHttps,
         performanceScore,
+        accessibilityScore,
+        seoScore,
+        bestPracticesScore,
+        largestContentfulPaint:
+          largestContentfulPaint === undefined ? undefined : Math.round(largestContentfulPaint),
+        cumulativeLayoutShift:
+          cumulativeLayoutShift === undefined
+            ? undefined
+            : Math.round(cumulativeLayoutShift * 1000) / 1000,
         isMobileFriendly: hasViewport && performanceScore >= 50,
         responseTime,
         hasErrors: false,

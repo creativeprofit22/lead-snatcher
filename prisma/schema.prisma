@@ -45,6 +45,19 @@ model UrlAnalysisCache {
   @@index([expiresAt])
 }
 
+// Per-business enrichment cache (website + socials discovered via
+// letscrape). Keyed by businessId (Google Maps place_id) so the same
+// dentist in two searches doesn't re-spend RapidAPI quota.
+model BusinessEnrichmentCache {
+  id         String   @id @default(cuid())
+  businessId String   @unique // Google Maps place_id
+  payload    String // JSON: { website?: string; socials?: DiscoveredSocials }
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+
+  @@index([expiresAt])
+}
+
 // API Keys - stores encrypted API keys for different services per user
 model ApiKey {
   id        String   @id @default(cuid())

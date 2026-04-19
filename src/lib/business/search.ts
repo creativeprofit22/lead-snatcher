@@ -3,12 +3,6 @@ import { calculateLeadScore } from './scoring';
 import { generateOpportunities, detectIndustryType } from './opportunities';
 import { analyzeWebsitesBatch } from './pagespeed';
 import { scrapeWebsitesBatch, type ScrapedWebsiteData } from './scraper';
-import {
-  discoverWebsite,
-  discoverSocials,
-  runBatch,
-  type DiscoveredSocials,
-} from './enrichment';
 import type { BusinessSearchResult, WebsiteAnalysis, ExtendedBusinessData } from '@/types';
 
 const MAPS_API_HOST = 'maps-data.p.rapidapi.com';
@@ -70,9 +64,8 @@ function parsePriceLevel(
 export interface SearchOptions {
   enableWebsiteAnalysis?: boolean; // PageSpeed API (slower, more accurate)
   enableWebsiteScraping?: boolean; // HTML scraping (faster, more data)
-  enableEnrichment?: boolean; // Web search + social lookup fallback for missing data
   pageSpeedApiKey?: string;
-  /** City name — used as disambiguator for enrichment queries. */
+  /** City name — kept for future use (currently unused after enrichment moved off-sweep). */
   city?: string;
 }
 
@@ -110,26 +103,9 @@ export async function searchBusinesses(
     (business) => business.name && business.business_id
   );
 
-  // --- Enrichment pass 1: discover missing websites -----------------
-  // When enabled, businesses that Google Maps has no website for get
-  // queried against letscrape's real-time web search. A plausible match
-  // is attached to `business.website` so the rest of the pipeline
-  // (scoring, scraping, display) treats them as if Maps had returned it.
-  if (options.enableEnrichment && options.city) {
-    const noWebsiteCandidates = validBusinesses.filter((b) => !b.website && b.name);
-    if (noWebsiteCandidates.length > 0) {
-      const discovered = await runBatch(
-        noWebsiteCandidates,
-        (b) => discoverWebsite(userId, b.name!, options.city!),
-        5
-      );
-      noWebsiteCandidates.forEach((b, i) => {
-        if (discovered[i]) b.website = discovered[i] ?? undefined;
-      });
-    }
-  }
-
-  // Collect websites for analysis (now includes any enrichment-discovered ones)
+  // Collect websites for analysis. Enrichment used to inject discovered
+  // websites here; that's been moved to POST /api/business/enrich (user-
+  // triggered, per-card) to keep the sweep fast and quota-cheap.
   const websites = validBusinesses
     .map((b) => b.website)
     .filter((w): w is string => !!w);
@@ -193,38 +169,9 @@ export async function searchBusinesses(
     }
   }
 
-  // --- Enrichment pass 2: discover missing socials ------------------
-  // For any business whose scraping yielded zero socials (or that has
-  // no website to scrape at all), fall back to letscrape's social
-  // links search. The discovered map is keyed by business_id so the
-  // transform step can merge cleanly.
-  const enrichedSocialsMap = new Map<string, DiscoveredSocials>();
-  if (options.enableEnrichment && options.city) {
-    const socialCandidates = validBusinesses.filter((b) => {
-      if (!b.business_id || !b.name) return false;
-      const url = b.website;
-      const normalized = url?.startsWith('http') ? url : url ? `https://${url}` : undefined;
-      const scraped = url
-        ? scrapedDataMap.get(url) || (normalized ? scrapedDataMap.get(normalized) : undefined)
-        : undefined;
-      return !scraped || scraped.socialCount === 0;
-    });
-    if (socialCandidates.length > 0) {
-      const socials = await runBatch(
-        socialCandidates,
-        (b) => discoverSocials(userId, b.name!, options.city!),
-        5
-      );
-      socialCandidates.forEach((b, i) => {
-        const result = socials[i];
-        if (result && Object.keys(result).length > 0) {
-          enrichedSocialsMap.set(b.business_id!, result);
-        }
-      });
-    }
-  }
-
-  // Transform and score results with all data
+  // Transform and score results with all data. Socials come from the
+  // scraper only at sweep time; post-sweep user-triggered enrichment
+  // merges additional sources in the /api/business/enrich endpoint.
   const results: BusinessSearchResult[] = validBusinesses.map((business) => {
     const websiteUrl = business.website;
     const normalizedUrl = websiteUrl?.startsWith('http') ? websiteUrl : `https://${websiteUrl}`;
@@ -237,11 +184,7 @@ export async function searchBusinesses(
       ? scrapedDataMap.get(websiteUrl) || scrapedDataMap.get(normalizedUrl)
       : undefined;
 
-    const enrichedSocials = business.business_id
-      ? enrichedSocialsMap.get(business.business_id)
-      : undefined;
-
-    return transformBusinessResult(business, websiteAnalysis, scrapedData, enrichedSocials);
+    return transformBusinessResult(business, websiteAnalysis, scrapedData);
   });
 
   // Sort by lead score (highest first), then by contact points (more = better lead)
@@ -256,8 +199,7 @@ export async function searchBusinesses(
 function transformBusinessResult(
   business: MapsBusinessResult,
   websiteAnalysis?: WebsiteAnalysis,
-  scrapedData?: ScrapedWebsiteData,
-  enrichedSocials?: DiscoveredSocials
+  scrapedData?: ScrapedWebsiteData
 ): BusinessSearchResult {
   const types = business.types || [];
   const industryType = detectIndustryType(types);
@@ -306,11 +248,10 @@ function transformBusinessResult(
     ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapsQuery)}`
     : null;
 
-  // Extract email and social links from scraped data, then fill any
-  // gaps from enrichment. Scraper data is authoritative when present.
+  // Extract email and social links from scraped data. Any gaps get
+  // filled post-sweep when the user hits Enrich on a card.
   const email = scrapedData?.emails?.[0] || undefined;
   const socialLinks: BusinessSearchResult['socialLinks'] = {
-    ...(enrichedSocials ?? {}),
     ...(scrapedData?.socialLinks ?? {}),
   };
   const socialCount = Object.values(socialLinks).filter(Boolean).length;

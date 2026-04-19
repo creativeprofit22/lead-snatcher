@@ -233,6 +233,31 @@ export function LeadScoreBadge({
             </div>
           </div>
 
+          {/* Layer 5: Website Quality — deterministic HTML + PageSpeed signals */}
+          <div className="mb-2">
+            <div className="text-gray-500 text-[10px] uppercase tracking-wide mb-1">
+              Website Quality
+            </div>
+            <div className="space-y-0.5">
+              <ScoreRow label="No mobile viewport" value={breakdown.noViewport} />
+              <ScoreRow label="Table-based layout" value={breakdown.tableLayout} />
+              <ScoreRow label="Thin content (<150 words)" value={breakdown.thinContent} />
+              <ScoreRow label="Deprecated HTML tags" value={breakdown.deprecatedTags} />
+              <ScoreRow label="Template fingerprint" value={breakdown.templateFingerprint} />
+              <ScoreRow label="No contact form" value={breakdown.noForm} />
+              <ScoreRow label="Fixed pixel widths" value={breakdown.fixedPixelWidth} />
+              <ScoreRow label="Outdated jQuery" value={breakdown.outdatedJquery} />
+              <ScoreRow label="No schema.org" value={breakdown.noSchemaOrg} />
+              <ScoreRow label="No Open Graph" value={breakdown.noOpenGraph} />
+              <ScoreRow label="No <html lang>" value={breakdown.noLangAttribute} />
+              <ScoreRow label="Accessibility <70" value={breakdown.lowAccessibility} />
+              <ScoreRow label="SEO <70" value={breakdown.lowSeo} />
+              <ScoreRow label="Best practices <80" value={breakdown.lowBestPractices} />
+              <ScoreRow label="LCP >4s" value={breakdown.slowLcp} />
+              <ScoreRow label="High CLS (>0.25)" value={breakdown.highCls} />
+            </div>
+          </div>
+
           {/* Marketing Intelligence */}
           <div className="mb-2">
             <div className="text-gray-500 text-[10px] uppercase tracking-wide mb-1">

@@ -51,6 +51,24 @@ export function calculateLeadScore(business: ExtendedBusinessData): ScoreBreakdo
     noOnlineBooking: 0,
     noSocialLinks: 0,
     basicTechStack: 0,
+    // Layer 5 — concrete, defensible website-quality signals
+    noViewport: 0,
+    tableLayout: 0,
+    thinContent: 0,
+    deprecatedTags: 0,
+    templateFingerprint: 0,
+    noForm: 0,
+    fixedPixelWidth: 0,
+    outdatedJquery: 0,
+    noSchemaOrg: 0,
+    noOpenGraph: 0,
+    noLangAttribute: 0,
+    lowAccessibility: 0,
+    lowSeo: 0,
+    lowBestPractices: 0,
+    slowLcp: 0,
+    highCls: 0,
+    qualityChips: [],
     hasMarketingBudget: false,
     marketingPlatforms: [],
     revenueSignal: 'low',
@@ -172,6 +190,117 @@ export function calculateLeadScore(business: ExtendedBusinessData): ScoreBreakdo
     }
   }
 
+  // === LAYER 5: Website Quality (HTML + PageSpeed deep signals) ===
+  // Only apply if business HAS a real, reachable website so we have
+  // actual signals to score on. Every trigger is a concrete fact we
+  // can put in a sales email — "no mobile viewport", "Wix template",
+  // "accessibility 42".
+  const qualityChipCandidates: Array<{ label: string; pts: number }> = [];
+
+  if (hasRealWebsite && business.scrapedData && business.scrapedData.isReachable) {
+    const scraped = business.scrapedData;
+    const q = scraped.qualitySignals;
+
+    if (!scraped.hasMobileViewport) {
+      breakdown.noViewport = 10;
+      qualityChipCandidates.push({ label: 'No mobile viewport', pts: 10 });
+    }
+
+    if (q) {
+      if (q.hasTableLayout) {
+        breakdown.tableLayout = 8;
+        qualityChipCandidates.push({ label: 'Table-based layout', pts: 8 });
+      }
+      if (q.wordCount > 0 && q.wordCount < 150) {
+        breakdown.thinContent = 6;
+        qualityChipCandidates.push({ label: `Only ${q.wordCount} words`, pts: 6 });
+      }
+      if (q.hasDeprecatedTags) {
+        breakdown.deprecatedTags = 6;
+        const tag = q.deprecatedTagsFound[0] || 'deprecated tags';
+        qualityChipCandidates.push({ label: `Uses ${tag}`, pts: 6 });
+      }
+      if (q.templateFingerprint) {
+        breakdown.templateFingerprint = 7;
+        qualityChipCandidates.push({
+          label: `${q.templateFingerprint} template`,
+          pts: 7,
+        });
+      }
+      if (!q.hasAnyForm) {
+        breakdown.noForm = 5;
+        qualityChipCandidates.push({ label: 'No contact form', pts: 5 });
+      }
+      if (q.hasFixedPixelWidth) {
+        breakdown.fixedPixelWidth = 4;
+        qualityChipCandidates.push({ label: 'Fixed pixel widths', pts: 4 });
+      }
+      if (q.isOldJquery) {
+        breakdown.outdatedJquery = 4;
+        qualityChipCandidates.push({
+          label: `jQuery ${q.jqueryVersion}`,
+          pts: 4,
+        });
+      }
+      if (!q.hasSchemaOrg) {
+        breakdown.noSchemaOrg = 4;
+        qualityChipCandidates.push({ label: 'No schema.org data', pts: 4 });
+      }
+      if (!q.hasOpenGraph) {
+        breakdown.noOpenGraph = 3;
+        qualityChipCandidates.push({ label: 'No Open Graph tags', pts: 3 });
+      }
+      if (!q.hasLangAttribute) {
+        breakdown.noLangAttribute = 2;
+        qualityChipCandidates.push({ label: 'Missing <html lang>', pts: 2 });
+      }
+    }
+  }
+
+  // PageSpeed-based signals — apply whenever we have analysis for a real site.
+  if (hasRealWebsite && business.websiteAnalysis && !business.websiteAnalysis.hasErrors) {
+    const a = business.websiteAnalysis;
+    if (typeof a.accessibilityScore === 'number' && a.accessibilityScore < 70) {
+      breakdown.lowAccessibility = 6;
+      qualityChipCandidates.push({
+        label: `Accessibility ${a.accessibilityScore}`,
+        pts: 6,
+      });
+    }
+    if (typeof a.seoScore === 'number' && a.seoScore < 70) {
+      breakdown.lowSeo = 6;
+      qualityChipCandidates.push({ label: `SEO ${a.seoScore}`, pts: 6 });
+    }
+    if (typeof a.bestPracticesScore === 'number' && a.bestPracticesScore < 80) {
+      breakdown.lowBestPractices = 4;
+      qualityChipCandidates.push({
+        label: `Best practices ${a.bestPracticesScore}`,
+        pts: 4,
+      });
+    }
+    if (typeof a.largestContentfulPaint === 'number' && a.largestContentfulPaint > 4000) {
+      breakdown.slowLcp = 5;
+      qualityChipCandidates.push({
+        label: `LCP ${(a.largestContentfulPaint / 1000).toFixed(1)}s`,
+        pts: 5,
+      });
+    }
+    if (typeof a.cumulativeLayoutShift === 'number' && a.cumulativeLayoutShift > 0.25) {
+      breakdown.highCls = 3;
+      qualityChipCandidates.push({
+        label: `CLS ${a.cumulativeLayoutShift.toFixed(2)}`,
+        pts: 3,
+      });
+    }
+  }
+
+  // Top 3 triggered signals, most valuable first — these are what the
+  // card renders as chips and what the sales email quotes.
+  breakdown.qualityChips = qualityChipCandidates
+    .sort((a, b) => b.pts - a.pts)
+    .slice(0, 3)
+    .map((c) => c.label);
+
   // === MARKETING INTELLIGENCE (informational, not scored) ===
   if (business.scrapedData && 'hasMarketingBudget' in business.scrapedData) {
     breakdown.hasMarketingBudget = business.scrapedData.hasMarketingBudget;
@@ -207,7 +336,23 @@ export function calculateLeadScore(business: ExtendedBusinessData): ScoreBreakdo
     breakdown.outdatedWebsite +
     breakdown.noOnlineBooking +
     breakdown.noSocialLinks +
-    breakdown.basicTechStack;
+    breakdown.basicTechStack +
+    breakdown.noViewport +
+    breakdown.tableLayout +
+    breakdown.thinContent +
+    breakdown.deprecatedTags +
+    breakdown.templateFingerprint +
+    breakdown.noForm +
+    breakdown.fixedPixelWidth +
+    breakdown.outdatedJquery +
+    breakdown.noSchemaOrg +
+    breakdown.noOpenGraph +
+    breakdown.noLangAttribute +
+    breakdown.lowAccessibility +
+    breakdown.lowSeo +
+    breakdown.lowBestPractices +
+    breakdown.slowLcp +
+    breakdown.highCls;
 
   return breakdown;
 }

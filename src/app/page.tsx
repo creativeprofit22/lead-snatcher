@@ -41,6 +41,13 @@ import {
   SaveLeadModal,
   FootTrafficSlot,
 } from '@/components/leads';
+import { EnrichButton } from '@/components/leads/EnrichButton';
+import { BatchEnrichBar } from '@/components/leads/BatchEnrichBar';
+import {
+  EnrichmentExplainer,
+  shouldShowExplainer,
+} from '@/components/leads/EnrichmentExplainer';
+import { useEnrichmentStream } from '@/lib/hooks/useEnrichmentStream';
 import { SettingsModal } from '@/components/settings';
 import { UserMenu } from '@/components/auth';
 import { saveLastSearch, getLastSearch } from '@/lib/search-cache';
@@ -85,7 +92,6 @@ function HomeInner() {
   const [searchResults, setSearchResults] = useState<BusinessSearchResult[]>([]);
   const [radarPhase, setRadarPhase] = useState<RadarPhase>('off');
   const [deepAnalysis, setDeepAnalysis] = useState(false);
-  const [enableEnrichment, setEnableEnrichment] = useState(false);
   const [marketDensity, setMarketDensity] = useState<{
     count: number;
     level: string;
@@ -165,6 +171,39 @@ function HomeInner() {
     Record<string, string>
   >({});
 
+  // Enrichment state (user-triggered, per-card). The hook owns the
+  // NDJSON stream + status/result maps; this component owns selection
+  // + the first-time explainer gate.
+  const {
+    statusMap: enrichStatusMap,
+    resultMap: enrichResultMap,
+    enrichLeads,
+    clearStatus: clearEnrichStatus,
+  } = useEnrichmentStream();
+  const [selectedForEnrich, setSelectedForEnrich] = useState<Set<string>>(
+    new Set()
+  );
+  const [explainerOpen, setExplainerOpen] = useState(false);
+  const [pendingEnrichAction, setPendingEnrichAction] = useState<
+    (() => void) | null
+  >(null);
+
+  // Auto-clear the 'enriched' success state 3s after completion so the
+  // button flips back to idle and the found-data diff banner fades.
+  useEffect(() => {
+    const timers: number[] = [];
+    for (const [id, status] of Object.entries(enrichStatusMap)) {
+      if (status === 'enriched') {
+        timers.push(
+          window.setTimeout(() => clearEnrichStatus(id), 3000)
+        );
+      }
+    }
+    return () => {
+      timers.forEach((t) => window.clearTimeout(t));
+    };
+  }, [enrichStatusMap, clearEnrichStatus]);
+
   // Saving leads
   const [savingLeadIds, setSavingLeadIds] = useState<Set<string>>(new Set());
   const [savedLeadModal, setSavedLeadModal] = useState<{ isOpen: boolean; businessName: string }>({
@@ -195,7 +234,6 @@ function HomeInner() {
           country,
           limit: 50,
           deepAnalysis,
-          enableEnrichment,
         }),
         signal: abortController.signal,
       });
@@ -369,8 +407,60 @@ function HomeInner() {
     return computeFitScore(b.leadScore, newPoints);
   };
 
+  // Merge any post-sweep enrichment results (website + socials) into
+  // each lead so rendering, filtering, and sorting all see the live
+  // data — not the stale pre-enrichment snapshot.
+  const enrichedResults = searchResults.map((lead) => {
+    const found = enrichResultMap[lead.placeId];
+    if (!found) return lead;
+    const mergedSocials: BusinessSearchResult['socialLinks'] = {
+      ...(lead.socialLinks ?? {}),
+      ...(found.socials ?? {}),
+    };
+    return {
+      ...lead,
+      website: lead.website ?? found.website,
+      socialLinks: mergedSocials,
+    } satisfies BusinessSearchResult;
+  });
+
+  // Fire the enrichment, gating on the first-time explainer. If the
+  // user hasn't seen it yet, we open the modal and defer `action`
+  // until they press Continue.
+  const gateEnrichment = (action: () => void) => {
+    if (shouldShowExplainer()) {
+      setPendingEnrichAction(() => action);
+      setExplainerOpen(true);
+      return true; // parent should NOT fire yet
+    }
+    return false;
+  };
+
+  const handleEnrichOne = (lead: BusinessSearchResult) => {
+    void enrichLeads([lead], city.trim(), country);
+  };
+
+  const handleBatchEnrich = () => {
+    const leads = enrichedResults.filter((l) => selectedForEnrich.has(l.placeId));
+    if (leads.length === 0) return;
+    void enrichLeads(leads, city.trim(), country).then(() => {
+      // Clear selection after the stream closes — keep selection
+      // while rows are still coming in so the bar reflects progress.
+      setSelectedForEnrich(new Set());
+    });
+  };
+
+  const toggleSelectForEnrich = (placeId: string) => {
+    setSelectedForEnrich((prev) => {
+      const next = new Set(prev);
+      if (next.has(placeId)) next.delete(placeId);
+      else next.add(placeId);
+      return next;
+    });
+  };
+
   // Filter and sort results
-  const filteredResults = searchResults
+  const filteredResults = enrichedResults
     .filter((b) => {
       if (filterHasEmail && !(b.email && isRealEmail(b.email))) return false;
       if (filterHasPhone && !b.phone) return false;
@@ -424,7 +514,6 @@ function HomeInner() {
           country,
           limit: 50,
           deepAnalysis,
-          enableEnrichment,
           searchLat: zone.latitude,
           searchLng: zone.longitude,
           zoneLabel: zone.label,
@@ -644,16 +733,30 @@ function HomeInner() {
                   {/* Main info */}
                   <div className="flex-1 min-w-0">
                     <div className="flex items-start justify-between gap-3 mb-3">
-                      <div className="min-w-0">
-                        <h3 className="lead-card-name text-lg font-semibold truncate">
-                          {business.name}
-                        </h3>
-                        {business.address && (
-                          <p className="text-sm text-gray-400 flex items-center gap-1.5 mt-1">
-                            <MapPin className="w-3.5 h-3.5 flex-shrink-0" />
-                            <span className="truncate">{business.address}</span>
-                          </p>
-                        )}
+                      <div className="flex items-start gap-2 min-w-0">
+                        <label
+                          className="flex-shrink-0 mt-1 cursor-pointer select-none"
+                          title={`Select ${business.name} for batch enrichment`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedForEnrich.has(business.placeId)}
+                            onChange={() => toggleSelectForEnrich(business.placeId)}
+                            aria-label={`Select ${business.name} for batch enrichment`}
+                            className="w-4 h-4 rounded border-gray-600 bg-transparent text-sky-500 focus:ring-sky-500 focus:ring-offset-0 cursor-pointer"
+                          />
+                        </label>
+                        <div className="min-w-0">
+                          <h3 className="lead-card-name text-lg font-semibold truncate">
+                            {business.name}
+                          </h3>
+                          {business.address && (
+                            <p className="text-sm text-gray-400 flex items-center gap-1.5 mt-1">
+                              <MapPin className="w-3.5 h-3.5 flex-shrink-0" />
+                              <span className="truncate">{business.address}</span>
+                            </p>
+                          )}
+                        </div>
                       </div>
                       <LeadScoreBadge
                         score={business.leadScore}
@@ -694,6 +797,48 @@ function HomeInner() {
                           <ExternalLink className="w-3 h-3" />
                         </a>
                       )}
+                      <EnrichButton
+                        lead={business}
+                        status={enrichStatusMap[business.placeId] ?? 'idle'}
+                        onClick={() => handleEnrichOne(business)}
+                        onRequestExplainer={() =>
+                          gateEnrichment(() => handleEnrichOne(business))
+                        }
+                      />
+                      {enrichStatusMap[business.placeId] === 'enriched' &&
+                        (() => {
+                          const found = enrichResultMap[business.placeId];
+                          if (!found) return null;
+                          const deltas: string[] = [];
+                          if (found.website) deltas.push('website');
+                          const socialKeys = Object.keys(found.socials ?? {});
+                          if (socialKeys.length > 0) {
+                            deltas.push(
+                              socialKeys.length === 1
+                                ? socialKeys[0]
+                                : `${socialKeys.length} socials`
+                            );
+                          }
+                          if (deltas.length === 0) {
+                            return (
+                              <span
+                                role="status"
+                                className="lead-chip inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-sm bg-gray-500/15 text-gray-300"
+                                title="Small businesses often run on phone + word-of-mouth — still a valid lead"
+                              >
+                                No public contact data found
+                              </span>
+                            );
+                          }
+                          return (
+                            <span
+                              role="status"
+                              className="lead-chip inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-sm bg-emerald-500/15 text-emerald-300"
+                            >
+                              + {deltas.join(', ')}
+                            </span>
+                          );
+                        })()}
                       {business.mapsUrl && (
                         <a
                           href={business.mapsUrl}
@@ -707,6 +852,22 @@ function HomeInner() {
                         </a>
                       )}
                     </div>
+
+                    {/* Website Quality chips — top triggered Layer 5 signals.
+                        Every chip is a concrete, non-subjective fact usable in a sales email. */}
+                    {business.scoreBreakdown.qualityChips.length > 0 && (
+                      <div className="flex flex-wrap gap-2 mb-3">
+                        {business.scoreBreakdown.qualityChips.map((chip) => (
+                          <span
+                            key={chip}
+                            className="lead-chip inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-sm bg-amber-500/15 text-amber-300"
+                            title="Website-quality signal — deterministic, no subjective calls"
+                          >
+                            {chip}
+                          </span>
+                        ))}
+                      </div>
+                    )}
 
                     {/* Social Media Links */}
                     {business.socialLinks && Object.keys(business.socialLinks).length > 0 && (
@@ -903,36 +1064,18 @@ function HomeInner() {
                 </div>
               </label>
 
-              {/* Deep Enrichment Toggle */}
-              <label className="flex items-center gap-3 cursor-pointer group">
-                <div className="relative">
-                  <input
-                    type="checkbox"
-                    checked={enableEnrichment}
-                    onChange={(e) => setEnableEnrichment(e.target.checked)}
-                    className="sr-only peer"
-                  />
-                  <div className="w-11 h-6 bg-gray-700 rounded-full peer peer-checked:bg-sky-600 transition-colors" />
-                  <div className="absolute left-1 top-1 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-5" />
-                </div>
-                <div className="flex flex-col">
-                  <span className="text-sm text-white group-hover:text-white/90">
-                    Deep Enrichment
-                  </span>
-                  <span className="text-xs text-gray-500">
-                    Find hidden websites + socials when Maps is missing them (burns RapidAPI quota — 100/mo free)
-                  </span>
-                </div>
-              </label>
+              {/* Enrichment is now per-card (post-sweep) — see the
+                  lightning-bolt button on each result to find missing
+                  websites + socials on demand. */}
 
               {/* Pacing notice — sets expectations so dense-city scans
                   don't feel like they're broken. Only really matters
-                  when one of the slow toggles is on. */}
-              {(deepAnalysis || enableEnrichment) && (
+                  when Deep Analysis is on. */}
+              {deepAnalysis && (
                 <p className="text-[11px] text-amber-300/70 leading-relaxed">
                   Heads-up: dense cities (London, NYC, Tokyo) with{' '}
-                  {deepAnalysis ? 'Deep Analysis' : 'Deep Enrichment'} on can take{' '}
-                  <span className="font-medium text-amber-300">2–4 minutes</span>{' '}
+                  Deep Analysis on can take{' '}
+                  <span className="font-medium text-amber-300">1–2 minutes</span>{' '}
                   to scan all 50 leads. Smaller cities finish in under a minute.
                 </p>
               )}
@@ -941,6 +1084,42 @@ function HomeInner() {
         </div>
       </div>
       <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
+
+      {/* Batch enrichment bar — floats above results when any lead is
+          checked. Truthful call count (minus cache hits) is computed
+          inside the bar. */}
+      <BatchEnrichBar
+        selectedLeads={enrichedResults.filter((l) =>
+          selectedForEnrich.has(l.placeId)
+        )}
+        cachedCount={
+          enrichedResults.filter(
+            (l) =>
+              selectedForEnrich.has(l.placeId) &&
+              enrichResultMap[l.placeId]?.cached
+          ).length
+        }
+        onEnrich={() => {
+          // Route through the explainer gate — same UX as per-card click.
+          const fire = () => handleBatchEnrich();
+          if (!gateEnrichment(fire)) fire();
+        }}
+        onClear={() => setSelectedForEnrich(new Set())}
+        isBusy={Object.values(enrichStatusMap).some((s) => s === 'enriching')}
+      />
+
+      <EnrichmentExplainer
+        isOpen={explainerOpen}
+        onClose={() => {
+          setExplainerOpen(false);
+          setPendingEnrichAction(null);
+        }}
+        onContinue={() => {
+          pendingEnrichAction?.();
+          setPendingEnrichAction(null);
+        }}
+      />
+
       <AnimatePresence>
         {radarPhase !== 'off' && (
           <RadarScan

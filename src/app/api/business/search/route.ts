@@ -102,7 +102,6 @@ export async function POST(request: NextRequest) {
       country,
       limit,
       deepAnalysis,
-      enableEnrichment,
       searchLat,
       searchLng,
       zoneLabel,
@@ -151,7 +150,6 @@ export async function POST(request: NextRequest) {
         {
           enableWebsiteScraping: true, // Always scrape for tech stack & features
           enableWebsiteAnalysis: deepAnalysis, // Optional PageSpeed analysis
-          enableEnrichment, // Optional web-search + social fallback for missing data
           pageSpeedApiKey,
           city,
         }

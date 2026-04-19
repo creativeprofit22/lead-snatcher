@@ -92,41 +92,34 @@ If changes require server restart (not hot-reloadable):
 
 ## Current Focus
 
-Search reliability + perf. Overpass + PageSpeed have been the two biggest pain points; both are now hardened, cached, and tiered. User PC restart pending — needs to test the full search loop on bare metal (WSL was OOMing during compile).
+Website-quality scoring (deterministic, no LLM) — adding a Layer 5 to the lead score that uses signals we already collect but don't score. Sweep cost stays at 1 RapidAPI call; PageSpeed payload stays at 20 URLs/search. Goal: make "shit website" a concrete, defensible sales pitch ("no mobile viewport, 87 words, Wix free template, accessibility 42").
 
-## Last Session (2026-04-18) — performance + resilience pass
-Two commits landed: `1ca1650` (Overpass + PageSpeed wiring), `d1bbb2e` (perf wins).
+Dev server: `NEXTAUTH_URL` / `AUTH_URL` now set to `http://localhost:3002`. Start with:
+`NODE_OPTIONS="--max-old-space-size=8192" PORT=3002 npm run dev`
 
-**Overpass / zone scanning** (`src/lib/business/zone-grid.ts`):
-- Mirror list re-ordered: OSM-FR + OSM-CH first (the `.de` mirrors and kumi were globally 504/timeout). All 5 stay in the pool.
-- `Promise.any` race now cancels losing siblings on first win (prevents 20s hang waiting for kumi after .de 504s in 200ms).
-- New singleflight via `inFlight` Map keyed by `country|city` — neighborhoods autocomplete + search button no longer double-fire Overpass.
-- `200 + 0 elements` now counts as failure for the race (osm.ch silently truncates dense bboxes).
-- Server-side `[timeout:N]` 7s → 20s, client cap 8s → 12s — was too tight for greater London.
-- On total failure, `synthesizeEmptyZone` returns inline instead of recursing into `buildSingleZone` (which would have made another Overpass call → 40s).
-- Empty results cached for 60s only (not 7d) so transient Overpass outages auto-recover.
+## Last Session (2026-04-19) — enrichment redesign + auth port fix
 
-**PageSpeed wiring** (multi-key Settings UI + flow):
-- `apiKeyServiceSchema` + settings route accept new `'pagespeed'` service.
-- `src/lib/business/pagespeed-key.ts`: mirrors `getRapidApiKey` (cache → DB → `PAGESPEED_API_KEY` env).
-- Search route fetches the key only when `deepAnalysis` is on, passes via `pageSpeedApiKey` option.
-- `pagespeed.ts` throws tagged `PageSpeedRateLimited` on 429; batch loop short-circuits after first 429 (no more 50-URL grind on dead quota).
-- `SettingsModal.tsx` rewritten as registry-driven (`SERVICES` array) — adding future keys is one entry.
+**Auth fix**: `.env` updated — `NEXTAUTH_URL` was `:3000`, now `:3002` (and added v5-style `AUTH_SECRET` + `AUTH_URL` aliases). Fixes the "Unexpected token '<'" client error on `/api/auth/session`.
 
-**Search performance** (`d1bbb2e`):
-- Lighthouse JSON parse scoped to a tight block in `pagespeed.ts` so the 1–5MB tree dies before return → ~80% peak heap reduction during 50-site batches.
-- Scraper concurrency 15 → 8 (eased WSL socket pressure that was contributing to OOMs).
-- **PageSpeed tiering**: scrape all sites first, score every business with scraping data only, then run PageSpeed on **top-20 by preliminary score**. Cuts the slow path from ~3min to ~30s.
-- New `UrlAnalysisCache` SQLite table + `src/lib/business/url-cache.ts` helper. Persistent 7d cache keyed by canonicalized URL for both `'pagespeed'` and `'scrape'` services. Repeat searches of the same city drop from ~30s to ~5s on the analysis pass.
-- Frontend `handleSearch` timeout 60s → 5min, with amber UI hint shown when slow toggles are on.
+**Enrichment redesign (11 tasks, all complete)** — decoupled enrichment from the sweep. RapidAPI usage dropped from ~100 calls/sweep → 1 (sweep) + ~2 per lead the user chooses to enrich. First paint ~90s → ~30s.
 
-**Frontend bug fix** (`src/components/search/NeighborhoodChips.tsx`):
-- `lastFetchedRef` cache key now only set on **non-empty** success — empty results no longer permanently lock out a city's autocomplete.
+- **Schema**: `BusinessEnrichmentCache` (keyed by `businessId`, 7d TTL) — `prisma/schema.prisma`.
+- **Helpers**: `src/lib/business/enrichment-cache.ts`, `src/lib/business/enrichment-preview.ts` (drives all user-facing copy).
+- **Endpoint**: `POST /api/business/enrich` — NDJSON stream, concurrency-capped at 5, cache-first, per-row rate limiting via new `RATE_LIMITS.enrich` bucket.
+- **Sweep**: `src/lib/business/search.ts` — deleted both enrichment passes; `enableEnrichment` option + UI toggle removed from `validations.ts`, `search/route.ts`, `page.tsx`.
+- **UI**: `EnrichButton` (per-card, dynamic tooltip from `previewEnrichment`), `BatchEnrichBar` (floating, live call-count minus cache hits), `EnrichmentExplainer` (first-time modal, `localStorage`-gated), `useEnrichmentStream` hook (NDJSON reader + status/result maps).
+- **Card wiring** (`src/app/page.tsx`): checkbox per card, enrich button in chips row, 3s success chip (`+ website, + Instagram`) or honest `No public contact data found`, `enrichedResults` merges live website + socials into filter/sort pipeline.
+- **Scoring preserved**: `calculateLeadScore`, `estimateBudget`, `computeFitScore`, `generateOpportunities` all untouched — leads without Maps websites now score higher (correctly — "+45 pts no website").
 
-**Stopped at**: User's WSL dev server died mid-compile (silent OOM, no logs). Recommended fix is `NODE_OPTIONS="--max-old-space-size=8192" PORT=3001 npm run dev` (or drop `--turbopack`). User opted to restart PC and resume in fresh session.
+**Stopped at**: User approved the Layer 5 website-quality scoring spec (deterministic, zero extra API calls). Ready to implement.
 
 ## Next Steps (resume here)
-1. Start dev server with bumped heap: `cd /mnt/e/Projects/aloo && NODE_OPTIONS="--max-old-space-size=8192" PORT=3001 npm run dev`
-2. Test London search **twice** — first run validates #5 (top-20 tiering, target ~30s), second validates #2 (URL cache, target ~5s). Settings → ensure RapidAPI key is set; PageSpeed key optional but recommended (https://console.cloud.google.com/apis/credentials → API key → restrict to PageSpeed Insights API).
-3. If perf is still rough, the deferred #4 (streaming results) is queued — needs UX rework of `RadarScan` to handle progressive reveal. Skip if 30s/5s feels acceptable.
-4. Pre-existing issues unrelated to this session: `useSearchParams()` Suspense boundary in `page.tsx` (blocks prod build, not dev); old visual-overhaul beats from 2026-04-16 still need user eyeball.
+
+1. **Extend scraper** (`src/lib/business/scraper.ts`) to detect: missing `<meta viewport>`, table-based layout, word count <150, no `<form>`, no schema.org JSON-LD, no Open Graph, deprecated tags (`<marquee>`, `<center>`, `<font>`, inline `bgcolor`), fixed pixel widths, missing `<html lang>`, jQuery <2, template fingerprints (`wix.com`, `godaddysites.com`, `weebly.com`, `business.site`, `jimdo.com`).
+2. **Expand PageSpeed** (`src/lib/business/pagespeed.ts`) — currently requests `category=performance` only. Change to request all four categories and surface Accessibility, SEO, Best Practices scores + LCP + CLS in `WebsiteAnalysis`. Single API call still.
+3. **Add Layer 5 to `calculateLeadScore`** (`src/lib/business/scoring.ts`) with point table:
+   - No viewport +10, table layout +8, word count <150 +6, deprecated tags +6, template fingerprint +7, no form +5, fixed px width +4, jQuery <2 +4, no schema +4, no OG +3, no lang +2
+   - PageSpeed: accessibility <70 +6, SEO <70 +6, best-practices <80 +4, LCP >4s +5, CLS >0.25 +3
+4. **Surface top 2-3 triggered quality signals** on each card as chips ("No mobile viewport", "Wix template", "Accessibility 42"). Same style as existing lead-chip.
+5. **Test**: London sweep, verify a Wix / GoDaddy site ranks higher and shows the concrete chips.
+6. **Pre-existing issue**: `useSearchParams()` Suspense boundary in `page.tsx` blocks prod build (dev works fine).

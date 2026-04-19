@@ -99,4 +99,8 @@ export const RATE_LIMITS = {
   auth: { maxRequests: 5, windowMs: 60000 }, // 5 per minute
   // Search operations
   search: { maxRequests: 10, windowMs: 60000 }, // 10 per minute
+  // Enrichment (per-lead RapidAPI lookups). Generous because the user
+  // explicitly opts in per card; each invocation is at most 2 calls.
+  // Cap protects against accidental batch-select-all + fire.
+  enrich: { maxRequests: 120, windowMs: 60000 }, // 120 calls/min (~60 leads)
 } as const;
