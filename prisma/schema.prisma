@@ -19,11 +19,12 @@ model User {
   updatedAt   DateTime  @updatedAt
 
   // User's data
-  apiKeys          ApiKey[]
-  businessSearches BusinessSearch[]
-  leads            Lead[]
-  tags             Tag[]
-  tasks            Task[]
+  apiKeys           ApiKey[]
+  businessSearches  BusinessSearch[]
+  leads             Lead[]
+  tags              Tag[]
+  tasks             Task[]
+  lastSearchSession LastSearchSession?
 
   @@index([email])
   @@index([inviteToken])
@@ -43,6 +44,22 @@ model UrlAnalysisCache {
 
   @@unique([service, url])
   @@index([expiresAt])
+}
+
+// Per-user "resume your last search" snapshot. One row per user — a
+// new search overwrites the existing row. Cleared when the user
+// dismisses the resume card. Payload holds the full CachedSearch blob
+// (results, zones, density, etc.) as serialized JSON so we don't need
+// to split it across tables.
+model LastSearchSession {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  payload   String // JSON: serialized CachedSearch minus enrichment state
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
 }
 
 // Per-business enrichment cache (website + socials discovered via

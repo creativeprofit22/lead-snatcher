@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useRef, useState } from 'react';
+import { toast } from 'sonner';
 import type { EnrichmentStatus } from '@/components/leads/EnrichButton';
 import type { DiscoveredSocials } from '@/lib/business/enrichment';
 import { previewEnrichment } from '@/lib/business/enrichment-preview';
@@ -15,9 +16,23 @@ export interface EnrichmentResult {
   error?: string;
 }
 
+/** Persistent error surfaced via an inline banner, not a toast. Used
+ *  for failures that require the user to do something (log in again,
+ *  add an API key) rather than transient per-lead hiccups. */
+export interface EnrichmentBannerError {
+  kind: 'session_expired' | 'rate_limited' | 'server_error' | 'network';
+  message: string;
+  /** HTTP status when known — helps the UI decide the severity. */
+  status?: number;
+}
+
 export interface UseEnrichmentStream {
   statusMap: Record<string, EnrichmentStatus>;
   resultMap: Record<string, EnrichmentResult>;
+  /** Current persistent error, or null. Banner renders when set. */
+  bannerError: EnrichmentBannerError | null;
+  /** Clear the banner (called on dismiss or on next success). */
+  clearBannerError: () => void;
   /**
    * Fire enrichment for the given leads. Filters client-side: leads
    * that already have both website + socials are skipped (0 API cost).
@@ -30,6 +45,16 @@ export interface UseEnrichmentStream {
   ) => Promise<void>;
   /** Clear a lead's ephemeral enriched/error state back to idle. */
   clearStatus: (businessId: string) => void;
+  /**
+   * Rehydrate the hook's maps from persisted state (localStorage / DB).
+   * Used on mount so tab-navigation doesn't wipe the ⚡→✓ progress.
+   * Skips rehydration when the hook already has state to avoid
+   * clobbering an in-flight stream.
+   */
+  hydrate: (
+    status: Record<string, EnrichmentStatus> | undefined,
+    result: Record<string, EnrichmentResult> | undefined
+  ) => void;
 }
 
 interface StreamRow {
@@ -56,7 +81,11 @@ export function useEnrichmentStream(): UseEnrichmentStream {
   const [resultMap, setResultMap] = useState<Record<string, EnrichmentResult>>(
     {}
   );
+  const [bannerError, setBannerError] =
+    useState<EnrichmentBannerError | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  const clearBannerError = useCallback(() => setBannerError(null), []);
 
   const clearStatus = useCallback((businessId: string) => {
     setStatusMap((prev) => {
@@ -73,6 +102,20 @@ export function useEnrichmentStream(): UseEnrichmentStream {
       city: string,
       country: string
     ): Promise<void> => {
+      // STEP 1 — flip every requested lead to 'enriching' FIRST. This
+      // is the "every click produces visible feedback" guarantee: even
+      // if the payload ends up empty (all already enriched) or the
+      // fetch fails instantly, the user sees the button react. A
+      // silent no-op on click is the worst UX state; avoid it.
+      const requestedIds = leads.map((l) => l.placeId);
+      setStatusMap((prev) => {
+        const next = { ...prev };
+        for (const id of requestedIds) next[id] = 'enriching';
+        return next;
+      });
+
+      // STEP 2 — filter to the leads that actually need an API call.
+      // A lead with both website + socials needs nothing; skip it.
       const payload = leads
         .map((lead) => {
           const preview = previewEnrichment(lead);
@@ -86,16 +129,21 @@ export function useEnrichmentStream(): UseEnrichmentStream {
         })
         .filter((x): x is NonNullable<typeof x> => x !== null);
 
-      if (payload.length === 0) return;
-
-      // Mark all requested leads as enriching upfront — the user's
-      // cards should show spinners the moment the button is pressed,
-      // not when the first response streams in.
-      setStatusMap((prev) => {
-        const next = { ...prev };
-        for (const l of payload) next[l.businessId] = 'enriching';
-        return next;
-      });
+      if (payload.length === 0) {
+        // Nothing to do — reset status + tell the user why. Without
+        // the toast this path looked like a dead click.
+        setStatusMap((prev) => {
+          const next = { ...prev };
+          for (const id of requestedIds) delete next[id];
+          return next;
+        });
+        toast.info(
+          leads.length === 1
+            ? 'This lead already has full contact data'
+            : `All ${leads.length} selected leads already have full contact data`
+        );
+        return;
+      }
 
       abortRef.current?.abort();
       const controller = new AbortController();
@@ -110,14 +158,17 @@ export function useEnrichmentStream(): UseEnrichmentStream {
           signal: controller.signal,
         });
       } catch (err) {
-        // Network abort or offline — mark all as errored.
+        if (err instanceof Error && err.name === 'AbortError') return;
         setStatusMap((prev) => {
           const next = { ...prev };
           for (const l of payload) next[l.businessId] = 'error';
           return next;
         });
-        if (err instanceof Error && err.name === 'AbortError') return;
-        throw err;
+        const msg =
+          "Couldn't reach enrichment service — check your connection";
+        toast.error(msg);
+        setBannerError({ kind: 'network', message: msg });
+        return;
       }
 
       if (!response.ok || !response.body) {
@@ -126,6 +177,43 @@ export function useEnrichmentStream(): UseEnrichmentStream {
           for (const l of payload) next[l.businessId] = 'error';
           return next;
         });
+        // Surface the actual HTTP status + server message so the user
+        // (or whoever's looking over their shoulder) knows what's
+        // actually broken. "Refresh the page" was useless; this isn't.
+        let serverMessage = '';
+        try {
+          const body = await response.clone().json();
+          serverMessage =
+            typeof body?.error === 'string' ? `: ${body.error}` : '';
+        } catch {
+          /* response wasn't JSON — that's fine */
+        }
+        if (response.status === 401) {
+          const msg =
+            'Your session expired. Log in again to keep enriching leads.';
+          toast.error(msg, { duration: 8000 });
+          setBannerError({
+            kind: 'session_expired',
+            message: msg,
+            status: 401,
+          });
+        } else if (response.status === 429) {
+          const msg = 'Rate-limited — wait a moment before retrying.';
+          toast.error(msg);
+          setBannerError({
+            kind: 'rate_limited',
+            message: msg,
+            status: 429,
+          });
+        } else {
+          const msg = `Enrichment failed (${response.status})${serverMessage}`;
+          toast.error(msg);
+          setBannerError({
+            kind: 'server_error',
+            message: msg,
+            status: response.status,
+          });
+        }
         return;
       }
 
@@ -134,6 +222,11 @@ export function useEnrichmentStream(): UseEnrichmentStream {
       let buffer = '';
 
       const applyRow = (row: StreamRow) => {
+        // First successful row clears any lingering banner from a
+        // previous failed attempt — recovery is self-announcing.
+        if (row.status === 'ok' || row.status === 'cached') {
+          setBannerError(null);
+        }
         setStatusMap((prev) => ({
           ...prev,
           [row.businessId]:
@@ -194,10 +287,37 @@ export function useEnrichmentStream(): UseEnrichmentStream {
           }
           return next;
         });
+        toast.error('Enrichment stream dropped — click any lead to retry');
       }
     },
     []
   );
 
-  return { statusMap, resultMap, enrichLeads, clearStatus };
+  const hydrate = useCallback(
+    (
+      status: Record<string, EnrichmentStatus> | undefined,
+      result: Record<string, EnrichmentResult> | undefined
+    ) => {
+      // Don't clobber an in-flight stream — rehydration is a mount-time
+      // convenience, not a runtime override. Only seed when both maps
+      // are empty.
+      setStatusMap((prev) =>
+        Object.keys(prev).length === 0 && status ? status : prev
+      );
+      setResultMap((prev) =>
+        Object.keys(prev).length === 0 && result ? result : prev
+      );
+    },
+    []
+  );
+
+  return {
+    statusMap,
+    resultMap,
+    enrichLeads,
+    clearStatus,
+    hydrate,
+    bannerError,
+    clearBannerError,
+  };
 }

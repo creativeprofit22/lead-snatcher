@@ -54,6 +54,31 @@ export async function analyzeWebsite(
       params.append('category', category);
     }
 
+    // FieldMask — ask Google to return only the fields we actually
+    // read. A full Lighthouse payload is 1-5 MB (screenshots, every
+    // audit tree, every metric). We consume 10 numbers. Restricting
+    // fields cuts the response to ~10-20 KB, which:
+    //   - eliminates the Node heap spike that was OOM-killing the dev
+    //     server on memory-constrained WSL machines
+    //   - makes JSON.parse near-instant
+    //   - shrinks production bandwidth ~100× (real money on serverless)
+    // Score fields paths use `/` to drill into the categories object.
+    params.set(
+      'fields',
+      [
+        'lighthouseResult.categories/performance/score',
+        'lighthouseResult.categories/accessibility/score',
+        'lighthouseResult.categories/seo/score',
+        'lighthouseResult.categories/best-practices/score',
+        'lighthouseResult.audits/largest-contentful-paint/numericValue',
+        'lighthouseResult.audits/cumulative-layout-shift/numericValue',
+        'lighthouseResult.audits/server-response-time/numericValue',
+        'lighthouseResult.audits/is-on-https/score',
+        'lighthouseResult.audits/viewport/score',
+        'error',
+      ].join(',')
+    );
+
     if (apiKey) {
       params.append('key', apiKey);
     }
@@ -154,7 +179,11 @@ function createErrorAnalysis(url: string): WebsiteAnalysis {
 export async function analyzeWebsitesBatch(
   websites: string[],
   apiKey?: string,
-  concurrency: number = 3
+  // Concurrency 2 (was 3) — caps peak in-flight memory. With the
+  // FieldMask in place responses are small, but on slow/flaky networks
+  // where multiple responses buffer simultaneously, 2 vs 3 meaningfully
+  // reduces the chance of a heap spike.
+  concurrency: number = 2
 ): Promise<Map<string, WebsiteAnalysis>> {
   const results = new Map<string, WebsiteAnalysis>();
   const validWebsites = websites.filter((url) => url && !isSocialOnlyWebsite(url));

@@ -5,3 +5,4 @@ export { RadarScan } from './RadarScan';
 export { AreaDensityMeter } from './AreaDensityMeter';
 export { NeighborhoodChips } from './NeighborhoodChips';
 export { ZoneChipsStrip } from './ZoneChipsStrip';
+export { ResumeSearchCard } from './ResumeSearchCard';

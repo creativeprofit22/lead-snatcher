@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect, Suspense } from 'react';
-import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import {
   Settings,
@@ -30,6 +29,7 @@ import {
   RadarScan,
   AreaDensityMeter,
   ZoneChipsStrip,
+  ResumeSearchCard,
 } from '@/components/search';
 import { PreLoader } from '@/components/preloader';
 import { SlidingNumber } from '@/components/motion-primitives/sliding-number';
@@ -43,6 +43,7 @@ import {
 } from '@/components/leads';
 import { EnrichButton } from '@/components/leads/EnrichButton';
 import { BatchEnrichBar } from '@/components/leads/BatchEnrichBar';
+import { ErrorBanner } from '@/components/leads/ErrorBanner';
 import {
   EnrichmentExplainer,
   shouldShowExplainer,
@@ -50,7 +51,11 @@ import {
 import { useEnrichmentStream } from '@/lib/hooks/useEnrichmentStream';
 import { SettingsModal } from '@/components/settings';
 import { UserMenu } from '@/components/auth';
-import { saveLastSearch, getLastSearch } from '@/lib/search-cache';
+import {
+  saveLastSearch,
+  getLastSearch,
+  updateLastSearchEnrichment,
+} from '@/lib/search-cache';
 import { INDUSTRY_TYPES } from '@/lib/constants';
 import { computeFitScore } from '@/lib/business/budget-estimate';
 import type { IndustryType, BusinessSearchResult } from '@/types';
@@ -79,7 +84,6 @@ export default function Home() {
 }
 
 function HomeInner() {
-  const searchParams = useSearchParams();
   const [showPreLoader, setShowPreLoader] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>('search');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -126,27 +130,121 @@ function HomeInner() {
   const [filterHasAds, setFilterHasAds] = useState(false);
   const [filterMinBudget, setFilterMinBudget] = useState(0);
 
-  // Load cached search results if ?view=results
+  // Restore cached search on mount — survives tab-switches and
+  // crm-and-back navigation as long as the cache is fresh (2h TTL).
+  // The old URL gate (`?view=results`) meant navigating via the Home
+  // link wiped results; dropping it so the user always picks up where
+  // they left off.
   useEffect(() => {
-    if (searchParams.get('view') === 'results') {
-      const cached = getLastSearch();
-      if (cached) {
-        setSearchResults(cached.results);
-        setSelectedIndustry(cached.industry);
-        setCity(cached.city);
-        setCountry(cached.country);
-        // Restore zone + density state so the chip strip and meter come back
-        // when the user navigates away and returns via ?view=results.
-        if (cached.zones) setZones(cached.zones);
-        if (cached.zoneBbox !== undefined) setZoneBbox(cached.zoneBbox);
-        if (typeof cached.singleZone === 'boolean') setSingleZone(cached.singleZone);
-        if (cached.focusedZoneId !== undefined) setFocusedZoneId(cached.focusedZoneId);
-        if (cached.marketDensity !== undefined) setMarketDensity(cached.marketDensity);
-        setViewMode('results');
-        setShowPreLoader(false);
-      }
+    const cached = getLastSearch();
+    if (!cached) return;
+    setSearchResults(cached.results);
+    setSelectedIndustry(cached.industry);
+    setCity(cached.city);
+    setCountry(cached.country);
+    if (cached.zones) setZones(cached.zones);
+    if (cached.zoneBbox !== undefined) setZoneBbox(cached.zoneBbox);
+    if (typeof cached.singleZone === 'boolean') setSingleZone(cached.singleZone);
+    if (cached.focusedZoneId !== undefined) setFocusedZoneId(cached.focusedZoneId);
+    if (cached.marketDensity !== undefined) setMarketDensity(cached.marketDensity);
+    hydrateEnrichment(cached.enrichStatusMap, cached.enrichResultMap);
+    if (cached.selectedForEnrich?.length) {
+      setSelectedForEnrich(new Set(cached.selectedForEnrich));
     }
-  }, [searchParams]);
+    setViewMode('results');
+    setShowPreLoader(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Cross-session "resume your last search" — only fetched when the
+  // user lands on a fresh home screen (no localStorage cache). If the
+  // server has a persisted session, surface a small banner above the
+  // search form. `dismissed` is a tab-scoped hide; clicking the X also
+  // deletes the server-side record.
+  const [resumeCard, setResumeCard] = useState<{
+    industry: IndustryType;
+    city: string;
+    country: string;
+    resultCount: number;
+    updatedAt: string;
+    payload: Parameters<typeof saveLastSearch>[0];
+  } | null>(null);
+  const [resumeDismissed, setResumeDismissed] = useState(false);
+
+  // Persistent search error — shown above the results list when a sweep
+  // fails or times out. Companion to the transient toast; this stays
+  // visible until the user starts a new search or dismisses it. Kept
+  // separate from the enrichment banner so one failure doesn't stomp
+  // on the other.
+  const [searchBannerError, setSearchBannerError] = useState<{
+    message: string;
+    severity: 'error' | 'warning';
+    isAuthError: boolean;
+  } | null>(null);
+
+  useEffect(() => {
+    // Only fetch when we're on the home view with no local cache —
+    // otherwise the banner would either duplicate auto-restored
+    // results or appear after the user already started searching.
+    if (viewMode !== 'search') return;
+    if (getLastSearch()) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/business/last-search');
+        if (!res.ok) return;
+        const { data } = (await res.json()) as {
+          data: (typeof resumeCard extends infer T ? T : never) & {
+            results: BusinessSearchResult[];
+            industry: IndustryType;
+            city: string;
+            country: string;
+            updatedAt: string;
+          };
+        };
+        if (!data || cancelled) return;
+        setResumeCard({
+          industry: data.industry,
+          city: data.city,
+          country: data.country,
+          resultCount: data.results.length,
+          updatedAt: data.updatedAt,
+          payload: data,
+        });
+      } catch {
+        // Network blip — stay silent, home screen works fine without it.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [viewMode]);
+
+  const handleResumeLastSearch = () => {
+    if (!resumeCard) return;
+    const p = resumeCard.payload;
+    saveLastSearch(p); // mirror into localStorage for instant future restores
+    setSearchResults(p.results);
+    setSelectedIndustry(p.industry);
+    setCity(p.city);
+    setCountry(p.country);
+    if (p.zones) setZones(p.zones);
+    if (p.zoneBbox !== undefined) setZoneBbox(p.zoneBbox);
+    if (typeof p.singleZone === 'boolean') setSingleZone(p.singleZone);
+    if (p.focusedZoneId !== undefined) setFocusedZoneId(p.focusedZoneId);
+    if (p.marketDensity !== undefined) setMarketDensity(p.marketDensity);
+    setViewMode('results');
+    setResumeCard(null);
+  };
+
+  const handleDismissResume = () => {
+    setResumeDismissed(true);
+    setResumeCard(null);
+    // Fire-and-forget — nothing to show the user if the delete fails.
+    void fetch('/api/business/last-search', { method: 'DELETE' }).catch(
+      () => {}
+    );
+  };
 
   // Count-up for "N businesses found"
   const [resultsCount, setResultsCount] = useState(0);
@@ -179,6 +277,9 @@ function HomeInner() {
     resultMap: enrichResultMap,
     enrichLeads,
     clearStatus: clearEnrichStatus,
+    hydrate: hydrateEnrichment,
+    bannerError: enrichBannerError,
+    clearBannerError: clearEnrichBannerError,
   } = useEnrichmentStream();
   const [selectedForEnrich, setSelectedForEnrich] = useState<Set<string>>(
     new Set()
@@ -204,6 +305,16 @@ function HomeInner() {
     };
   }, [enrichStatusMap, clearEnrichStatus]);
 
+  // Persist enrichment state to the search cache whenever it changes so
+  // navigating away and back preserves which leads have been enriched.
+  useEffect(() => {
+    updateLastSearchEnrichment({
+      enrichStatusMap,
+      enrichResultMap,
+      selectedForEnrich: Array.from(selectedForEnrich),
+    });
+  }, [enrichStatusMap, enrichResultMap, selectedForEnrich]);
+
   // Saving leads
   const [savingLeadIds, setSavingLeadIds] = useState<Set<string>>(new Set());
   const [savedLeadModal, setSavedLeadModal] = useState<{ isOpen: boolean; businessName: string }>({
@@ -218,10 +329,12 @@ function HomeInner() {
     const scanStart = Date.now();
     setIsSearching(true);
     setRadarPhase('scanning');
-    // Hard wall-clock cap — generous enough for dense cities running Deep
-    // Analysis (50 PageSpeed calls at ~5-10s each = ~3 min worst case).
-    // Past 5 min something is genuinely wrong, not just "London is big".
-    const SEARCH_HARD_TIMEOUT_MS = 5 * 60_000;
+    setSearchBannerError(null); // clear any lingering banner from a prior attempt
+    // Tiered timeout: a standard sweep should finish in ~30-90s; past
+    // 2 min the server has almost certainly died (OOM, hang, whatever).
+    // Deep Analysis runs PageSpeed on all 50 sites serially and
+    // legitimately needs the full 5 min window.
+    const SEARCH_HARD_TIMEOUT_MS = deepAnalysis ? 5 * 60_000 : 2 * 60_000;
     const abortController = new AbortController();
     const abortTimer = setTimeout(() => abortController.abort(), SEARCH_HARD_TIMEOUT_MS);
     try {
@@ -241,7 +354,13 @@ function HomeInner() {
       const data = await response.json();
 
       if (!response.ok) {
-        toast.error(data.error || 'Search failed');
+        const msg = data.error || `Search failed (${response.status})`;
+        toast.error(msg);
+        setSearchBannerError({
+          message: msg,
+          severity: response.status === 401 ? 'error' : 'error',
+          isAuthError: response.status === 401,
+        });
         setRadarPhase('off');
         return;
       }
@@ -262,7 +381,7 @@ function HomeInner() {
       setRadarPhase('revealing');
 
       if (data.results?.length > 0) {
-        saveLastSearch({
+        const cachePayload = {
           results: data.results,
           industry: selectedIndustry,
           city: city.trim(),
@@ -272,7 +391,16 @@ function HomeInner() {
           singleZone: Boolean(data.singleZone),
           focusedZoneId: nextZones[0]?.id ?? null,
           marketDensity: data.marketDensity || null,
-        });
+        };
+        saveLastSearch(cachePayload);
+        // Fire-and-forget DB persist — enables the resume card on a
+        // fresh browser. Errors are silent; localStorage is still the
+        // primary fast path.
+        void fetch('/api/business/last-search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(cachePayload),
+        }).catch(() => {});
       }
 
       if (data.results?.length === 0) {
@@ -283,9 +411,29 @@ function HomeInner() {
       }
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') {
-        toast.error('Search exceeded 5 minutes — likely a backend issue, not your city size. Try again or check the server logs.');
+        // AbortController fired either because the user navigated away
+        // or because our wall-clock timeout tripped. Distinguish the
+        // two with the elapsed time vs the configured cap.
+        const timeoutMsg = deepAnalysis
+          ? 'Deep Analysis sweep took longer than 5 minutes — the server likely died mid-request. Try again, or disable Deep Analysis.'
+          : 'Sweep took longer than 2 minutes — the server likely died mid-request (usually a memory spike). Try again with a less dense city.';
+        toast.error(timeoutMsg, { duration: 10_000 });
+        setSearchBannerError({
+          message: timeoutMsg,
+          severity: 'error',
+          isAuthError: false,
+        });
       } else {
-        toast.error('Search failed. Please try again.');
+        const msg =
+          error instanceof TypeError
+            ? 'Lost connection to the server mid-sweep. Check the server is still running and try again.'
+            : 'Search failed unexpectedly. Try again; if it keeps happening, check the server logs.';
+        toast.error(msg);
+        setSearchBannerError({
+          message: msg,
+          severity: 'error',
+          isAuthError: false,
+        });
       }
       setRadarPhase('off');
     } finally {
@@ -535,7 +683,7 @@ function HomeInner() {
       } else {
         toast.success(`Scanning ${zone.label} — ${data.results.length} found`);
       }
-      saveLastSearch({
+      const zoneCachePayload = {
         results: data.results || [],
         industry: selectedIndustry,
         city: city.trim(),
@@ -545,7 +693,13 @@ function HomeInner() {
         singleZone,
         focusedZoneId: zone.id,
         marketDensity: data.marketDensity || null,
-      });
+      };
+      saveLastSearch(zoneCachePayload);
+      void fetch('/api/business/last-search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(zoneCachePayload),
+      }).catch(() => {});
     } catch {
       toast.error('Zone rescan failed');
     } finally {
@@ -669,6 +823,36 @@ function HomeInner() {
                 updates live, then you decide which leads to save.
               </p>
             </div>
+          )}
+
+          {searchBannerError && (
+            <ErrorBanner
+              message={searchBannerError.message}
+              severity={searchBannerError.severity}
+              action={
+                searchBannerError.isAuthError
+                  ? { label: 'Log in', href: '/login' }
+                  : undefined
+              }
+              onDismiss={() => setSearchBannerError(null)}
+            />
+          )}
+
+          {enrichBannerError && (
+            <ErrorBanner
+              message={enrichBannerError.message}
+              severity={
+                enrichBannerError.kind === 'rate_limited'
+                  ? 'warning'
+                  : 'error'
+              }
+              action={
+                enrichBannerError.kind === 'session_expired'
+                  ? { label: 'Log in', href: '/login' }
+                  : undefined
+              }
+              onDismiss={clearEnrichBannerError}
+            />
           )}
 
           <div
@@ -1023,6 +1207,17 @@ function HomeInner() {
         {/* Main content */}
         <div className="flex w-full max-w-3xl flex-col items-center gap-6 sm:gap-8 pt-16 sm:pt-0">
           <WelcomeHeader />
+
+          {resumeCard && !resumeDismissed && (
+            <ResumeSearchCard
+              industry={resumeCard.industry}
+              city={resumeCard.city}
+              resultCount={resumeCard.resultCount}
+              updatedAt={resumeCard.updatedAt}
+              onResume={handleResumeLastSearch}
+              onDismiss={handleDismissResume}
+            />
+          )}
 
           <p className="text-sm text-gray-400 text-center max-w-md">
             Find local businesses that need your digital services.

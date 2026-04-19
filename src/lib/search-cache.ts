@@ -1,9 +1,11 @@
 import type { BusinessSearchResult, IndustryType } from '@/types';
 import type { Zone } from '@/lib/business/zone-grid';
+import type { EnrichmentStatus } from '@/components/leads/EnrichButton';
+import type { EnrichmentResult } from '@/lib/hooks/useEnrichmentStream';
 
 const LAST_SEARCH_KEY = 'lead-snatcher-last-search';
-/** Cache TTL: 30 minutes */
-const CACHE_TTL_MS = 30 * 60 * 1000;
+/** Within-session restore window — keeps results alive across tab navigation. */
+const CACHE_TTL_MS = 2 * 60 * 60 * 1000;
 
 export interface CachedMarketDensity {
   count: number;
@@ -37,6 +39,12 @@ export interface CachedSearch {
   singleZone?: boolean;
   focusedZoneId?: string | null;
   marketDensity?: CachedMarketDensity | null;
+  // Per-card enrichment state. Persisted so a user who has already
+  // enriched a few leads doesn't lose the ⚡→✓ progress when they
+  // navigate away and return.
+  enrichStatusMap?: Record<string, EnrichmentStatus>;
+  enrichResultMap?: Record<string, EnrichmentResult>;
+  selectedForEnrich?: string[];
 }
 
 export function saveLastSearch(data: Omit<CachedSearch, 'timestamp'>): void {
@@ -71,4 +79,28 @@ export function hasLastSearch(): boolean {
 
 export function clearLastSearch(): void {
   localStorage.removeItem(LAST_SEARCH_KEY);
+}
+
+/**
+ * Patch only the enrichment fields on the existing cache entry without
+ * touching the rest. Used when per-card enrichment state changes so we
+ * don't need to re-serialize the entire blob (including the zones,
+ * market density, etc.) from every caller.
+ *
+ * No-op if there is no cached search — nothing to patch.
+ */
+export function updateLastSearchEnrichment(patch: {
+  enrichStatusMap?: Record<string, EnrichmentStatus>;
+  enrichResultMap?: Record<string, EnrichmentResult>;
+  selectedForEnrich?: string[];
+}): void {
+  const current = getLastSearch();
+  if (!current) return;
+  const merged: CachedSearch = {
+    ...current,
+    ...patch,
+    // Refresh timestamp so enrichment activity keeps the cache warm.
+    timestamp: Date.now(),
+  };
+  localStorage.setItem(LAST_SEARCH_KEY, JSON.stringify(merged));
 }

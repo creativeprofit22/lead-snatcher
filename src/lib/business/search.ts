@@ -117,11 +117,26 @@ export async function searchBusinesses(
     // Step A: scrape every site first. Scraping is fast (~30s for 50
     // sites at concurrency 8) and feeds the preliminary score that
     // decides which leads are worth running PageSpeed on.
+    //
+    // The try/catch here is deliberate: a scrape pipeline blow-up (OOM,
+    // DNS flood, malformed HTML exploder) must NEVER prevent returning
+    // the Maps results the user already paid a RapidAPI call for. Any
+    // failure degrades the sweep to "leads without enriched signals",
+    // which is still useful — losing 50 leads because one site choked
+    // Cheerio is not.
     if (options.enableWebsiteScraping) {
-      // Concurrency 8 keeps WSL socket pressure manageable (15 was
-      // causing intermittent EAI_AGAIN / file-descriptor pile-ups during
-      // dense-city scans) while still finishing a 50-site batch in <30s.
-      scrapedDataMap = await scrapeWebsitesBatch(websites, 8);
+      try {
+        // Concurrency 8 keeps WSL socket pressure manageable (15 was
+        // causing intermittent EAI_AGAIN / file-descriptor pile-ups during
+        // dense-city scans) while still finishing a 50-site batch in <30s.
+        scrapedDataMap = await scrapeWebsitesBatch(websites, 8);
+      } catch (err) {
+        console.error(
+          'Scrape pipeline failed — continuing with Maps-only data:',
+          err instanceof Error ? err.message : err
+        );
+        scrapedDataMap = new Map();
+      }
     }
 
     // Step B: tier the PageSpeed pass. Lighthouse is the slowest part of
@@ -129,6 +144,9 @@ export async function searchBusinesses(
     // about performance metrics for a lead we'd never call. Score every
     // business with what we have so far, then only run PageSpeed on the
     // top 20 — cuts a 3-min worst case down to ~30s.
+    //
+    // Same defensive wrap as the scraper: a Lighthouse blow-up shouldn't
+    // eat the user's sweep.
     if (options.enableWebsiteAnalysis) {
       const ranked = validBusinesses
         .map((b) => {
@@ -160,11 +178,19 @@ export async function searchBusinesses(
         .map((x) => x.website);
 
       if (ranked.length > 0) {
-        websiteAnalysisMap = await analyzeWebsitesBatch(
-          ranked,
-          options.pageSpeedApiKey,
-          3
-        );
+        try {
+          websiteAnalysisMap = await analyzeWebsitesBatch(
+            ranked,
+            options.pageSpeedApiKey,
+            2
+          );
+        } catch (err) {
+          console.error(
+            'PageSpeed pipeline failed — continuing without Lighthouse scores:',
+            err instanceof Error ? err.message : err
+          );
+          websiteAnalysisMap = new Map();
+        }
       }
     }
   }
