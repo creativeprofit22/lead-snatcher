@@ -66,7 +66,7 @@ export function ResumeSearchCard({
           type="button"
           onClick={onDismiss}
           aria-label="Dismiss resume card"
-          title="Dismiss — this clears the saved search"
+          title="Hide for this browser tab — session stays cached"
           className="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition-colors"
         >
           <X className="w-4 h-4" />

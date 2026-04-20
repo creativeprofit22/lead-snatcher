@@ -19,12 +19,13 @@ model User {
   updatedAt   DateTime  @updatedAt
 
   // User's data
-  apiKeys           ApiKey[]
-  businessSearches  BusinessSearch[]
-  leads             Lead[]
-  tags              Tag[]
-  tasks             Task[]
-  lastSearchSession LastSearchSession?
+  apiKeys             ApiKey[]
+  businessSearches    BusinessSearch[]
+  leads               Lead[]
+  tags                Tag[]
+  tasks               Task[]
+  lastSearchSession   LastSearchSession?
+  savedSearchSessions SavedSearchSession[]
 
   @@index([email])
   @@index([inviteToken])
@@ -60,6 +61,24 @@ model LastSearchSession {
   updatedAt DateTime @updatedAt
 
   @@index([userId])
+}
+
+// Explicit, named, permanent saved search sessions. Distinct from
+// LastSearchSession (auto-saved, single-slot) — these are user-named and
+// persist until manually deleted. Useful for long-running projects
+// ("Barcelona real estate Q2") and curated demo sessions kept for
+// filming. Payload mirrors LastSearchSession's shape.
+model SavedSearchSession {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name      String // user-chosen label, e.g. "HVAC Tucson Demo"
+  payload   String // JSON: serialized CachedSearch minus enrichment state
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([userId, createdAt])
 }
 
 // Per-business enrichment cache (website + socials discovered via

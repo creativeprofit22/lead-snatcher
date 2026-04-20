@@ -5,11 +5,12 @@ import { motion } from 'motion/react';
 import {
   Landmark,
   Hotel,
-  HeartPulse,
-  Pill,
-  ShoppingCart,
-  Fuel,
-  Utensils,
+  Gem,
+  Briefcase,
+  Crown,
+  Dices,
+  Sparkles,
+  HandCoins,
   MapPin,
   ExternalLink,
   type LucideIcon,
@@ -19,6 +20,8 @@ import { SlidingNumber } from '@/components/motion-primitives/sliding-number';
 import type { Zone } from '@/lib/business/zone-grid';
 
 interface Amenities {
+  // Legacy fields — still accepted for backwards compatibility with
+  // pre-v2-wealth cached payloads. The rim icons below ignore them.
   banks: number;
   hotels: number;
   hospitals: number;
@@ -27,6 +30,13 @@ interface Amenities {
   fuelStations: number;
   affluenceSpots: number;
   total: number;
+
+  // v2-wealth buckets — what the rim now visualizes.
+  luxuryRetail?: number;
+  professionalServices?: number;
+  premiumHotels?: number;
+  casinos?: number;
+  pawnshops?: number;
 }
 
 interface AreaDensityMeterProps {
@@ -53,19 +63,25 @@ const GAUGE_SIZE = 260;
 const ORBITAL_RADIUS = 172;
 const CONTAINER_SIZE = GAUGE_SIZE + (ORBITAL_RADIUS - GAUGE_SIZE / 2) * 2 + 56;
 
+// v2-wealth rim: icons reflect the actual wealth signals that drive the
+// zone score. Positive signals take the top half of the dial, negative
+// signals get the bottom-left slot so they're visible without dominating.
 const AMENITIES: {
   key: keyof Omit<Amenities, 'total'>;
   label: string;
   icon: LucideIcon;
   angle: number;
+  /** When true, the icon highlights in red/amber as it fills instead of green. */
+  negative?: boolean;
 }[] = [
-  { key: 'banks', label: 'Banks', icon: Landmark, angle: -90 },
-  { key: 'hotels', label: 'Hotels', icon: Hotel, angle: -38 },
-  { key: 'supermarkets', label: 'Markets', icon: ShoppingCart, angle: 14 },
-  { key: 'pharmacies', label: 'Pharmacy', icon: Pill, angle: 66 },
-  { key: 'affluenceSpots', label: 'Leisure', icon: Utensils, angle: 118 },
-  { key: 'fuelStations', label: 'Fuel', icon: Fuel, angle: 170 },
-  { key: 'hospitals', label: 'Hospital', icon: HeartPulse, angle: 222 },
+  { key: 'luxuryRetail', label: 'Luxury', icon: Gem, angle: -90 },
+  { key: 'professionalServices', label: 'Pro Svc', icon: Briefcase, angle: -38 },
+  { key: 'premiumHotels', label: 'Premium', icon: Crown, angle: 14 },
+  { key: 'banks', label: 'Banks', icon: Landmark, angle: 66 },
+  { key: 'affluenceSpots', label: 'Leisure', icon: Sparkles, angle: 118 },
+  { key: 'hotels', label: 'Hotels', icon: Hotel, angle: 170 },
+  { key: 'casinos', label: 'Casino', icon: Dices, angle: 222 },
+  { key: 'pawnshops', label: 'Pawn', icon: HandCoins, angle: 274, negative: true },
 ];
 
 interface LevelPalette {
@@ -269,24 +285,32 @@ export function AreaDensityMeter({
                         below MUST stay absolutely positioned (out of normal
                         flow) — if it sits in the column it pushes the disk
                         upward off the ring. */}
-                    <div
-                      className={`relative flex h-11 w-11 items-center justify-center rounded-full border backdrop-blur-sm ${
-                        dim
-                          ? 'border-white/10 bg-white/[0.02]'
-                          : 'border-white/20 bg-white/[0.06]'
-                      }`}
-                    >
-                      <Icon
-                        className={`h-5 w-5 ${dim ? 'text-gray-600' : colors.accent}`}
-                      />
-                      {count > 0 && (
+                    {(() => {
+                      const activeAccent = a.negative
+                        ? 'text-rose-400'
+                        : colors.accent;
+                      const borderClass = dim
+                        ? 'border-white/10 bg-white/[0.02]'
+                        : a.negative
+                          ? 'border-rose-400/30 bg-rose-500/[0.06]'
+                          : 'border-white/20 bg-white/[0.06]';
+                      return (
                         <div
-                          className={`absolute -bottom-1 -right-1 flex h-[19px] min-w-[19px] items-center justify-center rounded-full border border-white/10 bg-black/90 px-1 font-mono text-[10px] font-bold ${colors.accent}`}
+                          className={`relative flex h-11 w-11 items-center justify-center rounded-full border backdrop-blur-sm ${borderClass}`}
                         >
-                          {count}
+                          <Icon
+                            className={`h-5 w-5 ${dim ? 'text-gray-600' : activeAccent}`}
+                          />
+                          {count > 0 && (
+                            <div
+                              className={`absolute -bottom-1 -right-1 flex h-[19px] min-w-[19px] items-center justify-center rounded-full border border-white/10 bg-black/90 px-1 font-mono text-[10px] font-bold ${activeAccent}`}
+                            >
+                              {count}
+                            </div>
+                          )}
                         </div>
-                      )}
-                    </div>
+                      );
+                    })()}
                     <div className="absolute left-1/2 top-full mt-1.5 -translate-x-1/2 whitespace-nowrap font-mono text-[10px] uppercase tracking-[0.15em] text-gray-500">
                       {a.label}
                     </div>

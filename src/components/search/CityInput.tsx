@@ -1,9 +1,25 @@
 'use client';
 
-import { useState, useMemo, useRef, useEffect } from 'react';
-import { MapPin, ChevronDown, Check } from 'lucide-react';
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
+import { MapPin, ChevronDown, Check, Search } from 'lucide-react';
 import { COUNTRIES } from '@/lib/constants';
-import { NeighborhoodChips } from './NeighborhoodChips';
+import { useCyclingPlaceholder } from '@/lib/hooks/useCyclingPlaceholder';
+import { GlowEffect } from '@/components/motion-primitives/glow-effect';
+import { RegionPicker } from './RegionPicker';
+
+const CITY_PLACEHOLDER_PHRASES = [
+  'Phoenix, AZ',
+  'Austin, TX',
+  'Miami, FL',
+  'Toronto',
+  'Manchester',
+  'Barcelona',
+  'Melbourne',
+  'Berlin',
+  'Tokyo',
+  'Dublin',
+];
 
 interface CityInputProps {
   city: string;
@@ -13,6 +29,8 @@ interface CityInputProps {
   onSearch: () => void;
   isLoading?: boolean;
 }
+
+const DROPDOWN_WIDTH = 192; // w-48
 
 export function CityInput({
   city,
@@ -24,19 +42,60 @@ export function CityInput({
 }: CityInputProps) {
   const [isFocused, setIsFocused] = useState(false);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number } | null>(null);
+
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  const selectedCountry = useMemo(
-    () => COUNTRIES.find((c) => c.code === country),
-    [country]
-  );
+  const cyclingPlaceholder = useCyclingPlaceholder({
+    phrases: CITY_PLACEHOLDER_PHRASES,
+    paused: isFocused || city.length > 0,
+  });
 
   const placeholder = useMemo(() => {
-    if (selectedCountry?.examples?.[0]) {
-      return `e.g. ${selectedCountry.examples[0]}`;
+    if (isFocused || city.length > 0) {
+      return 'Enter city...';
     }
-    return 'Enter city...';
-  }, [selectedCountry]);
+    return cyclingPlaceholder;
+  }, [isFocused, city.length, cyclingPlaceholder]);
+
+  const updatePosition = useCallback(() => {
+    const el = triggerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    setDropdownPos({
+      top: rect.bottom + 8,
+      left: rect.right - DROPDOWN_WIDTH,
+    });
+  }, []);
+
+  // Recompute position whenever the dropdown opens or the viewport changes.
+  useEffect(() => {
+    if (!isDropdownOpen) return;
+    updatePosition();
+    const onScroll = () => setIsDropdownOpen(false);
+    const onResize = () => updatePosition();
+    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', onResize);
+    return () => {
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', onResize);
+    };
+  }, [isDropdownOpen, updatePosition]);
+
+  // Outside-click close — must check BOTH the trigger and the portaled
+  // dropdown, since they live in different parts of the DOM tree.
+  useEffect(() => {
+    if (!isDropdownOpen) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (triggerRef.current?.contains(target)) return;
+      if (dropdownRef.current?.contains(target)) return;
+      setIsDropdownOpen(false);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isDropdownOpen]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && city.trim()) {
@@ -49,28 +108,66 @@ export function CityInput({
     setIsDropdownOpen(false);
   };
 
-  // Close dropdown when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsDropdownOpen(false);
-      }
-    };
+  const canSearch = city.trim().length > 0 && !isLoading;
 
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  // Portal gate: `document` is undefined during SSR, and `isDropdownOpen`
+  // is always false on initial client render (so hydration matches server).
+  // The portal only ever mounts after a user interaction, which is safely
+  // client-only — no state-based mount flag needed.
+  const dropdown =
+    typeof document !== 'undefined' && isDropdownOpen && dropdownPos
+      ? createPortal(
+          <div
+            ref={dropdownRef}
+            style={{
+              position: 'fixed',
+              top: dropdownPos.top,
+              left: dropdownPos.left,
+              width: DROPDOWN_WIDTH,
+              zIndex: 9999,
+            }}
+            className="max-h-64 overflow-y-auto rounded-lg border border-border-bright/70 bg-surface-inset shadow-[0_12px_40px_rgba(0,0,0,0.6)]"
+          >
+            {COUNTRIES.map((c) => (
+              <button
+                key={c.code}
+                type="button"
+                onClick={() => handleCountrySelect(c.code)}
+                className={`
+                  flex w-full items-center justify-between bg-surface-inset px-3 py-2 text-left text-sm transition-colors
+                  ${country === c.code ? 'bg-sky-400/15 text-white' : 'text-white/75 hover:bg-surface-hover hover:text-white'}
+                `}
+              >
+                <span className="flex items-center gap-2">
+                  <span className="w-6 font-mono text-[10px] uppercase tracking-[0.18em] text-white/40">
+                    {c.code.toUpperCase()}
+                  </span>
+                  <span>{c.name}</span>
+                </span>
+                {country === c.code && <Check className="h-4 w-4 text-sky-400" />}
+              </button>
+            ))}
+          </div>,
+          document.body
+        )
+      : null;
 
   return (
     <div className="w-full max-w-md">
-      <p className="text-sm text-gray-400 mb-3 text-center">Select country and city</p>
+      <p className="mb-3 text-center font-mono text-xs uppercase tracking-[0.24em] text-white/45">
+        Select country and city
+      </p>
       <div
         className={`
-          flex items-center gap-2 p-3 rounded-lg border transition-all
-          ${isFocused ? 'border-white bg-gray-800' : 'border-gray-700 bg-gray-800/50'}
+          hud-panel flex items-center gap-3 rounded-xl border p-4 backdrop-blur-sm transition-all
+          ${
+            isFocused
+              ? 'border-sky-400/60 bg-surface-elevated/80'
+              : 'border-border-bright/50 bg-surface/60'
+          }
         `}
       >
-        <MapPin className="w-5 h-5 text-gray-400 flex-shrink-0" />
+        <MapPin className="h-5 w-5 flex-shrink-0 text-sky-400/75" />
         <input
           type="text"
           value={city}
@@ -79,66 +176,67 @@ export function CityInput({
           onFocus={() => setIsFocused(true)}
           onBlur={() => setIsFocused(false)}
           placeholder={placeholder}
-          className="flex-1 bg-transparent text-white placeholder-gray-500 outline-none text-sm"
+          className="flex-1 bg-transparent text-base text-white outline-none placeholder:text-white/35"
         />
 
-        {/* Custom Country Dropdown */}
-        <div ref={dropdownRef} className="relative">
-          <button
-            type="button"
-            onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-            className="flex items-center gap-1 px-2 py-1 rounded border border-gray-600 bg-gray-800 hover:bg-gray-700 hover:border-gray-500 transition-all text-xs text-white"
-          >
-            <span className="font-medium">{country.toUpperCase()}</span>
-            <ChevronDown
-              className={`w-3 h-3 text-gray-400 transition-transform ${isDropdownOpen ? 'rotate-180' : ''}`}
-            />
-          </button>
-
-          {isDropdownOpen && (
-            <div className="absolute right-0 top-full mt-2 w-48 max-h-64 overflow-y-auto rounded-lg border border-gray-700 bg-gray-900 shadow-xl z-50">
-              {COUNTRIES.map((c) => (
-                <button
-                  key={c.code}
-                  type="button"
-                  onClick={() => handleCountrySelect(c.code)}
-                  className={`
-                    w-full flex items-center justify-between px-3 py-2 text-left text-sm transition-colors
-                    ${country === c.code ? 'bg-gray-800 text-white' : 'text-gray-300 hover:bg-gray-800 hover:text-white'}
-                  `}
-                >
-                  <span className="flex items-center gap-2">
-                    <span className="font-medium text-gray-500 w-6">{c.code.toUpperCase()}</span>
-                    <span>{c.name}</span>
-                  </span>
-                  {country === c.code && <Check className="w-4 h-4 text-green-500" />}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        <button
+          ref={triggerRef}
+          type="button"
+          onClick={() => setIsDropdownOpen((v) => !v)}
+          className="flex items-center gap-1 rounded-lg border border-border-bright/60 bg-surface-elevated/80 px-2.5 py-1.5 text-xs text-white/85 transition-colors hover:border-sky-400/50 hover:bg-surface-hover/80"
+        >
+          <span className="font-medium">{country.toUpperCase()}</span>
+          <ChevronDown
+            className={`h-3 w-3 text-white/50 transition-transform ${isDropdownOpen ? 'rotate-180' : ''}`}
+          />
+        </button>
       </div>
-      <NeighborhoodChips
+
+      {dropdown}
+
+      <RegionPicker
         city={city}
         country={country}
         onNeighborhoodSelect={onCityChange}
         disabled={isLoading}
       />
 
-      <button
-        onClick={onSearch}
-        disabled={!city.trim() || isLoading}
-        className={`
-          w-full mt-3 py-2.5 rounded-lg font-medium text-sm transition-all
-          ${
-            city.trim() && !isLoading
-              ? 'bg-white text-black hover:bg-gray-200'
-              : 'bg-gray-700 text-gray-400 cursor-not-allowed'
-          }
-        `}
-      >
-        {isLoading ? 'Searching...' : 'Search Businesses'}
-      </button>
+      <div className="relative mt-4">
+        {canSearch && (
+          <GlowEffect
+            colors={['#38bdf8', '#a78bfa', '#fdba74', '#38bdf8']}
+            mode="rotate"
+            blur="medium"
+            duration={7}
+            scale={1.02}
+            className="rounded-xl opacity-80"
+          />
+        )}
+        <button
+          onClick={onSearch}
+          disabled={!canSearch}
+          className={`
+            relative flex w-full items-center justify-center gap-2 rounded-xl border py-3.5 text-base font-semibold tracking-wide transition-all
+            ${
+              canSearch
+                ? 'border-sky-400/70 bg-white text-black shadow-[0_0_24px_rgba(56,189,248,0.3)] hover:bg-white/90'
+                : 'cursor-not-allowed border-border-bright/40 bg-surface-elevated/50 text-white/35'
+            }
+          `}
+        >
+          {isLoading ? (
+            <>
+              <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-sky-500" />
+              Searching...
+            </>
+          ) : (
+            <>
+              <Search className="h-4 w-4" />
+              Search Businesses
+            </>
+          )}
+        </button>
+      </div>
     </div>
   );
 }

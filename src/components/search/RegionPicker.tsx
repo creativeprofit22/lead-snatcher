@@ -1,0 +1,458 @@
+'use client';
+
+import { useEffect, useRef, useState } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
+import { ArrowLeft, MapPin } from 'lucide-react';
+
+/**
+ * Two-stage location picker that replaces the flat NeighborhoodChips. Lets
+ * users browse by geographic region (3×3 grid: NW/N/NE, W/Central/E,
+ * SW/S/SE) first, then drills into named neighborhoods within the chosen
+ * region. Designed to surface neighborhoods that would otherwise lose the
+ * flat top-6 race — Canary Wharf, Stratford, Greenwich all live in
+ * different regions than Mayfair, so they get their own slot.
+ *
+ * For users who already know the specific neighborhood, this whole picker
+ * is bypassed — they type "Mayfair, London" and hit search.
+ */
+
+type RegionDirection =
+  | 'nw'
+  | 'n'
+  | 'ne'
+  | 'w'
+  | 'central'
+  | 'e'
+  | 'sw'
+  | 's'
+  | 'se';
+
+interface RegionSummary {
+  direction: RegionDirection;
+  label: string;
+  score: number;
+  zoneCount: number;
+  topLabel: string | null;
+}
+
+interface Neighborhood {
+  label: string;
+  score: number;
+  level: 'premium' | 'commercial' | 'moderate' | 'developing';
+  latitude: number;
+  longitude: number;
+  region: RegionDirection;
+}
+
+interface RegionPickerProps {
+  city: string;
+  country: string;
+  onNeighborhoodSelect: (combinedCity: string) => void;
+  disabled?: boolean;
+}
+
+const DEBOUNCE_MS = 700;
+const MIN_CHARS = 3;
+
+const REGION_LAYOUT: RegionDirection[][] = [
+  ['nw', 'n', 'ne'],
+  ['w', 'central', 'e'],
+  ['sw', 's', 'se'],
+];
+
+const REGION_SHORT: Record<RegionDirection, string> = {
+  nw: 'NW',
+  n: 'N',
+  ne: 'NE',
+  w: 'W',
+  central: 'Central',
+  e: 'E',
+  sw: 'SW',
+  s: 'S',
+  se: 'SE',
+};
+
+/**
+ * Returns the base city name — i.e. the text after the first comma if the
+ * user has refined to "Neighborhood, City", else the whole input.
+ */
+function cityBase(city: string): string {
+  const commaIdx = city.indexOf(',');
+  if (commaIdx === -1) return city.trim();
+  return city.slice(commaIdx + 1).trim();
+}
+
+function SkeletonTile({ index }: { index: number }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ delay: index * 0.04 }}
+      className="relative aspect-[3/2] overflow-hidden rounded-lg border border-sky-400/15 bg-white/[0.03]"
+    >
+      <motion.div
+        animate={{ x: ['-100%', '200%'] }}
+        transition={{
+          repeat: Infinity,
+          duration: 1.6,
+          ease: 'linear',
+          delay: index * 0.12,
+        }}
+        className="absolute inset-y-0 w-full bg-gradient-to-r from-transparent via-sky-400/20 to-transparent"
+      />
+    </motion.div>
+  );
+}
+
+function scoreTone(score: number): { text: string; border: string; bg: string } {
+  if (score >= 75) {
+    return {
+      text: 'text-amber-300',
+      border: 'border-amber-400/40',
+      bg: 'bg-amber-500/[0.06] hover:bg-amber-500/[0.12]',
+    };
+  }
+  if (score >= 50) {
+    return {
+      text: 'text-sky-300',
+      border: 'border-sky-400/40',
+      bg: 'bg-sky-500/[0.06] hover:bg-sky-500/[0.12]',
+    };
+  }
+  if (score >= 25) {
+    return {
+      text: 'text-slate-200',
+      border: 'border-white/15',
+      bg: 'bg-white/[0.03] hover:bg-white/[0.06]',
+    };
+  }
+  return {
+    text: 'text-white/45',
+    border: 'border-white/8',
+    bg: 'bg-white/[0.02] hover:bg-white/[0.04]',
+  };
+}
+
+export function RegionPicker({
+  city,
+  country,
+  onNeighborhoodSelect,
+  disabled,
+}: RegionPickerProps) {
+  const [regions, setRegions] = useState<RegionSummary[]>([]);
+  const [zones, setZones] = useState<Neighborhood[]>([]);
+  const [pending, setPending] = useState(false);
+  const [singleZone, setSingleZone] = useState(false);
+  const [selectedRegion, setSelectedRegion] =
+    useState<RegionDirection | null>(null);
+  const lastFetchedRef = useRef<string>('');
+  const abortRef = useRef<AbortController | null>(null);
+
+  const trimmedCity = city.trim();
+  const hasRefinement = trimmedCity.includes(',');
+  const base = cityBase(trimmedCity);
+  const tooShort = base.length < MIN_CHARS;
+
+  useEffect(() => {
+    if (tooShort) {
+      setRegions([]);
+      setZones([]);
+      setPending(false);
+      setSelectedRegion(null);
+      lastFetchedRef.current = '';
+      return;
+    }
+
+    // User already picked a neighborhood — keep picker collapsed.
+    if (hasRefinement) {
+      setPending(false);
+      return;
+    }
+
+    const cacheKey = `${country}|${base.toLowerCase()}`;
+    if (lastFetchedRef.current === cacheKey) {
+      setPending(false);
+      return;
+    }
+
+    setPending(true);
+
+    const timer = setTimeout(async () => {
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      try {
+        const response = await fetch(
+          `/api/business/neighborhoods?city=${encodeURIComponent(base)}&country=${encodeURIComponent(country)}`,
+          { signal: controller.signal }
+        );
+        if (!response.ok) {
+          setRegions([]);
+          setZones([]);
+          return;
+        }
+        const data = await response.json();
+        const nextRegions: RegionSummary[] = Array.isArray(data.regions)
+          ? data.regions
+          : [];
+        const nextZones: Neighborhood[] = Array.isArray(data.zones)
+          ? data.zones
+          : [];
+        setRegions(nextRegions);
+        setZones(nextZones);
+        setSingleZone(Boolean(data.singleZone));
+        if (nextRegions.length > 0 || nextZones.length > 0) {
+          lastFetchedRef.current = cacheKey;
+        }
+      } catch (err) {
+        if (err instanceof Error && err.name !== 'AbortError') {
+          setRegions([]);
+          setZones([]);
+        }
+      } finally {
+        if (abortRef.current === controller) {
+          setPending(false);
+        }
+      }
+    }, DEBOUNCE_MS);
+
+    return () => clearTimeout(timer);
+  }, [trimmedCity, country, hasRefinement, tooShort, base]);
+
+  useEffect(() => {
+    // Reset drill-in whenever the city changes.
+    setSelectedRegion(null);
+  }, [base]);
+
+  useEffect(() => {
+    return () => abortRef.current?.abort();
+  }, []);
+
+  if (tooShort) return null;
+  if (hasRefinement) return null;
+
+  const zonesInRegion = selectedRegion
+    ? zones
+        .filter((z) => z.region === selectedRegion)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 8)
+    : [];
+
+  const handleRegionPick = (direction: RegionDirection) => {
+    if (disabled) return;
+    setSelectedRegion(direction);
+  };
+
+  const handleNeighborhoodPick = (n: Neighborhood) => {
+    if (disabled) return;
+    const nextBase = base || trimmedCity;
+    onNeighborhoodSelect(`${n.label}, ${nextBase}`);
+  };
+
+  // Loading state — skeleton grid
+  if (pending && regions.length === 0) {
+    return (
+      <div className="mt-3 w-full max-w-md">
+        <div className="mb-1.5 flex items-center justify-between px-1">
+          <span className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.25em] text-sky-300/80">
+            <span className="relative flex h-1.5 w-1.5">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400 opacity-75" />
+              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-sky-400" />
+            </span>
+            Scanning {base || 'city'}…
+          </span>
+        </div>
+        <div className="grid grid-cols-3 gap-1.5">
+          {[0, 1, 2, 3, 4, 5, 6, 7, 8].map((i) => (
+            <SkeletonTile key={i} index={i} />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (regions.length === 0) return null;
+
+  // Small-city fallback: only one meaningful region. Skip the grid and show
+  // neighborhoods directly — forcing a user to click "Central" when there's
+  // nothing else is pointless friction.
+  if (singleZone || regions.filter((r) => r.zoneCount > 0).length <= 1) {
+    const fallbackNeighborhoods = zones
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 8);
+    if (fallbackNeighborhoods.length === 0) return null;
+    return (
+      <div className="mt-3 w-full max-w-md">
+        <div className="mb-1.5 flex items-center justify-between px-1">
+          <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-white/40">
+            Top zones in {base}
+          </span>
+          <span className="font-mono text-[10px] text-white/30">
+            {fallbackNeighborhoods.length} found
+          </span>
+        </div>
+        <NeighborhoodChipRow
+          items={fallbackNeighborhoods}
+          onPick={handleNeighborhoodPick}
+          disabled={disabled}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-3 w-full max-w-md">
+      <AnimatePresence mode="wait">
+        {selectedRegion === null ? (
+          <motion.div
+            key="regions"
+            initial={{ opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.18 }}
+          >
+            <div className="mb-1.5 flex items-center justify-between px-1">
+              <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-white/40">
+                Browse {base} by region
+              </span>
+              <span className="font-mono text-[10px] text-white/30">
+                {regions.filter((r) => r.zoneCount > 0).length} active
+              </span>
+            </div>
+            <div className="grid grid-cols-3 gap-1.5">
+              {REGION_LAYOUT.flat().map((direction, i) => {
+                const region = regions.find((r) => r.direction === direction);
+                const score = region?.score ?? 0;
+                const count = region?.zoneCount ?? 0;
+                const empty = count === 0;
+                const tone = empty
+                  ? {
+                      text: 'text-white/30',
+                      border: 'border-white/5',
+                      bg: 'bg-white/[0.01]',
+                    }
+                  : scoreTone(score);
+                return (
+                  <motion.button
+                    key={direction}
+                    type="button"
+                    onClick={() => !empty && handleRegionPick(direction)}
+                    disabled={disabled || empty}
+                    initial={{ opacity: 0, scale: 0.94 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ delay: i * 0.02, duration: 0.2 }}
+                    className={`group relative flex aspect-[3/2] flex-col items-center justify-center gap-0.5 rounded-lg border p-1.5 transition-all disabled:cursor-not-allowed ${tone.border} ${tone.bg}`}
+                  >
+                    <span
+                      className={`font-mono text-[10px] uppercase tracking-[0.2em] ${tone.text}`}
+                    >
+                      {REGION_SHORT[direction]}
+                    </span>
+                    {!empty && (
+                      <>
+                        <span
+                          className={`font-orbitron text-base font-semibold tabular-nums ${tone.text}`}
+                        >
+                          {score}
+                        </span>
+                        {region?.topLabel && (
+                          <span className="max-w-full truncate text-[9px] text-white/45">
+                            {region.topLabel}
+                          </span>
+                        )}
+                      </>
+                    )}
+                    {empty && (
+                      <span className="text-[9px] text-white/30">—</span>
+                    )}
+                  </motion.button>
+                );
+              })}
+            </div>
+          </motion.div>
+        ) : (
+          <motion.div
+            key="neighborhoods"
+            initial={{ opacity: 0, y: 4 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -4 }}
+            transition={{ duration: 0.18 }}
+          >
+            <div className="mb-1.5 flex items-center justify-between px-1">
+              <button
+                type="button"
+                onClick={() => setSelectedRegion(null)}
+                className="inline-flex items-center gap-1 font-mono text-[10px] uppercase tracking-[0.25em] text-sky-300/80 transition-colors hover:text-sky-200"
+              >
+                <ArrowLeft className="h-3 w-3" />
+                Back
+              </button>
+              <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-white/50">
+                {regions.find((r) => r.direction === selectedRegion)?.label}
+                <span className="ml-1.5 text-white/30">
+                  · {zonesInRegion.length}
+                </span>
+              </span>
+            </div>
+            <NeighborhoodChipRow
+              items={zonesInRegion}
+              onPick={handleNeighborhoodPick}
+              disabled={disabled}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function NeighborhoodChipRow({
+  items,
+  onPick,
+  disabled,
+}: {
+  items: Neighborhood[];
+  onPick: (n: Neighborhood) => void;
+  disabled?: boolean;
+}) {
+  if (items.length === 0) {
+    return (
+      <p className="px-1 text-[11px] text-white/40">
+        No strongly-tagged neighborhoods found here.
+      </p>
+    );
+  }
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      <AnimatePresence>
+        {items.map((n, i) => {
+          const isPremium = n.level === 'premium' || n.level === 'commercial';
+          return (
+            <motion.button
+              key={n.label + n.latitude + n.longitude}
+              type="button"
+              onClick={() => onPick(n)}
+              disabled={disabled}
+              initial={{ opacity: 0, y: 4 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -4 }}
+              transition={{ delay: i * 0.04, duration: 0.2, ease: 'easeOut' }}
+              className={`group relative inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
+                isPremium
+                  ? 'border-sky-400/35 bg-sky-500/10 text-sky-200/90 hover:border-sky-400/60 hover:bg-sky-500/15'
+                  : 'border-white/10 bg-white/[0.04] text-white/70 hover:border-white/25 hover:bg-white/[0.08] hover:text-white'
+              }`}
+            >
+              <MapPin className="h-3 w-3 opacity-70 group-hover:opacity-100" />
+              <span className="font-medium">{n.label}</span>
+              <span className="font-mono text-[10px] text-white/35">
+                {n.score}
+              </span>
+            </motion.button>
+          );
+        })}
+      </AnimatePresence>
+    </div>
+  );
+}

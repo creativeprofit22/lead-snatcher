@@ -672,6 +672,38 @@ body {
   will-change: filter;
 }
 
+/* Home screen mesh gradient — layered radial gradients at low alpha that
+ * slowly drift via a GPU-accelerated transform. No JS loop, no blur filter
+ * applied here (those land on the backdrop-blur panels above), so this is
+ * effectively free at runtime. Sits at z-0 behind all content. */
+.mesh-bg {
+  position: fixed;
+  inset: -10%;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(at 18% 22%, rgba(56, 189, 248, 0.14), transparent 42%),
+    radial-gradient(at 82% 28%, rgba(253, 186, 116, 0.09), transparent 40%),
+    radial-gradient(at 72% 78%, rgba(167, 139, 250, 0.08), transparent 42%),
+    radial-gradient(at 25% 80%, rgba(52, 211, 153, 0.07), transparent 45%);
+  animation: mesh-drift 26s ease-in-out infinite alternate;
+  will-change: transform;
+  transform-origin: 50% 50%;
+  backface-visibility: hidden;
+}
+
+@keyframes mesh-drift {
+  0% {
+    transform: translate3d(-1%, -1%, 0) scale(1);
+  }
+  50% {
+    transform: translate3d(1%, 0.5%, 0) scale(1.04);
+  }
+  100% {
+    transform: translate3d(-0.5%, 1%, 0) scale(1.02);
+  }
+}
+
 /* Radar pin ping — one-shot on mount via class. Pin only mounts
  * when the sweep's leading edge has crossed its angle. */
 @keyframes radar-pin-ripple {

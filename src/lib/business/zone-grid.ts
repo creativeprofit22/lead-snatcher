@@ -21,7 +21,9 @@ const OVERPASS_MIRRORS = [
   'https://overpass.kumi.systems/api/interpreter',
 ] as const;
 
-const PREMIUM_AMENITIES = [
+// Amenity tags we keep querying for UI display (ring icons on area meter)
+// + the ones that still feed the scoring as secondary signals.
+const AMENITY_TAGS = [
   'bank',
   'atm',
   'hotel',
@@ -30,11 +32,43 @@ const PREMIUM_AMENITIES = [
   'supermarket',
   'fuel',
   'car_rental',
+  'gym',
+  'spa',
+  'cinema',
+  'theatre',
+  'casino',
+  // Negative signals — poverty / distress indicators
+  'pawnshop',
+  'money_lender',
+  'social_facility',
 ] as const;
 
-const AFFLUENCE_AMENITIES = ['gym', 'spa', 'cinema', 'theatre'] as const;
+// HIGH-signal wealth tags (shop=*) — luxury specialty retail. Strongest
+// single wealth signal per the 2026 research brief.
+const LUXURY_SHOP_TAGS = [
+  'jewelry',
+  'watches',
+  'boutique',
+  'art',
+  'antiques',
+  'wine',
+  'gallery',
+] as const;
 
-const ALL_AMENITIES = [...PREMIUM_AMENITIES, ...AFFLUENCE_AMENITIES];
+// Negative-signal shop tags — poverty / distress-economy indicators.
+const NEGATIVE_SHOP_TAGS = ['pawnbroker', 'charity', 'second_hand'] as const;
+
+// HIGH-signal professional services. Financial + legal clustering sits
+// in the highest-rent zones almost by definition.
+const PROFESSIONAL_OFFICE_TAGS = [
+  'financial',
+  'financial_advisor',
+  'lawyer',
+  'accountant',
+  'insurance',
+  'notary',
+  'tax_advisor',
+] as const;
 
 const ZONE_RADIUS_METERS = 1500;
 const GRID_SIZE = 3; // 3x3
@@ -51,6 +85,25 @@ const SMALL_CITY_DIAGONAL_KM = 4; // below this, skip grid and return single zon
 const OVERPASS_SERVER_TIMEOUT_S = 20;
 const OVERPASS_CLIENT_TIMEOUT_MS = 12000;
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+// Bump when the scoring formula or queried tag set changes. Old cached
+// results remain in the store under the previous key and will expire
+// naturally, but new callers get fresh data under the new version.
+const CACHE_SCHEMA_VERSION = 'v6-wider-cap';
+
+// Place-based scanning: use OSM named places (Mayfair, Canary Wharf, etc.)
+// as zone centers instead of a 3×3 grid. If we find at least this many
+// places in the bbox, scan at them. Below that, fall back to the grid so
+// sparsely-tagged cities still get some coverage.
+const PLACE_SCAN_MIN_PLACES = 4;
+// Two places centroid-to-centroid closer than this get merged (keep the
+// higher-scoring one) — the 1.5km scan radius would otherwise produce
+// near-duplicate zones for adjacent OSM places.
+const PLACE_DEDUPE_METERS = 700;
+// Cap on returned zones from place-based scan. The chip route slices to 6
+// anyway, but the results-view zone strip shows all of these — 25 gives
+// headroom so a far-out-but-genuine wealth zone (Canary Wharf in London,
+// Omotesando in Tokyo) doesn't get cut at the top-15 boundary.
+const PLACE_MAX_ZONES = 25;
 // Short TTL for soft-failed lookups (Overpass down). Prevents thrash on
 // every autocomplete keystroke while still letting the user retry soon.
 const FAILURE_CACHE_TTL_MS = 60 * 1000;
@@ -58,6 +111,8 @@ const FAILURE_CACHE_TTL_MS = 60 * 1000;
 export type ZoneLevel = 'premium' | 'commercial' | 'moderate' | 'developing';
 
 export interface ZoneAmenities {
+  // Legacy buckets — kept for UI continuity (AreaDensityMeter rim icons,
+  // describe-zone text, cached payloads from before v2-wealth).
   banks: number;
   hotels: number;
   hospitals: number;
@@ -66,6 +121,23 @@ export interface ZoneAmenities {
   fuelStations: number;
   affluenceSpots: number;
   total: number;
+
+  // v2-wealth buckets — the ones that actually drive scoring now.
+  // Optional so pre-v2 cached payloads still typecheck after deserialization;
+  // scoreCounts treats `undefined` as 0.
+  /** shop=jewelry|watches|boutique|art|antiques|wine|gallery */
+  luxuryRetail?: number;
+  /** office=financial|lawyer|accountant|insurance|notary|... */
+  professionalServices?: number;
+  /** tourism=hotel with stars>=4 (subset of `hotels`) */
+  premiumHotels?: number;
+  /** amenity=casino (tracked separately from gym/spa bucket for weighting) */
+  casinos?: number;
+  /** Negative signals — poverty indicators that deduct from score */
+  pawnshops?: number;
+  moneyLenders?: number;
+  socialFacilities?: number;
+  charityShops?: number;
 }
 
 export interface Zone {
@@ -115,7 +187,7 @@ const zoneGridCache = new Map<string, CacheEntry>();
 const inFlight = new Map<string, Promise<ZoneGridResult>>();
 
 function cacheKey(city: string, country: string): string {
-  return `${country.toLowerCase()}|${city.trim().toLowerCase()}`;
+  return `${CACHE_SCHEMA_VERSION}|${country.toLowerCase()}|${city.trim().toLowerCase()}`;
 }
 
 // ---------- geo helpers ----------
@@ -201,19 +273,74 @@ function directionalLabel(row: number, col: number): string {
 
 // ---------- scoring ----------
 
+/**
+ * Log-cap a raw count. log10(n+1) * 3 gives a soft ramp that rewards
+ * density without letting a single mega-cluster dominate:
+ *   n=1   → 0.90
+ *   n=5   → 2.33
+ *   n=10  → 3.13
+ *   n=25  → 4.24
+ *   n=50  → 5.11
+ *   n=100 → 6.03
+ *   n=500 → 8.07 (hits default cap)
+ *
+ * Default cap of 8 is deliberately loose — mid-tier zones need room to
+ * separate from Central London / Times Square / Ginza extremes. Tight
+ * caps (3-5) earlier produced the "everything scores 100" bug because
+ * every dense zone saturated every signal.
+ */
+function logCap(count: number | undefined, cap = 8): number {
+  if (!count || count <= 0) return 0;
+  return Math.min(cap, Math.log10(count + 1) * 3);
+}
+
+/**
+ * v4-spread scoring — derived from 2026 global research brief (see
+ * Downloads/LEAD_SNATCHER_AREA_SCORING_RESEARCH.md) and tuned against
+ * real London chip output to produce meaningful 0-100 spread.
+ *
+ * Weights are calibrated so a world-class premium zone (City of London,
+ * Ginza) hits ~90-100, a premium-but-not-apex zone (Mayfair, Soho)
+ * lands ~70-85, mid-commercial zones ~40-60, and suburban/developing
+ * zones ~15-35. Rural/poverty zones clamp at 0.
+ *
+ * Hospitals, pharmacies, supermarkets, fuel — zero weight. They anchor
+ * low-income zones as often as wealthy ones and inverted the score in
+ * emerging markets under earlier weights. (Research Part 1.)
+ */
 function scoreCounts(counts: ZoneAmenities): number {
-  return Math.min(
-    100,
-    Math.round(
-      counts.banks * 6 +
-        counts.hotels * 5 +
-        counts.hospitals * 8 +
-        counts.pharmacies * 3 +
-        counts.supermarkets * 2 +
-        counts.fuelStations * 2 +
-        counts.affluenceSpots * 4
-    )
-  );
+  const luxury = logCap(counts.luxuryRetail);
+  const prof = logCap(counts.professionalServices);
+  const premiumHotel = logCap(counts.premiumHotels);
+  const casino = logCap(counts.casinos);
+  const banks = logCap(counts.banks);
+  const affluence = logCap(counts.affluenceSpots);
+  const genericHotel = logCap(counts.hotels);
+
+  // Negative-signal caps kept tighter — we want a handful of pawnshops
+  // to ding the score decisively, not slowly ramp up.
+  const pawnshops = logCap(counts.pawnshops, 3);
+  const moneyLenders = logCap(counts.moneyLenders, 3);
+  const socialFacilities = logCap(counts.socialFacilities, 3);
+  const charityShops = logCap(counts.charityShops, 3);
+
+  const raw =
+    // HIGH signals — strong wealth indicators
+    5 * luxury +
+    4 * prof +
+    3 * premiumHotel +
+    // MED signals — weaker correlation, still positive
+    2 * banks +
+    1.5 * casino +
+    2 * affluence +
+    1.5 * genericHotel +
+    // Negative signals — poverty / distress indicators
+    -6 * pawnshops +
+    -4 * moneyLenders +
+    -4 * socialFacilities +
+    -2 * charityShops;
+
+  return Math.max(0, Math.min(100, Math.round(raw)));
 }
 
 function levelForScore(score: number): ZoneLevel {
@@ -233,6 +360,14 @@ function emptyCounts(): ZoneAmenities {
     fuelStations: 0,
     affluenceSpots: 0,
     total: 0,
+    luxuryRetail: 0,
+    professionalServices: 0,
+    premiumHotels: 0,
+    casinos: 0,
+    pawnshops: 0,
+    moneyLenders: 0,
+    socialFacilities: 0,
+    charityShops: 0,
   };
 }
 
@@ -244,8 +379,15 @@ async function fetchOverpassForBbox(
 ): Promise<OverpassElement[]> {
   const [south, north, west, east] = bbox;
   const bboxClause = `${south},${west},${north},${east}`;
-  const amenityRegex = ALL_AMENITIES.join('|');
+  const amenityRegex = AMENITY_TAGS.join('|');
+  const luxuryShopRegex = LUXURY_SHOP_TAGS.join('|');
+  const negativeShopRegex = NEGATIVE_SHOP_TAGS.join('|');
+  const officeRegex = PROFESSIONAL_OFFICE_TAGS.join('|');
 
+  // v2-wealth query: original amenity set + shop=jewelry/watches/etc.
+  // + office=financial/lawyer/etc. + shop=pawnbroker/charity (negatives).
+  // Heavier than v1 but still a single batched Overpass call so cost is
+  // the same round-trip + marginally bigger payload.
   const query = `
     [out:json][timeout:${OVERPASS_SERVER_TIMEOUT_S}];
     (
@@ -253,7 +395,15 @@ async function fetchOverpassForBbox(
       way["amenity"~"^(${amenityRegex})$"](${bboxClause});
       node["tourism"="hotel"](${bboxClause});
       way["tourism"="hotel"](${bboxClause});
-      node["place"~"^(suburb|neighbourhood|quarter|city_district|borough)$"](${bboxClause});
+      node["shop"~"^(${luxuryShopRegex})$"](${bboxClause});
+      way["shop"~"^(${luxuryShopRegex})$"](${bboxClause});
+      node["shop"~"^(${negativeShopRegex})$"](${bboxClause});
+      way["shop"~"^(${negativeShopRegex})$"](${bboxClause});
+      node["office"~"^(${officeRegex})$"](${bboxClause});
+      way["office"~"^(${officeRegex})$"](${bboxClause});
+      node["place"~"^(suburb|neighbourhood|quarter|city_district|borough|locality)$"](${bboxClause});
+      way["place"~"^(suburb|neighbourhood|quarter|city_district|borough|locality)$"](${bboxClause});
+      relation["place"~"^(suburb|neighbourhood|quarter|city_district|borough|locality)$"](${bboxClause});
     );
     out center tags;
   `;
@@ -370,11 +520,26 @@ function formatUserSearchLabel(raw: string): string | null {
     .join(' ');
 }
 
+type AmenityKey = keyof Omit<ZoneAmenities, 'total'>;
+
+/**
+ * Parse the `stars` tag (OSM values range from "0" / "0S" to "5S"). A 4+
+ * rating promotes the hotel from the generic bucket to the premium bucket
+ * — matches the 2026 research weighting (premium hotels = C-suite spend).
+ */
+function isPremiumHotel(tags: Record<string, string>): boolean {
+  const stars = tags.stars?.trim();
+  if (!stars) return false;
+  const first = stars[0];
+  const n = parseInt(first, 10);
+  return Number.isFinite(n) && n >= 4;
+}
+
 function splitElements(elements: OverpassElement[]): {
-  amenities: { lat: number; lon: number; key: string }[];
+  amenities: { lat: number; lon: number; key: AmenityKey }[];
   places: NamedPlace[];
 } {
-  const amenities: { lat: number; lon: number; key: string }[] = [];
+  const amenities: { lat: number; lon: number; key: AmenityKey }[] = [];
   const places: NamedPlace[] = [];
 
   for (const el of elements) {
@@ -394,16 +559,83 @@ function splitElements(elements: OverpassElement[]): {
 
     const amenity = tags.amenity ?? '';
     const tourism = tags.tourism ?? '';
+    const shop = tags.shop ?? '';
+    const office = tags.office ?? '';
 
-    if (amenity === 'bank' || amenity === 'atm') amenities.push({ lat, lon, key: 'banks' });
-    else if (amenity === 'hotel' || tourism === 'hotel') amenities.push({ lat, lon, key: 'hotels' });
-    else if (amenity === 'hospital') amenities.push({ lat, lon, key: 'hospitals' });
-    else if (amenity === 'pharmacy') amenities.push({ lat, lon, key: 'pharmacies' });
-    else if (amenity === 'supermarket') amenities.push({ lat, lon, key: 'supermarkets' });
-    else if (amenity === 'fuel' || amenity === 'car_rental')
+    // Luxury retail — strongest single wealth signal
+    if (
+      shop === 'jewelry' ||
+      shop === 'watches' ||
+      shop === 'boutique' ||
+      shop === 'art' ||
+      shop === 'antiques' ||
+      shop === 'wine' ||
+      shop === 'gallery'
+    ) {
+      amenities.push({ lat, lon, key: 'luxuryRetail' });
+      continue;
+    }
+
+    // Professional services offices
+    if (
+      office === 'financial' ||
+      office === 'financial_advisor' ||
+      office === 'lawyer' ||
+      office === 'accountant' ||
+      office === 'insurance' ||
+      office === 'notary' ||
+      office === 'tax_advisor'
+    ) {
+      amenities.push({ lat, lon, key: 'professionalServices' });
+      continue;
+    }
+
+    // Negative shop signals
+    if (shop === 'pawnbroker') {
+      amenities.push({ lat, lon, key: 'pawnshops' });
+      continue;
+    }
+    if (shop === 'charity' || shop === 'second_hand') {
+      amenities.push({ lat, lon, key: 'charityShops' });
+      continue;
+    }
+
+    // Hotels — split into premium vs generic based on stars
+    if (amenity === 'hotel' || tourism === 'hotel') {
+      amenities.push({ lat, lon, key: 'hotels' });
+      if (isPremiumHotel(tags)) {
+        amenities.push({ lat, lon, key: 'premiumHotels' });
+      }
+      continue;
+    }
+
+    // Amenity bucketing
+    if (amenity === 'bank' || amenity === 'atm') {
+      amenities.push({ lat, lon, key: 'banks' });
+    } else if (amenity === 'hospital') {
+      amenities.push({ lat, lon, key: 'hospitals' });
+    } else if (amenity === 'pharmacy') {
+      amenities.push({ lat, lon, key: 'pharmacies' });
+    } else if (amenity === 'supermarket') {
+      amenities.push({ lat, lon, key: 'supermarkets' });
+    } else if (amenity === 'fuel' || amenity === 'car_rental') {
       amenities.push({ lat, lon, key: 'fuelStations' });
-    else if (['gym', 'spa', 'cinema', 'theatre'].includes(amenity))
+    } else if (amenity === 'casino') {
+      amenities.push({ lat, lon, key: 'casinos' });
+    } else if (amenity === 'pawnshop') {
+      amenities.push({ lat, lon, key: 'pawnshops' });
+    } else if (amenity === 'money_lender') {
+      amenities.push({ lat, lon, key: 'moneyLenders' });
+    } else if (amenity === 'social_facility') {
+      amenities.push({ lat, lon, key: 'socialFacilities' });
+    } else if (
+      amenity === 'gym' ||
+      amenity === 'spa' ||
+      amenity === 'cinema' ||
+      amenity === 'theatre'
+    ) {
       amenities.push({ lat, lon, key: 'affluenceSpots' });
+    }
   }
 
   return { amenities, places };
@@ -425,6 +657,83 @@ function nearestPlaceName(
     }
   }
   return best && bestDist <= maxMeters ? best.name : null;
+}
+
+/** Normalize a place/user label for case/punctuation-tolerant matching. */
+function normalizeLabel(raw: string): string {
+  return raw
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '') // strip diacritics
+    .replace(/['’`.,]/g, '') // strip apostrophes/commas/periods
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Build zones centered on the actual OSM named places in the bbox,
+ * rather than a fixed 3×3 geometric grid. This surfaces real wealth
+ * neighborhoods (Mayfair, Canary Wharf, Knightsbridge) as chip options
+ * instead of whatever happened to sit closest to a grid corner.
+ *
+ * Dedupes overlapping places (within PLACE_DEDUPE_METERS keep higher
+ * score) and caps at PLACE_MAX_ZONES. Returns [] if there aren't enough
+ * places in the bbox — caller should fall back to grid scanning.
+ */
+function buildPlaceBasedZones(
+  amenities: { lat: number; lon: number; key: AmenityKey }[],
+  places: NamedPlace[],
+  centerLat: number,
+  centerLon: number
+): Zone[] {
+  if (places.length < PLACE_SCAN_MIN_PLACES) return [];
+
+  // First: score every place.
+  const scored = places.map((p, i): Zone => {
+    const counts = emptyCounts();
+    for (const a of amenities) {
+      const d = haversineMeters(p.lat, p.lon, a.lat, a.lon);
+      if (d <= ZONE_RADIUS_METERS) {
+        counts[a.key] = (counts[a.key] ?? 0) + 1;
+        counts.total++;
+      }
+    }
+    const score = scoreCounts(counts);
+    return {
+      id: `place-${i}`,
+      label: p.name,
+      latitude: p.lat,
+      longitude: p.lon,
+      score,
+      level: levelForScore(score),
+      amenities: counts,
+      radiusMeters: ZONE_RADIUS_METERS,
+      distanceFromCenterMeters: haversineMeters(
+        centerLat,
+        centerLon,
+        p.lat,
+        p.lon
+      ),
+    };
+  });
+
+  // Dedupe: process highest-scoring first, skip anything within
+  // PLACE_DEDUPE_METERS of an already-kept zone. This lets the top
+  // "Mayfair" at score 92 suppress a nearby "Fitzrovia" at score 68
+  // that's really covering the same amenities.
+  scored.sort((a, b) => b.score - a.score);
+  const kept: Zone[] = [];
+  for (const z of scored) {
+    if (z.score <= 0) continue;
+    const tooClose = kept.some(
+      (k) =>
+        haversineMeters(z.latitude, z.longitude, k.latitude, k.longitude) <
+        PLACE_DEDUPE_METERS
+    );
+    if (!tooClose) kept.push(z);
+    if (kept.length >= PLACE_MAX_ZONES) break;
+  }
+  return kept;
 }
 
 // ---------- single-zone fallback ----------
@@ -449,7 +758,7 @@ async function buildSingleZone(
   for (const a of amenities) {
     const d = haversineMeters(centerLat, centerLon, a.lat, a.lon);
     if (d <= ZONE_RADIUS_METERS) {
-      counts[a.key as keyof Omit<ZoneAmenities, 'total'>]++;
+      counts[a.key] = (counts[a.key] ?? 0) + 1;
       counts.total++;
     }
   }
@@ -568,7 +877,6 @@ export async function scanCityZones(
     }
 
     const clamped = clampBbox(workingBbox, centerLat, centerLon);
-    const gridPoints = generateGridPoints(clamped);
 
     const elements = await fetchOverpassForBbox(clamped);
     if (elements.length === 0) {
@@ -585,54 +893,82 @@ export async function scanCityZones(
 
     const { amenities, places } = splitElements(elements);
 
-    // For each grid point, tally amenities within ZONE_RADIUS_METERS
-    const zones: Zone[] = gridPoints.map((gp, i) => {
-      const counts = emptyCounts();
-      for (const a of amenities) {
-        const d = haversineMeters(gp.lat, gp.lon, a.lat, a.lon);
-        if (d <= ZONE_RADIUS_METERS) {
-          counts[a.key as keyof Omit<ZoneAmenities, 'total'>]++;
-          counts.total++;
+    // Prefer place-based scanning — scan AT named OSM places (Mayfair,
+    // Canary Wharf, Ginza, Polanco, etc.) rather than at fixed grid
+    // corners. Falls back to the geometric grid when there aren't enough
+    // named places (sparsely-tagged cities / rural bboxes).
+    let zones = buildPlaceBasedZones(amenities, places, centerLat, centerLon);
+
+    if (zones.length < PLACE_SCAN_MIN_PLACES) {
+      // Fallback: fixed 3×3 grid, label each point with the nearest place
+      // name. Keeps old behaviour for cities where OSM places are sparse.
+      const gridPoints = generateGridPoints(clamped);
+      zones = gridPoints.map((gp, i) => {
+        const counts = emptyCounts();
+        for (const a of amenities) {
+          const d = haversineMeters(gp.lat, gp.lon, a.lat, a.lon);
+          if (d <= ZONE_RADIUS_METERS) {
+            counts[a.key] = (counts[a.key] ?? 0) + 1;
+            counts.total++;
+          }
+        }
+        const score = scoreCounts(counts);
+        const nearName = nearestPlaceName(
+          gp.lat,
+          gp.lon,
+          places,
+          ZONE_RADIUS_METERS
+        );
+        return {
+          id: `zone-${i}`,
+          label: nearName ?? directionalLabel(gp.row, gp.col),
+          latitude: gp.lat,
+          longitude: gp.lon,
+          score,
+          level: levelForScore(score),
+          amenities: counts,
+          radiusMeters: ZONE_RADIUS_METERS,
+          distanceFromCenterMeters: haversineMeters(
+            centerLat,
+            centerLon,
+            gp.lat,
+            gp.lon
+          ),
+        };
+      });
+    }
+
+    // User-label override — if the user typed a specific neighborhood,
+    // honor it. Three cases, in priority order:
+    //   1. A place-based zone already matches the label (modulo case /
+    //      apostrophes) → rename to canonical form so downstream lookups
+    //      by label find it.
+    //   2. The search center sits close enough to a place to be "about"
+    //      it → rename the nearest zone.
+    //   3. No match → splice in a synthetic zone at the search center so
+    //      the user always sees what they searched for represented.
+    if (userSearchLabel) {
+      const normalizedUser = normalizeLabel(userSearchLabel);
+      const matchIdx = zones.findIndex(
+        (z) => normalizeLabel(z.label) === normalizedUser
+      );
+      if (matchIdx >= 0) {
+        zones[matchIdx] = { ...zones[matchIdx], label: userSearchLabel };
+      } else if (zones.length > 0) {
+        let nearestIdx = 0;
+        let nearestDist = Infinity;
+        zones.forEach((z, i) => {
+          if (z.distanceFromCenterMeters < nearestDist) {
+            nearestDist = z.distanceFromCenterMeters;
+            nearestIdx = i;
+          }
+        });
+        // Only repurpose a nearby zone if it's genuinely close — otherwise
+        // we'd be rebranding a far-off zone with the user's label.
+        if (nearestDist <= ZONE_RADIUS_METERS) {
+          zones[nearestIdx] = { ...zones[nearestIdx], label: userSearchLabel };
         }
       }
-      const score = scoreCounts(counts);
-      const nearName = nearestPlaceName(
-        gp.lat,
-        gp.lon,
-        places,
-        ZONE_RADIUS_METERS
-      );
-      return {
-        id: `zone-${i}`,
-        label: nearName ?? directionalLabel(gp.row, gp.col),
-        latitude: gp.lat,
-        longitude: gp.lon,
-        score,
-        level: levelForScore(score),
-        amenities: counts,
-        radiusMeters: ZONE_RADIUS_METERS,
-        distanceFromCenterMeters: haversineMeters(
-          centerLat,
-          centerLon,
-          gp.lat,
-          gp.lon
-        ),
-      };
-    });
-
-    // Override the zone nearest to the search center with the user's typed
-    // search term. Whatever they queried should show up in their results,
-    // not an adjacent OSM place name that happened to be slightly closer.
-    if (userSearchLabel && zones.length > 0) {
-      let nearestIdx = 0;
-      let nearestDist = Infinity;
-      zones.forEach((z, i) => {
-        if (z.distanceFromCenterMeters < nearestDist) {
-          nearestDist = z.distanceFromCenterMeters;
-          nearestIdx = i;
-        }
-      });
-      zones[nearestIdx] = { ...zones[nearestIdx], label: userSearchLabel };
     }
 
     zones.sort((a, b) => b.score - a.score);

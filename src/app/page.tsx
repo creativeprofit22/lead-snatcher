@@ -18,6 +18,7 @@ import {
   ChevronDown,
   ChevronUp,
   Flame,
+  Gauge,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { AnimatePresence, motion } from 'motion/react';
@@ -29,6 +30,10 @@ import {
   AreaDensityMeter,
   ZoneChipsStrip,
   ResumeSearchCard,
+  ActivityTicker,
+  IdleScoreDial,
+  SaveSessionButton,
+  SavedSessionsPanel,
 } from '@/components/search';
 import { PreLoader } from '@/components/preloader';
 import { SlidingNumber } from '@/components/motion-primitives/sliding-number';
@@ -53,6 +58,7 @@ import {
   saveLastSearch,
   getLastSearch,
   updateLastSearchEnrichment,
+  type CachedSearch,
 } from '@/lib/search-cache';
 import { INDUSTRY_TYPES } from '@/lib/constants';
 import type { IndustryType, BusinessSearchResult } from '@/types';
@@ -63,6 +69,36 @@ type SortOption = 'fit' | 'score' | 'contactPoints' | 'reviews' | 'rating';
 type RadarPhase = 'off' | 'scanning' | 'revealing';
 
 const MIN_SCAN_DURATION_MS = 900;
+
+/**
+ * Client-side mirror of `formatUserSearchLabel` in zone-grid.ts — used to find
+ * the zone that got the user's label override on the server so we can focus it
+ * by default (instead of blindly focusing the top-density zone, which can land
+ * the user on an adjacent neighborhood they didn't search for).
+ *
+ * Keep this in sync with the server helper if either ever changes.
+ */
+function formatUserSearchLabel(raw: string): string | null {
+  const firstSegment = raw.split(',')[0]?.trim();
+  if (!firstSegment) return null;
+  const cleaned = firstSegment.replace(/\s+[A-Za-z]{2}$/, '').trim();
+  const source = cleaned || firstSegment;
+  return source
+    .split(/\s+/)
+    .map((w) => (w.length > 0 ? w[0].toUpperCase() + w.slice(1).toLowerCase() : w))
+    .join(' ');
+}
+
+/** Pick the zone the user actually asked about; fall back to top-density. */
+function pickFocusedZoneId(zones: Zone[], rawCity: string): string | null {
+  if (zones.length === 0) return null;
+  const label = formatUserSearchLabel(rawCity);
+  if (label) {
+    const match = zones.find((z) => z.label === label);
+    if (match) return match.id;
+  }
+  return zones[0]?.id ?? null;
+}
 
 export default function Home() {
   return (
@@ -79,6 +115,7 @@ function HomeInner() {
 
   // Search state
   const [selectedIndustry, setSelectedIndustry] = useState<IndustryType | null>(null);
+  const [customIndustry, setCustomIndustry] = useState('');
   const [city, setCity] = useState('');
   const [country, setCountry] = useState('us');
   const [isSearching, setIsSearching] = useState(false);
@@ -119,29 +156,27 @@ function HomeInner() {
   const [filterHasAds, setFilterHasAds] = useState(false);
   const [filterMinBudget, setFilterMinBudget] = useState(0);
 
-  // Restore cached search on mount — survives tab-switches and
-  // crm-and-back navigation as long as the cache is fresh (2h TTL).
-  // The old URL gate (`?view=results`) meant navigating via the Home
-  // link wiped results; dropping it so the user always picks up where
-  // they left off.
+  // On mount, surface any localStorage-cached search as a dismissible
+  // resume card on the home screen — NO longer auto-redirects to the
+  // results view. The user always lands on a clean home and opts in via
+  // the card. Dismissing the card hides it for the current browser tab
+  // via sessionStorage (survives refresh, clears on tab close) but does
+  // NOT destroy the cache, so closing for a recording take and coming
+  // back later keeps the session intact.
   useEffect(() => {
     const cached = getLastSearch();
     if (!cached) return;
-    setSearchResults(cached.results);
-    setSelectedIndustry(cached.industry);
-    setCity(cached.city);
-    setCountry(cached.country);
-    if (cached.zones) setZones(cached.zones);
-    if (cached.zoneBbox !== undefined) setZoneBbox(cached.zoneBbox);
-    if (typeof cached.singleZone === 'boolean') setSingleZone(cached.singleZone);
-    if (cached.focusedZoneId !== undefined) setFocusedZoneId(cached.focusedZoneId);
-    if (cached.marketDensity !== undefined) setMarketDensity(cached.marketDensity);
-    hydrateEnrichment(cached.enrichStatusMap, cached.enrichResultMap);
-    if (cached.selectedForEnrich?.length) {
-      setSelectedForEnrich(new Set(cached.selectedForEnrich));
-    }
-    setViewMode('results');
+    // Returning users (those who have cache) skip the preloader cinematic —
+    // preserves the original "don't make me watch this twice" behavior.
     setShowPreLoader(false);
+    setResumeCard({
+      industry: cached.industry,
+      city: cached.city,
+      country: cached.country,
+      resultCount: cached.results.length,
+      updatedAt: new Date(cached.timestamp).toISOString(),
+      payload: cached,
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -158,7 +193,10 @@ function HomeInner() {
     updatedAt: string;
     payload: Parameters<typeof saveLastSearch>[0];
   } | null>(null);
-  const [resumeDismissed, setResumeDismissed] = useState(false);
+  const [resumeDismissed, setResumeDismissed] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return sessionStorage.getItem('lead-snatcher-resume-dismissed') === '1';
+  });
 
   // Persistent search error — shown above the results list when a sweep
   // fails or times out. Companion to the transient toast; this stays
@@ -209,10 +247,9 @@ function HomeInner() {
     };
   }, [viewMode]);
 
-  const handleResumeLastSearch = () => {
-    if (!resumeCard) return;
-    const p = resumeCard.payload;
-    saveLastSearch(p); // mirror into localStorage for instant future restores
+  const hydrateResultsFromPayload = (
+    p: Partial<CachedSearch> & Pick<CachedSearch, 'results' | 'industry' | 'city' | 'country'>
+  ) => {
     setSearchResults(p.results);
     setSelectedIndustry(p.industry);
     setCity(p.city);
@@ -222,17 +259,43 @@ function HomeInner() {
     if (typeof p.singleZone === 'boolean') setSingleZone(p.singleZone);
     if (p.focusedZoneId !== undefined) setFocusedZoneId(p.focusedZoneId);
     if (p.marketDensity !== undefined) setMarketDensity(p.marketDensity);
+    if (p.enrichStatusMap || p.enrichResultMap) {
+      hydrateEnrichment(p.enrichStatusMap, p.enrichResultMap);
+    }
+    if (p.selectedForEnrich?.length) {
+      setSelectedForEnrich(new Set(p.selectedForEnrich));
+    }
+  };
+
+  const handleResumeLastSearch = () => {
+    if (!resumeCard) return;
+    const p = resumeCard.payload;
+    saveLastSearch(p); // mirror into localStorage for instant future restores
+    hydrateResultsFromPayload(p);
+    setViewMode('results');
+    setResumeCard(null);
+  };
+
+  const handleLoadSavedSession = (
+    p: Omit<CachedSearch, 'enrichStatusMap' | 'enrichResultMap' | 'selectedForEnrich'>
+  ) => {
+    // Mirror into localStorage so CRM-and-back / refreshes hold the
+    // loaded session in place the same way a fresh sweep would.
+    saveLastSearch(p);
+    hydrateResultsFromPayload(p);
     setViewMode('results');
     setResumeCard(null);
   };
 
   const handleDismissResume = () => {
+    // Hide for the current browser tab (persists across refresh, clears on
+    // tab close) WITHOUT destroying the cache. Matt can dismiss for a
+    // recording take and the next work session still finds the card.
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem('lead-snatcher-resume-dismissed', '1');
+    }
     setResumeDismissed(true);
     setResumeCard(null);
-    // Fire-and-forget — nothing to show the user if the delete fails.
-    void fetch('/api/business/last-search', { method: 'DELETE' }).catch(
-      () => {}
-    );
   };
 
   // Count-up for "N businesses found"
@@ -301,7 +364,8 @@ function HomeInner() {
 
   // Search businesses
   const handleSearch = async () => {
-    if (!selectedIndustry || !city.trim() || isSearching) return;
+    const effectiveIndustry = customIndustry.trim() || selectedIndustry;
+    if (!effectiveIndustry || !city.trim() || isSearching) return;
 
     const scanStart = Date.now();
     setIsSearching(true);
@@ -319,7 +383,7 @@ function HomeInner() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          businessType: selectedIndustry,
+          businessType: effectiveIndustry,
           city: city.trim(),
           country,
           limit: 50,
@@ -353,20 +417,23 @@ function HomeInner() {
       setZones(nextZones);
       setZoneBbox(Array.isArray(data.zoneBbox) ? data.zoneBbox : null);
       setSingleZone(Boolean(data.singleZone));
-      // First search — focus the top-scoring zone by default
-      setFocusedZoneId(nextZones[0]?.id ?? null);
+      // Focus the zone matching the user's typed target (e.g. "Shepherds Bush")
+      // over the raw top-density winner (which could be an adjacent neighborhood).
+      // Falls back to nextZones[0] if the user didn't refine or their label
+      // didn't survive to the zones list.
+      setFocusedZoneId(pickFocusedZoneId(nextZones, city.trim()));
       setRadarPhase('revealing');
 
       if (data.results?.length > 0) {
         const cachePayload = {
           results: data.results,
-          industry: selectedIndustry,
+          industry: (selectedIndustry ?? 'other') as IndustryType,
           city: city.trim(),
           country,
           zones: nextZones,
           zoneBbox: Array.isArray(data.zoneBbox) ? data.zoneBbox : null,
           singleZone: Boolean(data.singleZone),
-          focusedZoneId: nextZones[0]?.id ?? null,
+          focusedZoneId: pickFocusedZoneId(nextZones, city.trim()),
           marketDensity: data.marketDensity || null,
         };
         saveLastSearch(cachePayload);
@@ -549,7 +616,8 @@ function HomeInner() {
   // Tap-to-rescan a different zone without leaving the results page.
   // Reuses zones from the initial scan; only the Maps search + density update.
   const handleZoneSwitch = async (zone: Zone) => {
-    if (!selectedIndustry || rescanningZoneId) return;
+    const effectiveIndustry = customIndustry.trim() || selectedIndustry;
+    if (!effectiveIndustry || rescanningZoneId) return;
     if (focusedZoneId === zone.id) return;
 
     setRescanningZoneId(zone.id);
@@ -558,7 +626,7 @@ function HomeInner() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          businessType: selectedIndustry,
+          businessType: effectiveIndustry,
           city: city.trim(),
           country,
           limit: 50,
@@ -586,7 +654,7 @@ function HomeInner() {
       }
       const zoneCachePayload = {
         results: data.results || [],
-        industry: selectedIndustry,
+        industry: (selectedIndustry ?? 'other') as IndustryType,
         city: city.trim(),
         country,
         zones: Array.isArray(data.zones) && data.zones.length > 0 ? data.zones : zones,
@@ -663,19 +731,44 @@ function HomeInner() {
                 Back
               </button>
               <h1 className="text-lg sm:text-2xl font-semibold text-white">
-                {INDUSTRY_TYPES.find((t) => t.id === selectedIndustry)?.label ?? selectedIndustry} in {city}
+                {customIndustry.trim() ||
+                  INDUSTRY_TYPES.find((t) => t.id === selectedIndustry)?.label ||
+                  selectedIndustry}{' '}
+                in {city}
               </h1>
               <div className="mt-1 flex items-center gap-1.5 text-xs text-white/60 sm:text-sm">
                 <SlidingNumber value={resultsCount} />
                 <span>businesses found</span>
               </div>
             </div>
-            <Link
-              href="/crm"
-              className="flex items-center gap-2 rounded-lg bg-accent text-accent-foreground px-4 py-2 text-sm font-medium hover:bg-accent-hover transition-colors shadow-[0_0_20px_oklch(0.65_0.18_250/0.25)]"
-            >
-              View My Leads
-            </Link>
+            <div className="flex flex-wrap items-center gap-2">
+              <SaveSessionButton
+                defaultName={`${
+                  customIndustry.trim() ||
+                  INDUSTRY_TYPES.find((t) => t.id === selectedIndustry)?.label ||
+                  selectedIndustry ||
+                  'Session'
+                } in ${city}`}
+                getPayload={() => ({
+                  results: searchResults,
+                  industry: (selectedIndustry ?? 'other') as IndustryType,
+                  city: city.trim(),
+                  country,
+                  timestamp: Date.now(),
+                  zones,
+                  zoneBbox,
+                  singleZone,
+                  focusedZoneId,
+                  marketDensity,
+                })}
+              />
+              <Link
+                href="/crm"
+                className="flex items-center gap-2 rounded-lg bg-accent text-accent-foreground px-4 py-2 text-sm font-medium hover:bg-accent-hover transition-colors shadow-[0_0_20px_oklch(0.65_0.18_250/0.25)]"
+              >
+                View My Leads
+              </Link>
+            </div>
           </div>
 
           {zones.length > 1 && (
@@ -1107,27 +1200,48 @@ function HomeInner() {
   return (
     <>
       {showPreLoader && <PreLoader onComplete={() => setShowPreLoader(false)} />}
-      <div className="relative flex min-h-screen flex-col items-center justify-center px-3 sm:px-4">
-        {/* Top Right Controls */}
-        <div className="fixed right-3 top-3 sm:right-6 sm:top-6 z-40 flex items-center gap-3">
+      <div className="relative flex min-h-screen flex-col items-center px-3 sm:px-4">
+        {/* Ambient mesh gradient background — slow drift, no UX interference */}
+        <div className="mesh-bg" aria-hidden />
+
+        {/* Activity ticker — top-center, always on */}
+        <div className="fixed left-1/2 top-4 z-30 -translate-x-1/2 sm:top-6">
+          <ActivityTicker />
+        </div>
+
+        {/* Floating idle score dial — anchored just outside the right edge of the
+            content column on xl+ viewports. Hidden on smaller screens / 9:16 crop. */}
+        <div
+          className="pointer-events-none fixed top-1/2 z-20 hidden -translate-y-1/2 xl:block"
+          style={{ left: 'calc(50% + 26rem)' }}
+        >
+          <IdleScoreDial />
+        </div>
+
+        {/* User chrome — top-right corner, pinned directly to the viewport
+            so the ticker (centered) always has clear air between itself and
+            these controls regardless of viewport width. */}
+        <div className="fixed right-4 top-4 z-40 flex items-center gap-2 sm:right-6 sm:top-6">
+          <SavedSessionsPanel onLoad={handleLoadSavedSession} />
           <Link
             href="/crm"
-            className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-white/70 transition-all hover:border-white/20 hover:bg-white/10 hover:text-white"
+            className="inline-flex items-center gap-2 rounded-lg border border-border-bright/50 bg-surface/60 px-3 py-1.5 text-xs font-medium text-white/75 backdrop-blur-sm transition-all hover:border-sky-400/50 hover:bg-surface-hover/60 hover:text-white"
           >
             My Leads
           </Link>
           <UserMenu />
           <button
             onClick={() => setIsSettingsOpen(true)}
-            className="inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-white/70 transition-all hover:border-white/20 hover:bg-white/10 hover:text-white"
+            className="inline-flex items-center gap-2 rounded-lg border border-border-bright/50 bg-surface/60 px-3 py-1.5 text-xs font-medium text-white/75 backdrop-blur-sm transition-all hover:border-sky-400/50 hover:bg-surface-hover/60 hover:text-white"
           >
             <Settings className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">Settings</span>
           </button>
         </div>
 
-        {/* Main content */}
-        <div className="flex w-full max-w-3xl flex-col items-center gap-6 sm:gap-8 pt-16 sm:pt-0">
+        {/* Main content — top-justified so the logo sits just below the ticker
+            rather than floating in the vertical middle of a tall viewport. */}
+        <div className="relative z-10 flex w-full max-w-3xl flex-col items-center gap-5 pt-24 sm:gap-6 sm:pt-[6.5rem]">
           <WelcomeHeader />
 
           {resumeCard && !resumeDismissed && (
@@ -1146,9 +1260,14 @@ function HomeInner() {
             Search by industry and location to discover opportunities.
           </p>
 
-          <BusinessTypeSelector selected={selectedIndustry} onSelect={setSelectedIndustry} />
+          <BusinessTypeSelector
+            selected={selectedIndustry}
+            onSelect={setSelectedIndustry}
+            customIndustry={customIndustry}
+            onCustomIndustryChange={setCustomIndustry}
+          />
 
-          {selectedIndustry && (
+          {(selectedIndustry || customIndustry.trim().length > 0) && (
             <>
               <CityInput
                 city={city}
@@ -1159,25 +1278,62 @@ function HomeInner() {
                 isLoading={isSearching}
               />
 
-              {/* Deep Analysis Toggle */}
-              <label className="flex items-center gap-3 cursor-pointer group">
-                <div className="relative">
-                  <input
-                    type="checkbox"
-                    checked={deepAnalysis}
-                    onChange={(e) => setDeepAnalysis(e.target.checked)}
-                    className="sr-only peer"
-                  />
-                  <div className="w-11 h-6 bg-gray-700 rounded-full peer peer-checked:bg-green-600 transition-colors" />
-                  <div className="absolute left-1 top-1 w-4 h-4 bg-white rounded-full transition-transform peer-checked:translate-x-5" />
+              {/* Deep Analysis Toggle — HUD panel, matches results-page vocabulary. */}
+              <label
+                className={`hud-panel group relative flex w-full max-w-md cursor-pointer items-center gap-4 rounded-xl border p-4 backdrop-blur-sm transition-all ${
+                  deepAnalysis
+                    ? 'border-sky-400/55 bg-sky-400/[0.06] shadow-[0_0_22px_rgba(56,189,248,0.18)]'
+                    : 'border-border-bright/50 bg-surface/60 hover:border-sky-400/40'
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={deepAnalysis}
+                  onChange={(e) => setDeepAnalysis(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div
+                  className={`flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-lg border transition-all ${
+                    deepAnalysis
+                      ? 'border-sky-400/70 bg-sky-400/15 text-sky-300 shadow-[0_0_14px_rgba(56,189,248,0.35)]'
+                      : 'border-border-bright/60 bg-surface-elevated/70 text-white/55'
+                  }`}
+                >
+                  <Gauge className="h-5 w-5" />
                 </div>
-                <div className="flex flex-col">
-                  <span className="text-sm text-white group-hover:text-white/90">
+                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-[10px] uppercase tracking-[0.24em] text-white/45">
+                      Mode
+                    </span>
+                    <span
+                      className={`font-mono text-[10px] uppercase tracking-[0.24em] transition-colors ${
+                        deepAnalysis ? 'text-sky-300' : 'text-white/35'
+                      }`}
+                    >
+                      {deepAnalysis ? '// Active' : '// Idle'}
+                    </span>
+                  </div>
+                  <span className="text-sm font-semibold text-white">
                     Deep Website Analysis
                   </span>
-                  <span className="text-xs text-gray-500">
-                    Analyze website performance via PageSpeed API (slower but more accurate scoring)
+                  <span className="text-xs leading-relaxed text-white/55">
+                    Lighthouse pass on every site. Slower sweep, sharper scoring.
                   </span>
+                </div>
+                <div className="relative flex-shrink-0">
+                  <div
+                    className={`h-7 w-12 rounded-full border transition-colors ${
+                      deepAnalysis
+                        ? 'border-sky-400/70 bg-sky-400/30'
+                        : 'border-border-bright/60 bg-surface-elevated/60'
+                    }`}
+                  />
+                  <div
+                    className={`absolute top-0.5 h-5 w-5 rounded-full shadow-[0_0_10px_rgba(56,189,248,0.5)] transition-all ${
+                      deepAnalysis ? 'left-[1.625rem] bg-sky-300' : 'left-0.5 bg-white/70'
+                    }`}
+                  />
                 </div>
               </label>
 
