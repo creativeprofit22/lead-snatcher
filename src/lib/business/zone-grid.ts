@@ -59,7 +59,8 @@ const LUXURY_SHOP_TAGS = [
 const NEGATIVE_SHOP_TAGS = ['pawnbroker', 'charity', 'second_hand'] as const;
 
 // HIGH-signal professional services. Financial + legal clustering sits
-// in the highest-rent zones almost by definition.
+// in the highest-rent zones almost by definition. Feeds both the wealth
+// score (rich clientele proxy) and the business score (B2B density).
 const PROFESSIONAL_OFFICE_TAGS = [
   'financial',
   'financial_advisor',
@@ -68,6 +69,23 @@ const PROFESSIONAL_OFFICE_TAGS = [
   'insurance',
   'notary',
   'tax_advisor',
+] as const;
+
+// Corporate offices — the "business district" signal. Captures the
+// Canary Wharf / Shoreditch / King's Cross / Silicon Valley pattern
+// where money flows through corporate HQs + tech + consulting rather
+// than through consumer-facing luxury retail. Fed only into the
+// business score axis so Mayfair-style pure-consumer zones aren't
+// inflated by a handful of real-estate agents.
+const CORPORATE_OFFICE_TAGS = [
+  'company',
+  'consulting',
+  'it',
+  'advertising_agency',
+  'coworking',
+  'research',
+  'estate_agent',
+  'government',
 ] as const;
 
 const ZONE_RADIUS_METERS = 1500;
@@ -82,13 +100,17 @@ const SMALL_CITY_DIAGONAL_KM = 4; // below this, skip grid and return single zon
 // gives the query before truncating; too-tight values cause silent empty
 // 200s on dense bboxes (greater London hit this with a 7s cap). Keep the
 // client cap loose enough that a real answer can come back.
-const OVERPASS_SERVER_TIMEOUT_S = 20;
-const OVERPASS_CLIENT_TIMEOUT_MS = 12000;
+// Client timeout MUST exceed server timeout — otherwise we abort before
+// Overpass finishes computing and never see results that would have come
+// back within the server budget. Previously 12s client vs 20s server
+// silently killed dense-city queries (London) mid-flight.
+const OVERPASS_SERVER_TIMEOUT_S = 30;
+const OVERPASS_CLIENT_TIMEOUT_MS = 35000;
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 // Bump when the scoring formula or queried tag set changes. Old cached
 // results remain in the store under the previous key and will expire
 // naturally, but new callers get fresh data under the new version.
-const CACHE_SCHEMA_VERSION = 'v6-wider-cap';
+const CACHE_SCHEMA_VERSION = 'v11-two-axis-tuned';
 
 // Place-based scanning: use OSM named places (Mayfair, Canary Wharf, etc.)
 // as zone centers instead of a 3×3 grid. If we find at least this many
@@ -99,16 +121,35 @@ const PLACE_SCAN_MIN_PLACES = 4;
 // higher-scoring one) — the 1.5km scan radius would otherwise produce
 // near-duplicate zones for adjacent OSM places.
 const PLACE_DEDUPE_METERS = 700;
-// Cap on returned zones from place-based scan. The chip route slices to 6
-// anyway, but the results-view zone strip shows all of these — 25 gives
-// headroom so a far-out-but-genuine wealth zone (Canary Wharf in London,
-// Omotesando in Tokyo) doesn't get cut at the top-15 boundary.
-const PLACE_MAX_ZONES = 25;
+// Cap on returned zones from place-based scan. Raised from 25 → 36 in
+// tandem with the per-octant cap below — 9 octants × 4 per octant = 36
+// gives every region of the 3×3 RegionPicker a fair shot at coverage.
+const PLACE_MAX_ZONES = 36;
+// Per-octant zone cap. Without this, dense inner-city scores dominate the
+// top-N and outer regions (East London, Lower Manhattan, etc.) show up
+// empty in the RegionPicker even when legitimate places exist there. The
+// octant grid is the same 3×3 split the neighborhoods route uses for
+// region classification, so a cap here maps directly to a per-region cap
+// in the UI.
+const PLACE_MAX_PER_OCTANT = 4;
 // Short TTL for soft-failed lookups (Overpass down). Prevents thrash on
 // every autocomplete keystroke while still letting the user retry soon.
 const FAILURE_CACHE_TTL_MS = 60 * 1000;
 
 export type ZoneLevel = 'premium' | 'commercial' | 'moderate' | 'developing';
+
+/**
+ * Two-axis archetype derived from wealth vs business scores.
+ * - luxury: consumer-wealth dominant (Mayfair, Knightsbridge, Ginza) —
+ *   luxury retail, premium hotels, high-end leisure. Ideal target for
+ *   service businesses that sell TO the wealthy (salons, boutiques).
+ * - corporate: business-density dominant (Canary Wharf, Shoreditch,
+ *   King's Cross) — offices, professional services, tech. Ideal target
+ *   for B2B SaaS, agencies, consulting.
+ * - mixed: both axes strong (The City, Soho, Midtown). Broad ICP fit.
+ * - developing: neither axis strong — outer suburbs / emerging areas.
+ */
+export type ZoneArchetype = 'luxury' | 'corporate' | 'mixed' | 'developing';
 
 export interface ZoneAmenities {
   // Legacy buckets — kept for UI continuity (AreaDensityMeter rim icons,
@@ -124,7 +165,7 @@ export interface ZoneAmenities {
 
   // v2-wealth buckets — the ones that actually drive scoring now.
   // Optional so pre-v2 cached payloads still typecheck after deserialization;
-  // scoreCounts treats `undefined` as 0.
+  // the scorers treat `undefined` as 0.
   /** shop=jewelry|watches|boutique|art|antiques|wine|gallery */
   luxuryRetail?: number;
   /** office=financial|lawyer|accountant|insurance|notary|... */
@@ -133,6 +174,8 @@ export interface ZoneAmenities {
   premiumHotels?: number;
   /** amenity=casino (tracked separately from gym/spa bucket for weighting) */
   casinos?: number;
+  /** office=company|consulting|it|advertising_agency|coworking|research|... */
+  corporateOffices?: number;
   /** Negative signals — poverty indicators that deduct from score */
   pawnshops?: number;
   moneyLenders?: number;
@@ -145,7 +188,19 @@ export interface Zone {
   label: string; // neighborhood name or directional fallback
   latitude: number;
   longitude: number;
-  score: number; // 0-100
+  /**
+   * Headline 0-100 score — max of wealthScore and businessScore, with
+   * OSM prominence bonus applied. This is what the UI surfaces as the
+   * main number. Use wealthScore/businessScore/archetype for the full
+   * "what kind of money zone" breakdown.
+   */
+  score: number;
+  /** Consumer-wealth axis — luxury retail, premium hotels, affluence spots. */
+  wealthScore: number;
+  /** Business-density axis — corporate offices, professional services. */
+  businessScore: number;
+  /** Archetype derived from wealth vs business scores. */
+  archetype: ZoneArchetype;
   level: ZoneLevel;
   amenities: ZoneAmenities;
   radiusMeters: number;
@@ -212,6 +267,22 @@ function haversineMeters(
     Math.sin(dPhi / 2) ** 2 +
     Math.cos(phi1) * Math.cos(phi2) * Math.sin(dLambda / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(a));
+}
+
+/**
+ * Nominatim returns both a geocode point (the "default" address for a city,
+ * usually a historic landmark like Charing Cross) and a bounding box for
+ * the city's full extent. For dense cities with wide bboxes, these two
+ * centers diverge substantially — London's geocode point sits ~8 km west
+ * of the bbox midpoint. Clamping around the geocode point shifts the
+ * scanned bbox west and starves the East region (Canary Wharf, Stratford).
+ * Use the bbox midpoint when available so coverage stays balanced.
+ */
+function bboxCenter(
+  bbox: [number, number, number, number]
+): { lat: number; lon: number } {
+  const [south, north, west, east] = bbox;
+  return { lat: (south + north) / 2, lon: (west + east) / 2 };
 }
 
 /** Clamp bbox so no side exceeds MAX_BBOX_SIDE_KM, centered on given point. */
@@ -295,20 +366,29 @@ function logCap(count: number | undefined, cap = 8): number {
 }
 
 /**
- * v4-spread scoring — derived from 2026 global research brief (see
- * Downloads/LEAD_SNATCHER_AREA_SCORING_RESEARCH.md) and tuned against
- * real London chip output to produce meaningful 0-100 spread.
- *
- * Weights are calibrated so a world-class premium zone (City of London,
- * Ginza) hits ~90-100, a premium-but-not-apex zone (Mayfair, Soho)
- * lands ~70-85, mid-commercial zones ~40-60, and suburban/developing
- * zones ~15-35. Rural/poverty zones clamp at 0.
- *
- * Hospitals, pharmacies, supermarkets, fuel — zero weight. They anchor
- * low-income zones as often as wealthy ones and inverted the score in
- * emerging markets under earlier weights. (Research Part 1.)
+ * Shared negative-signal deduction — pawnshops, money lenders, social
+ * facilities, charity shops. Applied to both axes so a poverty-flagged
+ * zone can't achieve a high score on either dimension.
  */
-function scoreCounts(counts: ZoneAmenities): number {
+function negativesPenalty(counts: ZoneAmenities): number {
+  const pawnshops = logCap(counts.pawnshops, 3);
+  const moneyLenders = logCap(counts.moneyLenders, 3);
+  const socialFacilities = logCap(counts.socialFacilities, 3);
+  const charityShops = logCap(counts.charityShops, 3);
+  return (
+    -6 * pawnshops + -4 * moneyLenders + -4 * socialFacilities + -2 * charityShops
+  );
+}
+
+/**
+ * Consumer-wealth axis (0-100). Rewards the Mayfair / Knightsbridge /
+ * Ginza pattern — luxury retail density, premium hotels, affluence
+ * leisure, some bank/hotel tail. Professional services kept in here
+ * as a weak positive (rich clientele proxy) but dominant weight is on
+ * retail, which is what differentiates consumer-wealth from pure
+ * corporate districts.
+ */
+function scoreWealth(counts: ZoneAmenities): number {
   const luxury = logCap(counts.luxuryRetail);
   const prof = logCap(counts.professionalServices);
   const premiumHotel = logCap(counts.premiumHotels);
@@ -317,30 +397,65 @@ function scoreCounts(counts: ZoneAmenities): number {
   const affluence = logCap(counts.affluenceSpots);
   const genericHotel = logCap(counts.hotels);
 
-  // Negative-signal caps kept tighter — we want a handful of pawnshops
-  // to ding the score decisively, not slowly ramp up.
-  const pawnshops = logCap(counts.pawnshops, 3);
-  const moneyLenders = logCap(counts.moneyLenders, 3);
-  const socialFacilities = logCap(counts.socialFacilities, 3);
-  const charityShops = logCap(counts.charityShops, 3);
-
   const raw =
-    // HIGH signals — strong wealth indicators
     5 * luxury +
-    4 * prof +
     3 * premiumHotel +
-    // MED signals — weaker correlation, still positive
-    2 * banks +
-    1.5 * casino +
     2 * affluence +
+    1.5 * banks +
     1.5 * genericHotel +
-    // Negative signals — poverty / distress indicators
-    -6 * pawnshops +
-    -4 * moneyLenders +
-    -4 * socialFacilities +
-    -2 * charityShops;
+    1.5 * casino +
+    1 * prof +
+    negativesPenalty(counts);
 
   return Math.max(0, Math.min(100, Math.round(raw)));
+}
+
+/**
+ * Business-density axis (0-100). Rewards the Canary Wharf / Shoreditch /
+ * King's Cross / Silicon Valley pattern — corporate offices, finance
+ * and legal professional services, commercial banks. Luxury retail is
+ * ignored here so the axis doesn't drift back toward Mayfair.
+ *
+ * Premium hotels get a small weight because business travel concentrates
+ * in corporate districts; generic hotels are ignored (too noisy).
+ */
+function scoreBusiness(counts: ZoneAmenities): number {
+  const prof = logCap(counts.professionalServices);
+  const corporate = logCap(counts.corporateOffices);
+  const banks = logCap(counts.banks);
+  const premiumHotel = logCap(counts.premiumHotels);
+
+  // Weights bumped vs wealth axis to compensate for the business side
+  // having fewer signals (4 vs 7). Without the bump, corporate zones
+  // like Canary Wharf (40+ named HQs, 50+ offices, 38 banks) still
+  // topped out around 47/100 — numerically underselling genuine
+  // business density.
+  const raw =
+    5 * prof +
+    4.5 * corporate +
+    3 * banks +
+    2 * premiumHotel +
+    negativesPenalty(counts);
+
+  return Math.max(0, Math.min(100, Math.round(raw)));
+}
+
+/**
+ * Archetype thresholds. Tuned so that:
+ * - Mayfair/Knightsbridge (W≥75, B<70) → luxury
+ * - Canary Wharf (B≥70, W<70) → corporate
+ * - The City / Soho / Midtown (both ≥70) → mixed
+ * - outer suburbs (both <40) → developing
+ *
+ * Mixed requires both axes ≥70 (not 60) to avoid labeling Mayfair — which
+ * has real but secondary office density — as mixed. Keeps the archetype
+ * a useful targeting signal: "Mixed" actually means both flavors of money
+ * are strong here.
+ */
+function deriveArchetype(wealth: number, business: number): ZoneArchetype {
+  if (Math.max(wealth, business) < 40) return 'developing';
+  if (wealth >= 70 && business >= 70) return 'mixed';
+  return wealth >= business ? 'luxury' : 'corporate';
 }
 
 function levelForScore(score: number): ZoneLevel {
@@ -364,6 +479,7 @@ function emptyCounts(): ZoneAmenities {
     professionalServices: 0,
     premiumHotels: 0,
     casinos: 0,
+    corporateOffices: 0,
     pawnshops: 0,
     moneyLenders: 0,
     socialFacilities: 0,
@@ -383,6 +499,7 @@ async function fetchOverpassForBbox(
   const luxuryShopRegex = LUXURY_SHOP_TAGS.join('|');
   const negativeShopRegex = NEGATIVE_SHOP_TAGS.join('|');
   const officeRegex = PROFESSIONAL_OFFICE_TAGS.join('|');
+  const corporateOfficeRegex = CORPORATE_OFFICE_TAGS.join('|');
 
   // v2-wealth query: original amenity set + shop=jewelry/watches/etc.
   // + office=financial/lawyer/etc. + shop=pawnbroker/charity (negatives).
@@ -401,9 +518,16 @@ async function fetchOverpassForBbox(
       way["shop"~"^(${negativeShopRegex})$"](${bboxClause});
       node["office"~"^(${officeRegex})$"](${bboxClause});
       way["office"~"^(${officeRegex})$"](${bboxClause});
+      node["office"~"^(${corporateOfficeRegex})$"](${bboxClause});
+      way["office"~"^(${corporateOfficeRegex})$"](${bboxClause});
+      way["building"="office"]["name"](${bboxClause});
+      way["building"="office"]["operator"](${bboxClause});
       node["place"~"^(suburb|neighbourhood|quarter|city_district|borough|locality)$"](${bboxClause});
       way["place"~"^(suburb|neighbourhood|quarter|city_district|borough|locality)$"](${bboxClause});
       relation["place"~"^(suburb|neighbourhood|quarter|city_district|borough|locality)$"](${bboxClause});
+      way["landuse"~"^(commercial|retail)$"]["name"](${bboxClause});
+      relation["landuse"~"^(commercial|retail)$"]["name"](${bboxClause});
+      relation["boundary"="administrative"]["admin_level"~"^(9|10)$"]["name"](${bboxClause});
     );
     out center tags;
   `;
@@ -480,6 +604,30 @@ interface NamedPlace {
   lat: number;
   lon: number;
   name: string;
+  /**
+   * OSM prominence bonus (0-10). Landmarks like Canary Wharf carry
+   * `wikidata`/`wikipedia`/`tourism=yes` + `place=suburb` tags; minor
+   * places (housing estates, micro-neighborhoods) do not. Without this,
+   * score-margin noise (±2 pts) lets a minor place inside the 700m
+   * dedupe radius suppress a globally-known landmark. The bonus is
+   * small enough to only break near-ties, not to reorder legitimately
+   * high-scoring zones.
+   */
+  prominence: number;
+}
+
+/**
+ * Derive prominence bonus from an OSM element's tags. Caps at 10 so the
+ * bonus nudges ties without overwhelming real amenity-density signal.
+ */
+function prominenceBonus(tags: Record<string, string>): number {
+  let bonus = 0;
+  if (tags.wikidata) bonus += 3;
+  if (tags.wikipedia) bonus += 3;
+  if (tags.tourism) bonus += 2; // any tourism tag (yes/attraction/viewpoint/...)
+  if (tags.place === 'suburb') bonus += 2;
+  else if (tags.place === 'city_district' || tags.place === 'borough') bonus += 1;
+  return Math.min(10, bonus);
 }
 
 // True when the string's base glyphs are Latin. Diacritics are allowed
@@ -552,7 +700,28 @@ function splitElements(elements: OverpassElement[]): {
     if (placeTag) {
       const englishName = pickEnglishName(tags);
       if (englishName) {
-        places.push({ lat, lon, name: englishName });
+        places.push({ lat, lon, name: englishName, prominence: prominenceBonus(tags) });
+      }
+      continue;
+    }
+
+    // Fallback place sources for districts OSM doesn't tag with place=*.
+    // Named commercial/retail landuse polygons (Canary Wharf is mapped this
+    // way in some renderings), and ward-level administrative relations
+    // (admin_level 9–10 = inner London wards, NYC CDs, etc.). These fill
+    // in outer-region coverage on dense cities without pulling in every
+    // named polygon — the name tag is required.
+    const landuseTag = tags.landuse;
+    const boundaryTag = tags.boundary;
+    const adminLevel = tags.admin_level;
+    if (
+      (landuseTag === 'commercial' || landuseTag === 'retail') ||
+      (boundaryTag === 'administrative' &&
+        (adminLevel === '9' || adminLevel === '10'))
+    ) {
+      const englishName = pickEnglishName(tags);
+      if (englishName) {
+        places.push({ lat, lon, name: englishName, prominence: prominenceBonus(tags) });
       }
       continue;
     }
@@ -576,7 +745,8 @@ function splitElements(elements: OverpassElement[]): {
       continue;
     }
 
-    // Professional services offices
+    // Professional services offices — finance + legal. Feed both axes
+    // (wealth as "rich clientele" proxy, business as pure B2B density).
     if (
       office === 'financial' ||
       office === 'financial_advisor' ||
@@ -587,6 +757,35 @@ function splitElements(elements: OverpassElement[]): {
       office === 'tax_advisor'
     ) {
       amenities.push({ lat, lon, key: 'professionalServices' });
+      continue;
+    }
+
+    // Corporate offices — business-axis signal. Captures CW / Shoreditch
+    // / Silicon Valley patterns where money flows through HQs + tech +
+    // consulting rather than consumer retail.
+    if (
+      office === 'company' ||
+      office === 'consulting' ||
+      office === 'it' ||
+      office === 'advertising_agency' ||
+      office === 'coworking' ||
+      office === 'research' ||
+      office === 'estate_agent' ||
+      office === 'government'
+    ) {
+      amenities.push({ lat, lon, key: 'corporateOffices' });
+      continue;
+    }
+
+    // Named corporate office buildings. OSM often tags a whole tower with
+    // `building=office + name/operator` (HSBC Tower, Barclays HQ, Citi
+    // Tower at Canary Wharf) rather than per-floor `office=*` nodes.
+    // Requiring name OR operator keeps out generic 2-story office shells.
+    if (
+      tags.building === 'office' &&
+      (Boolean(tags.name) || Boolean(tags.operator))
+    ) {
+      amenities.push({ lat, lon, key: 'corporateOffices' });
       continue;
     }
 
@@ -680,15 +879,39 @@ function normalizeLabel(raw: string): string {
  * score) and caps at PLACE_MAX_ZONES. Returns [] if there aren't enough
  * places in the bbox — caller should fall back to grid scanning.
  */
+/**
+ * Octant key for a point within the clamped bbox, using the same 3×3
+ * split the neighborhoods route uses for region classification. Kept
+ * in sync so a per-octant cap here maps cleanly to per-region coverage
+ * downstream.
+ */
+function octantKey(
+  lat: number,
+  lon: number,
+  bbox: [number, number, number, number]
+): string {
+  const [south, north, west, east] = bbox;
+  const latThird = (north - south) / 3;
+  const lonThird = (east - west) / 3;
+  const latIdx = lat < south + latThird ? 0 : lat < south + 2 * latThird ? 1 : 2;
+  const lonIdx = lon < west + lonThird ? 0 : lon < west + 2 * lonThird ? 1 : 2;
+  return `${latIdx},${lonIdx}`;
+}
+
 function buildPlaceBasedZones(
   amenities: { lat: number; lon: number; key: AmenityKey }[],
   places: NamedPlace[],
   centerLat: number,
-  centerLon: number
+  centerLon: number,
+  clampedBbox: [number, number, number, number]
 ): Zone[] {
   if (places.length < PLACE_SCAN_MIN_PLACES) return [];
 
-  // First: score every place.
+  // First: score every place on both axes (wealth + business), then
+  // take the max as the headline score and apply the OSM prominence
+  // bonus. Prominence nudges near-ties so globally-known landmarks
+  // (Canary Wharf, Times Square, Ginza) win the dedupe race against
+  // minor nearby places with marginally higher amenity counts.
   const scored = places.map((p, i): Zone => {
     const counts = emptyCounts();
     for (const a of amenities) {
@@ -698,13 +921,18 @@ function buildPlaceBasedZones(
         counts.total++;
       }
     }
-    const score = scoreCounts(counts);
+    const wealthScore = scoreWealth(counts);
+    const businessScore = scoreBusiness(counts);
+    const score = Math.min(100, Math.max(wealthScore, businessScore) + p.prominence);
     return {
       id: `place-${i}`,
       label: p.name,
       latitude: p.lat,
       longitude: p.lon,
       score,
+      wealthScore,
+      businessScore,
+      archetype: deriveArchetype(wealthScore, businessScore),
       level: levelForScore(score),
       amenities: counts,
       radiusMeters: ZONE_RADIUS_METERS,
@@ -717,20 +945,26 @@ function buildPlaceBasedZones(
     };
   });
 
-  // Dedupe: process highest-scoring first, skip anything within
-  // PLACE_DEDUPE_METERS of an already-kept zone. This lets the top
-  // "Mayfair" at score 92 suppress a nearby "Fitzrovia" at score 68
-  // that's really covering the same amenities.
+  // Dedupe + per-octant fairness: process highest-scoring first, skip
+  // anything within PLACE_DEDUPE_METERS of a kept zone (suppresses
+  // near-duplicate districts covering the same amenities), AND cap each
+  // 3×3 octant at PLACE_MAX_PER_OCTANT so dense inner-city scoring
+  // doesn't lock outer regions out of the returned set.
   scored.sort((a, b) => b.score - a.score);
   const kept: Zone[] = [];
+  const perOctant = new Map<string, number>();
   for (const z of scored) {
     if (z.score <= 0) continue;
+    const oct = octantKey(z.latitude, z.longitude, clampedBbox);
+    if ((perOctant.get(oct) ?? 0) >= PLACE_MAX_PER_OCTANT) continue;
     const tooClose = kept.some(
       (k) =>
         haversineMeters(z.latitude, z.longitude, k.latitude, k.longitude) <
         PLACE_DEDUPE_METERS
     );
-    if (!tooClose) kept.push(z);
+    if (tooClose) continue;
+    kept.push(z);
+    perOctant.set(oct, (perOctant.get(oct) ?? 0) + 1);
     if (kept.length >= PLACE_MAX_ZONES) break;
   }
   return kept;
@@ -763,7 +997,9 @@ async function buildSingleZone(
     }
   }
 
-  const score = scoreCounts(counts);
+  const wealthScore = scoreWealth(counts);
+  const businessScore = scoreBusiness(counts);
+  const score = Math.max(wealthScore, businessScore);
   // User's search term wins — they should always see what they queried
   // reflected in the focused zone, not an adjacent OSM place name.
   const label =
@@ -777,6 +1013,9 @@ async function buildSingleZone(
     latitude: centerLat,
     longitude: centerLon,
     score,
+    wealthScore,
+    businessScore,
+    archetype: deriveArchetype(wealthScore, businessScore),
     level: levelForScore(score),
     amenities: counts,
     radiusMeters: ZONE_RADIUS_METERS,
@@ -814,6 +1053,9 @@ function synthesizeEmptyZone(
         latitude: centerLat,
         longitude: centerLon,
         score: 0,
+        wealthScore: 0,
+        businessScore: 0,
+        archetype: 'developing',
         level: levelForScore(0),
         amenities: counts,
         radiusMeters: ZONE_RADIUS_METERS,
@@ -876,7 +1118,11 @@ export async function scanCityZones(
       return result;
     }
 
-    const clamped = clampBbox(workingBbox, centerLat, centerLon);
+    // Clamp around the bbox midpoint, not the geocode point. For wide city
+    // bboxes (Greater London, NYC metro) these diverge enough that clamping
+    // around the geocode point leaves outer regions uncovered on one side.
+    const { lat: clampLat, lon: clampLon } = bboxCenter(workingBbox);
+    const clamped = clampBbox(workingBbox, clampLat, clampLon);
 
     const elements = await fetchOverpassForBbox(clamped);
     if (elements.length === 0) {
@@ -897,7 +1143,13 @@ export async function scanCityZones(
     // Canary Wharf, Ginza, Polanco, etc.) rather than at fixed grid
     // corners. Falls back to the geometric grid when there aren't enough
     // named places (sparsely-tagged cities / rural bboxes).
-    let zones = buildPlaceBasedZones(amenities, places, centerLat, centerLon);
+    let zones = buildPlaceBasedZones(
+      amenities,
+      places,
+      centerLat,
+      centerLon,
+      clamped
+    );
 
     if (zones.length < PLACE_SCAN_MIN_PLACES) {
       // Fallback: fixed 3×3 grid, label each point with the nearest place
@@ -912,7 +1164,9 @@ export async function scanCityZones(
             counts.total++;
           }
         }
-        const score = scoreCounts(counts);
+        const wealthScore = scoreWealth(counts);
+        const businessScore = scoreBusiness(counts);
+        const score = Math.max(wealthScore, businessScore);
         const nearName = nearestPlaceName(
           gp.lat,
           gp.lon,
@@ -925,6 +1179,9 @@ export async function scanCityZones(
           latitude: gp.lat,
           longitude: gp.lon,
           score,
+          wealthScore,
+          businessScore,
+          archetype: deriveArchetype(wealthScore, businessScore),
           level: levelForScore(score),
           amenities: counts,
           radiusMeters: ZONE_RADIUS_METERS,

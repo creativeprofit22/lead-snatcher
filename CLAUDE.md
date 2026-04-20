@@ -1,114 +1,76 @@
 # Lead Snatcher
 
-A Next.js lead generation platform for finding local businesses that need digital services. Search by industry type and city, score leads based on their digital presence, and manage them in a lightweight CRM.
+A Next.js lead generation platform for finding local businesses that need digital services. Search by industry + city, score leads on digital presence, manage in a lightweight CRM.
 
 ## Project Structure
 
 ```
 src/
-├── app/                    # Next.js App Router
-│   ├── api/                # API routes
-│   │   ├── business/       # Business search & geocode
-│   │   ├── leads/          # Lead CRUD & contact logs
-│   │   └── settings/       # API key management
-│   ├── layout.tsx          # Root layout
-│   └── page.tsx            # Home page (search, results, CRM)
-├── components/             # React components
-│   ├── search/             # Search UI
-│   │   ├── BusinessTypeSelector.tsx
-│   │   ├── CityInput.tsx
-│   │   └── WelcomeHeader.tsx
-│   ├── leads/              # Lead management
-│   │   ├── LeadScoreBadge.tsx
-│   │   ├── LeadStatusBadge.tsx
-│   │   ├── StatusSelector.tsx
-│   │   └── OpportunitiesList.tsx
-│   ├── dashboard/          # Pipeline stats
-│   ├── settings/           # Settings modal
-│   └── ui/                 # Generic UI components
-├── lib/                    # Utilities and API clients
-│   ├── business/           # Business logic
-│   │   ├── geocode.ts      # City geocoding (Nominatim)
-│   │   ├── scoring.ts      # Lead score calculation
-│   │   ├── opportunities.ts # Industry opportunities
-│   │   └── search.ts       # RapidAPI Maps search
-│   ├── rapidapi/           # RapidAPI client
-│   ├── constants.ts        # Industry types, statuses
-│   ├── db.ts               # Prisma client
-│   └── errors.ts           # Error handling
-└── types/                  # TypeScript definitions
-
+├── app/
+│   ├── api/
+│   │   ├── business/
+│   │   │   ├── search/                # Main sweep
+│   │   │   ├── neighborhoods/         # Region + zone metadata for picker
+│   │   │   ├── last-search/           # Auto-save "resume" session
+│   │   │   └── saved-sessions/        # Named permanent sessions
+│   │   ├── leads/                     # CRUD + contact logs
+│   │   └── settings/                  # API key management
+│   └── page.tsx                       # Home + results view (large)
+├── components/
+│   ├── search/                        # CityInput, BusinessTypeSelector, RegionPicker,
+│   │                                    AreaDensityMeter, ActivityTicker, IdleScoreDial,
+│   │                                    WelcomeHeader, SaveSessionButton, SavedSessionsPanel,
+│   │                                    ResumeSearchCard, ZoneChipsStrip, RadarScan
+│   ├── leads/                         # Lead UI (scoring badges, enrich, etc.)
+│   └── ui/, settings/, auth/, crm/
+├── lib/
+│   ├── business/                      # geocode, scoring, zone-grid, area-score,
+│   │                                    last-search-store, saved-sessions-store, search
+│   ├── hooks/                         # useEnrichmentStream, useCyclingPlaceholder
+│   └── search-cache.ts                # localStorage-backed cached search
 prisma/
-└── schema.prisma           # Database schema (Lead, BusinessSearch, ContactLog)
+└── schema.prisma                      # LastSearchSession, SavedSearchSession added
 ```
 
-## Key Features
+## Code Quality — Zero Tolerance
 
-- **Business Search**: Search by industry type + city via RapidAPI Maps
-- **Lead Scoring**: Score 0-100 based on missing website (+30), phone (+25), email (+20), high rating (+10), low reviews (+10)
-- **Opportunities**: Industry-specific service recommendations
-- **CRM**: Status tracking (new → contacted → called → proposal_sent → negotiating → won/lost)
-- **Contact Logs**: Track calls, emails, meetings, notes
-
-## Organization Rules
-
-**Keep code organized and modularized:**
-- API routes → `src/app/api/`, one folder per resource
-- Components → `src/components/`, grouped by feature
-- Business logic → `src/lib/business/`
-- Types → `src/types/`
-
-**Modularity principles:**
-- Single responsibility per file
-- Clear, descriptive file names
-- Group related functionality together
-- Use barrel exports (index.ts) for clean imports
-
-## Code Quality - Zero Tolerance
-
-After editing ANY file, run:
-
+After editing ANY file:
 ```bash
 npm run lint && npm run typecheck
 ```
-
-Fix ALL errors/warnings before continuing.
-
-### Additional Commands
-
+Fix ALL errors/warnings before continuing. Dev server is port 3002:
 ```bash
-npm run format        # Format code with Prettier
-npm run format:check  # Check formatting
-npm run db:generate   # Generate Prisma client after schema changes
-npm run db:migrate    # Run database migrations
+NODE_OPTIONS="--max-old-space-size=8192" PORT=3002 npm run dev
 ```
 
-### Server Restart
-
-If changes require server restart (not hot-reloadable):
-1. Restart server: `npm run dev`
-2. Read server output/logs
-3. Fix ALL warnings/errors before continuing
+DB commands: `npm run db:generate`, `npm run db:migrate`, `npx prisma db push` (used in last session to avoid migration reset).
 
 ## Current Focus
 
-Post-launch UX polish + reliability. Layer 5 scoring shipped. Sweep is now fast + WSL-safe. Remaining: fix the render-tree bug that breaks Enrich from the results view, a minor visual alignment, and decide fate of foot traffic.
+Zone-discovery UX. Wealth-based area scoring shipped (v6-spread), Phase 2 saved sessions shipped, RegionPicker shipped. Active blocker: region-picker underfills East/West/outer regions for dense cities (London), Canary Wharf still missing from zones entirely (OSM tagging issue).
 
-Dev server: `NEXTAUTH_URL` / `AUTH_URL` set to `http://localhost:3002`. Start with:
-`NODE_OPTIONS="--max-old-space-size=8192" PORT=3002 npm run dev`
+## Last Session (2026-04-20) — scoring overhaul + region picker + saved sessions
 
-## Last Session (2026-04-19) — persistence, UX fixes, WSL memory fix
+- **Area scoring v2→v6**: new Overpass tags (`shop=jewelry|watches|boutique|art`, `office=financial|lawyer|accountant`, premium hotels via `stars≥4`, negative signals via `amenity=pawnshop|money_lender|social_facility`). Log-capped weights tuned for 0-100 spread on global dense cities. Cache version: `v6-wider-cap`. Research doc at `C:\Users\SPARTAN PC\Downloads\LEAD_SNATCHER_AREA_SCORING_RESEARCH.md`.
+- **Place-based zone scanning**: switched from fixed 3×3 geometric grid to OSM named-place centroids (Mayfair, Temple, Ginza). Added `way`+`relation` types, `place=locality`. Dedupe at 700m. Fallback to grid for sparse cities.
+- **RegionPicker** (`src/components/search/RegionPicker.tsx`): replaced flat NeighborhoodChips with 9-region drill-down (NW/N/NE, W/Central/E, SW/S/SE). `/api/business/neighborhoods` now returns `{ regions, zones, singleZone }` shape.
+- **Phase 2 Saved Sessions**: new `SavedSearchSession` Prisma model, `saved-sessions-store.ts`, `/api/business/saved-sessions/[id]/` routes, `SaveSessionButton` + `SavedSessionsPanel`. Auto-save resume card Phase 1 also landed (no more auto-redirect to results on mount, dismissible via sessionStorage).
+- **Home screen rebuilt for video recording**: HUD-coherent idle loop (cycling placeholders, activity ticker, floating `IdleScoreDial`, rotating tile spotlight, mesh gradient bg, GlowEffect search button, always-on LIVE badge, custom industry input, pimped Deep Analysis toggle). `useCyclingPlaceholder` hook. All elements continuous — no boot sequence.
+- **Misc**: country dropdown via `createPortal` (fixed stacking-context fight with GlowEffect), AreaDensityMeter rim icons swapped to Luxury/Pro Svc/Premium/Banks/Leisure/Hotels/Casino/Pawn (negative in rose).
 
-- **Session + cross-session persistence** — `src/lib/search-cache.ts` (2h localStorage, enrichment state included) + new `LastSearchSession` DB model (`prisma/schema.prisma`) + `GET/POST/DELETE /api/business/last-search` + `ResumeSearchCard` on home screen.
-- **Dead-click fix** — `useEnrichmentStream.enrichLeads` now flips spinner BEFORE filtering, toasts + sets `bannerError` on every failure path (401/429/5xx/network/stream drop). `ErrorBanner` component renders above results with actionable buttons (e.g., "Log in" on 401).
-- **WSL OOM fix** — PageSpeed `fields` URL parameter cuts response ~100× (~5MB → ~15KB). Concurrency dropped 3→2. Scrape + PageSpeed pipelines wrapped in try/catch so a blow-up degrades to Maps-only results, never eats the sweep.
-- **Search timeout + banner** — 2-min cap (5-min if Deep Analysis on). Timeout / disconnect / non-200 all now show a persistent `searchBannerError` with honest copy.
-
-**Stopped at**: Identified 3 remaining issues (see Next Steps). User chose to tackle one-by-one. Nothing implemented yet on those three.
+Stopped at: committed + pushed as `a9c78f9`. User tested London chips — Central is packed correctly, but **West shows only 3 zones (~60 each), East shows only Devonshire Square (65), Canary Wharf completely absent**. RegionPicker is underfilling outer regions.
 
 ## Next Steps
 
-1. **Fix Enrich render-tree bug (CRITICAL)** — `<EnrichmentExplainer>` (page.tsx:1306) and `<BatchEnrichBar>` (page.tsx:1286) are rendered AFTER the `if (viewMode === 'results') return …` early return at page.tsx:711. Clicking Enrich from the results view sets `explainerOpen=true` but the modal isn't mounted → nothing happens until user navigates home. Move both to render regardless of viewMode (wrap both branches in a fragment with the floating UI, or refactor to a single return).
-2. **Ring alignment on area-score dial** — the rotating outer ring doesn't pass through the centers of the amenity icons on its rim. Pure visual. Check `src/components/search/AreaDensityMeter.tsx`.
-3. **Foot traffic — rip it out** (user decision). Remove `FootTrafficSlot` UI + fetch button, remove the peak-busyness bonus in `getEffectiveFitScore` / `computeFitScore`. Keep `Lead.popularTimesData`/`popularTimesScrapedAt` DB fields for possible revival; just delete the UI surface area.
-4. **(Nice-to-have)** Include the failing URL in `PageSpeed API error: 400` log line (`src/lib/business/pagespeed.ts`).
+1. **Investigate RegionPicker sparse-fill for dense cities** — London: Central is fine (Mayfair, Temple, East Marylebone, etc.), but East/West/outer have very few zones. Two suspected causes, test both:
+   - **Geometric 3×3 classification is miscalibrated.** Nominatim's bbox for "London" after 20km `clampBbox` means center third = inner Zone 1/2 where ALL the wealth signals concentrate, pushing nearly every scored zone into Central. Outer regions get residual sparse stuff. Consider weighted/density-aware region split, OR widen `MAX_BBOX_SIDE_KM` beyond 20km, OR use admin_level-based districts per-country.
+   - **Canary Wharf OSM tagging.** It's at ~7km east of central London (within the 20km bbox), SHOULD fall in East region geometrically, but doesn't appear at all in the zones list — meaning the Overpass query isn't picking it up even with `way` + `relation` + `place=locality`. Probably tagged as `landuse=commercial` or `boundary=administrative` (admin_level=9). Test: add those tag types to Overpass in `src/lib/business/zone-grid.ts` `fetchOverpassForBbox` and see if CW + Stratford + Greenwich appear.
+   - Relevant files: `src/lib/business/zone-grid.ts` (constants, `fetchOverpassForBbox`, `buildPlaceBasedZones`, `classifyRegion`-equivalent), `src/app/api/business/neighborhoods/route.ts` (`classifyRegion` lives here — 3×3 splitter over city bbox).
+
+2. **Fix Enrich render-tree bug (CRITICAL — still unresolved from prior session)** — `<EnrichmentExplainer>` and `<BatchEnrichBar>` are rendered AFTER the `if (viewMode === 'results') return …` early return. Clicking Enrich from results view sets `explainerOpen=true` but modal isn't mounted. Wrap both branches in a fragment with the floating UI, or refactor to a single return. `src/app/page.tsx`.
+
+3. **Foot traffic rip-out** (still pending from prior session) — remove `FootTrafficSlot` UI + fetch button, remove peak-busyness bonus in `getEffectiveFitScore`/`computeFitScore`. Keep `Lead.popularTimesData`/`popularTimesScrapedAt` DB fields for possible revival.
+
+4. **Nice-to-have**: include failing URL in `PageSpeed API error: 400` log line in `src/lib/business/pagespeed.ts`.
+
+5. **Phase C scoring (backlog, non-urgent)**: per-region baseline z-score normalization, Overture Maps fusion for emerging markets (MENA/Africa/SE Asia), distance-decay instead of hard 1.5km radius, `brand=*` filtering for premium groceries/hotels, tourist-trap debiasing. See research doc section "Phase C".

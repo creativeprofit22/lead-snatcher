@@ -2,7 +2,15 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { ArrowLeft, MapPin } from 'lucide-react';
+import {
+  ArrowLeft,
+  MapPin,
+  Gem,
+  Building2,
+  Shuffle,
+  TrendingUp,
+} from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 
 /**
  * Two-stage location picker that replaces the flat NeighborhoodChips. Lets
@@ -35,14 +43,55 @@ interface RegionSummary {
   topLabel: string | null;
 }
 
+type ZoneArchetype = 'luxury' | 'corporate' | 'mixed' | 'developing';
+
 interface Neighborhood {
   label: string;
   score: number;
+  wealthScore: number;
+  businessScore: number;
+  archetype: ZoneArchetype;
   level: 'premium' | 'commercial' | 'moderate' | 'developing';
   latitude: number;
   longitude: number;
   region: RegionDirection;
 }
+
+/**
+ * Archetype presentation — icon, short label, and color tone. Consumer
+ * wealth is amber (gem), corporate is sky (building), mixed is violet
+ * (shuffle), developing is muted. Keeps the "what kind of money" signal
+ * legible at chip-size without a legend.
+ */
+const ARCHETYPE_DISPLAY: Record<
+  ZoneArchetype,
+  { icon: LucideIcon; label: string; tone: string; bg: string }
+> = {
+  luxury: {
+    icon: Gem,
+    label: 'Luxury',
+    tone: 'text-amber-300',
+    bg: 'bg-amber-500/10 border-amber-400/30',
+  },
+  corporate: {
+    icon: Building2,
+    label: 'Corporate',
+    tone: 'text-sky-300',
+    bg: 'bg-sky-500/10 border-sky-400/30',
+  },
+  mixed: {
+    icon: Shuffle,
+    label: 'Mixed',
+    tone: 'text-violet-300',
+    bg: 'bg-violet-500/10 border-violet-400/30',
+  },
+  developing: {
+    icon: TrendingUp,
+    label: 'Developing',
+    tone: 'text-white/45',
+    bg: 'bg-white/[0.04] border-white/10',
+  },
+};
 
 interface RegionPickerProps {
   city: string;
@@ -326,6 +375,17 @@ export function RegionPicker({
                 const score = region?.score ?? 0;
                 const count = region?.zoneCount ?? 0;
                 const empty = count === 0;
+                // Archetype of the top-scoring zone inside this region —
+                // tells the user at a glance whether it's a luxury,
+                // corporate, or mixed money district.
+                const topZone = region?.topLabel
+                  ? zones
+                      .filter((z) => z.region === direction)
+                      .sort((a, b) => b.score - a.score)[0]
+                  : null;
+                const topArchetype = topZone?.archetype ?? 'developing';
+                const ArcheIcon = ARCHETYPE_DISPLAY[topArchetype].icon;
+                const archeTone = ARCHETYPE_DISPLAY[topArchetype].tone;
                 const tone = empty
                   ? {
                       text: 'text-white/30',
@@ -359,6 +419,14 @@ export function RegionPicker({
                         {region?.topLabel && (
                           <span className="max-w-full truncate text-[9px] text-white/45">
                             {region.topLabel}
+                          </span>
+                        )}
+                        {topZone && (
+                          <span
+                            className={`inline-flex items-center gap-0.5 font-mono text-[8px] uppercase tracking-wider ${archeTone}`}
+                          >
+                            <ArcheIcon className="h-2 w-2" />
+                            {ARCHETYPE_DISPLAY[topArchetype].label}
                           </span>
                         )}
                       </>
@@ -427,7 +495,8 @@ function NeighborhoodChipRow({
     <div className="flex flex-wrap gap-1.5">
       <AnimatePresence>
         {items.map((n, i) => {
-          const isPremium = n.level === 'premium' || n.level === 'commercial';
+          const arche = ARCHETYPE_DISPLAY[n.archetype];
+          const ArcheIcon = arche.icon;
           return (
             <motion.button
               key={n.label + n.latitude + n.longitude}
@@ -438,15 +507,16 @@ function NeighborhoodChipRow({
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -4 }}
               transition={{ delay: i * 0.04, duration: 0.2, ease: 'easeOut' }}
-              className={`group relative inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
-                isPremium
-                  ? 'border-sky-400/35 bg-sky-500/10 text-sky-200/90 hover:border-sky-400/60 hover:bg-sky-500/15'
-                  : 'border-white/10 bg-white/[0.04] text-white/70 hover:border-white/25 hover:bg-white/[0.08] hover:text-white'
-              }`}
+              title={`💎 Wealth ${n.wealthScore}  ·  🏢 Business ${n.businessScore}`}
+              className={`group relative inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-all disabled:cursor-not-allowed disabled:opacity-40 ${arche.bg} hover:brightness-125`}
             >
-              <MapPin className="h-3 w-3 opacity-70 group-hover:opacity-100" />
-              <span className="font-medium">{n.label}</span>
-              <span className="font-mono text-[10px] text-white/35">
+              <MapPin className="h-3 w-3 opacity-60 group-hover:opacity-100" />
+              <span className="font-medium text-white/90">{n.label}</span>
+              <span className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider ${arche.tone} border-current/30`}>
+                <ArcheIcon className="h-2.5 w-2.5" />
+                {arche.label}
+              </span>
+              <span className="font-mono text-[10px] text-white/45">
                 {n.score}
               </span>
             </motion.button>

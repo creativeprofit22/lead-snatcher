@@ -1,8 +1,27 @@
 'use client';
 
 import { motion } from 'motion/react';
-import { MapPin, Loader2, Radar } from 'lucide-react';
-import type { Zone } from '@/lib/business/zone-grid';
+import {
+  MapPin,
+  Loader2,
+  Radar,
+  Gem,
+  Building2,
+  Shuffle,
+  TrendingUp,
+} from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+import type { Zone, ZoneArchetype } from '@/lib/business/zone-grid';
+
+const ARCHETYPE_DISPLAY: Record<
+  ZoneArchetype,
+  { icon: LucideIcon; label: string; tone: string }
+> = {
+  luxury: { icon: Gem, label: 'Luxury', tone: 'text-amber-300' },
+  corporate: { icon: Building2, label: 'Corporate', tone: 'text-sky-300' },
+  mixed: { icon: Shuffle, label: 'Mixed', tone: 'text-violet-300' },
+  developing: { icon: TrendingUp, label: 'Developing', tone: 'text-white/45' },
+};
 
 interface ZoneChipsStripProps {
   zones: Zone[];
@@ -73,6 +92,8 @@ export function ZoneChipsStrip({
           const isRescanning = rescanningZoneId === z.id;
           const isPremium = z.level === 'premium' || z.level === 'commercial';
           const isDirectional = DIRECTIONAL_FALLBACK_LABELS.has(z.label);
+          const arche = ARCHETYPE_DISPLAY[z.archetype];
+          const ArcheIcon = arche.icon;
 
           return (
             <motion.button
@@ -86,6 +107,7 @@ export function ZoneChipsStrip({
               initial={{ opacity: 0, y: 4 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: i * 0.04, duration: 0.22 }}
+              title={`💎 Wealth ${z.wealthScore}  ·  🏢 Business ${z.businessScore}`}
               className={`group relative inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium transition-all ${
                 isActive
                   ? 'border-sky-400/80 bg-sky-500/20 text-sky-50 shadow-[0_0_18px_rgba(56,189,248,0.45)]'
@@ -103,6 +125,12 @@ export function ZoneChipsStrip({
               )}
               <span className={`${isDirectional ? 'italic' : ''}`}>
                 {z.label}
+              </span>
+              <span
+                className={`inline-flex items-center gap-1 font-mono text-[9px] uppercase tracking-wider ${arche.tone}`}
+              >
+                <ArcheIcon className="h-2.5 w-2.5" />
+                {arche.label}
               </span>
               <span
                 className={`inline-flex items-center justify-center rounded-md px-1.5 py-0.5 font-mono text-[10px] ${

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { geocodeCity, scanCityZones } from '@/lib/business';
 import { checkRateLimit, getClientIp, RATE_LIMITS } from '@/lib/rate-limit';
-import type { Zone } from '@/lib/business/zone-grid';
+import type { Zone, ZoneArchetype } from '@/lib/business/zone-grid';
 
 // Directional fallbacks used by zone-grid when no named place is nearby.
 // These are NOT real neighborhood names and should be hidden from suggestions.
@@ -41,6 +41,12 @@ interface RegionSummary {
 interface NeighborhoodOut {
   label: string;
   score: number;
+  /** Consumer-wealth axis — luxury retail, premium hotels, affluence. */
+  wealthScore: number;
+  /** Business-density axis — corporate offices, professional services. */
+  businessScore: number;
+  /** luxury | corporate | mixed | developing — the money-flavor label. */
+  archetype: ZoneArchetype;
   level: Zone['level'];
   latitude: number;
   longitude: number;
@@ -183,6 +189,9 @@ export async function GET(request: NextRequest) {
     const annotated: NeighborhoodOut[] = validZones.map((z) => ({
       label: z.label,
       score: z.score,
+      wealthScore: z.wealthScore,
+      businessScore: z.businessScore,
+      archetype: z.archetype,
       level: z.level,
       latitude: z.latitude,
       longitude: z.longitude,
