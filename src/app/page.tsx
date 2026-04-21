@@ -31,7 +31,6 @@ import {
   ZoneChipsStrip,
   ResumeSearchCard,
   ActivityTicker,
-  IdleScoreDial,
   SaveSessionButton,
   SavedSessionsPanel,
 } from '@/components/search';
@@ -448,7 +447,19 @@ function HomeInner() {
       }
 
       if (data.results?.length === 0) {
-        toast.error('No businesses found');
+        // Distinguish "Maps provider glitched" from "genuinely zero hits in a
+        // tiny area". The provider glitch is the common case for micro-zones
+        // (e.g. a single street) and for repeat queries that worked a moment
+        // earlier — surface that possibility so the user doesn't assume the
+        // city/industry combination is a dead end.
+        const msg =
+          'No businesses returned. The Maps provider sometimes blanks out for micro-zones or repeat queries — hit Search again, or widen to a bigger city name.';
+        toast.error(msg, { duration: 8000 });
+        setSearchBannerError({
+          message: msg,
+          severity: 'error',
+          isAuthError: false,
+        });
         setRadarPhase('off');
       } else {
         toast.success(`Found ${data.results.length} businesses`);
@@ -1207,15 +1218,6 @@ function HomeInner() {
         {/* Activity ticker — top-center, always on */}
         <div className="fixed left-1/2 top-4 z-30 -translate-x-1/2 sm:top-6">
           <ActivityTicker />
-        </div>
-
-        {/* Floating idle score dial — anchored just outside the right edge of the
-            content column on xl+ viewports. Hidden on smaller screens / 9:16 crop. */}
-        <div
-          className="pointer-events-none fixed top-1/2 z-20 hidden -translate-y-1/2 xl:block"
-          style={{ left: 'calc(50% + 26rem)' }}
-        >
-          <IdleScoreDial />
         </div>
 
         {/* User chrome — top-right corner, pinned directly to the viewport

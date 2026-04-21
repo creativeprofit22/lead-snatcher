@@ -176,6 +176,9 @@ export async function POST(request: NextRequest) {
         latitude: searchCenterLat,
         longitude: searchCenterLng,
         score: 50,
+        wealthScore: 50,
+        businessScore: 50,
+        archetype: 'mixed',
         level: 'moderate' as ZoneLevel,
         amenities: {
           banks: 0,
@@ -200,7 +203,11 @@ export async function POST(request: NextRequest) {
         result.contactPoints,
         focusedZone.score,
         focusedZone.level,
-        result.priceLevel
+        result.priceLevel,
+        result.rating,
+        focusedZone.archetype,
+        result.types,
+        result.name
       );
       const budgetEstimate = estimateBudget(budgetInput);
       return {

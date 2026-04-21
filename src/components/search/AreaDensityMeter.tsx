@@ -7,8 +7,8 @@ import {
   Hotel,
   Gem,
   Briefcase,
+  Building2,
   Crown,
-  Dices,
   Sparkles,
   HandCoins,
   MapPin,
@@ -35,6 +35,7 @@ interface Amenities {
   luxuryRetail?: number;
   professionalServices?: number;
   premiumHotels?: number;
+  corporateOffices?: number;
   casinos?: number;
   pawnshops?: number;
 }
@@ -63,9 +64,11 @@ const GAUGE_SIZE = 260;
 const ORBITAL_RADIUS = 172;
 const CONTAINER_SIZE = GAUGE_SIZE + (ORBITAL_RADIUS - GAUGE_SIZE / 2) * 2 + 56;
 
-// v2-wealth rim: icons reflect the actual wealth signals that drive the
-// zone score. Positive signals take the top half of the dial, negative
-// signals get the bottom-left slot so they're visible without dominating.
+// Two-axis rim: top half = luxury signals (consumer wealth), bottom half =
+// corporate signals (business density). Pawnshops sit in the upper-left as
+// the one negative signal. Icons are spaced exactly 45° apart so they
+// distribute evenly and the rotating sweep band passes through each one's
+// center without the stacking that happened under the old 52° spacing.
 const AMENITIES: {
   key: keyof Omit<Amenities, 'total'>;
   label: string;
@@ -74,14 +77,17 @@ const AMENITIES: {
   /** When true, the icon highlights in red/amber as it fills instead of green. */
   negative?: boolean;
 }[] = [
+  // Luxury arc (top half, 12→4 o'clock)
   { key: 'luxuryRetail', label: 'Luxury', icon: Gem, angle: -90 },
-  { key: 'professionalServices', label: 'Pro Svc', icon: Briefcase, angle: -38 },
-  { key: 'premiumHotels', label: 'Premium', icon: Crown, angle: 14 },
-  { key: 'banks', label: 'Banks', icon: Landmark, angle: 66 },
-  { key: 'affluenceSpots', label: 'Leisure', icon: Sparkles, angle: 118 },
-  { key: 'hotels', label: 'Hotels', icon: Hotel, angle: 170 },
-  { key: 'casinos', label: 'Casino', icon: Dices, angle: 222 },
-  { key: 'pawnshops', label: 'Pawn', icon: HandCoins, angle: 274, negative: true },
+  { key: 'premiumHotels', label: 'Premium', icon: Crown, angle: -45 },
+  { key: 'affluenceSpots', label: 'Leisure', icon: Sparkles, angle: 0 },
+  { key: 'hotels', label: 'Hotels', icon: Hotel, angle: 45 },
+  // Corporate arc (bottom half, 6→8 o'clock)
+  { key: 'professionalServices', label: 'Pro Svc', icon: Briefcase, angle: 90 },
+  { key: 'corporateOffices', label: 'Offices', icon: Building2, angle: 135 },
+  { key: 'banks', label: 'Banks', icon: Landmark, angle: 180 },
+  // Negative signal — upper-left so it stays visible without dominating
+  { key: 'pawnshops', label: 'Pawn', icon: HandCoins, angle: 225, negative: true },
 ];
 
 interface LevelPalette {
@@ -171,16 +177,19 @@ export function AreaDensityMeter({
           className="relative shrink-0"
           style={{ width: CONTAINER_SIZE, height: CONTAINER_SIZE }}
         >
-          {/* Outer ambient sweep ring — mask is anchored to ORBITAL_RADIUS
-              so the visible band passes through the centers of the amenity
-              icons on its rim. */}
+          {/* Outer ambient sweep ring — mask band is centered on
+              ORBITAL_RADIUS, which is also where the icon disks sit (their
+              centers are translated to cos/sin * ORBITAL_RADIUS), so the
+              rotating light passes straight through the middle of each
+              icon. Band width is 20px — wider than the old 8px so the sweep
+              is clearly visible crossing the 44px icon disks. */}
           <div
             className="pointer-events-none absolute inset-0 animate-[spin_9s_linear_infinite]"
             style={{
               background: `conic-gradient(from 0deg at 50% 50%, transparent 62%, ${colors.sweep} 94%, transparent 100%)`,
-              maskImage: `radial-gradient(circle, transparent ${ORBITAL_RADIUS - 7}px, black ${ORBITAL_RADIUS - 4}px, black ${ORBITAL_RADIUS + 4}px, transparent ${ORBITAL_RADIUS + 7}px)`,
-              WebkitMaskImage: `radial-gradient(circle, transparent ${ORBITAL_RADIUS - 7}px, black ${ORBITAL_RADIUS - 4}px, black ${ORBITAL_RADIUS + 4}px, transparent ${ORBITAL_RADIUS + 7}px)`,
-              opacity: 0.55,
+              maskImage: `radial-gradient(circle at 50% 50%, transparent ${ORBITAL_RADIUS - 14}px, black ${ORBITAL_RADIUS - 10}px, black ${ORBITAL_RADIUS + 10}px, transparent ${ORBITAL_RADIUS + 14}px)`,
+              WebkitMaskImage: `radial-gradient(circle at 50% 50%, transparent ${ORBITAL_RADIUS - 14}px, black ${ORBITAL_RADIUS - 10}px, black ${ORBITAL_RADIUS + 10}px, transparent ${ORBITAL_RADIUS + 14}px)`,
+              opacity: 0.6,
             }}
           />
 

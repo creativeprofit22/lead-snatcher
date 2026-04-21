@@ -110,7 +110,7 @@ const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 // Bump when the scoring formula or queried tag set changes. Old cached
 // results remain in the store under the previous key and will expire
 // naturally, but new callers get fresh data under the new version.
-const CACHE_SCHEMA_VERSION = 'v11-two-axis-tuned';
+const CACHE_SCHEMA_VERSION = 'v13-central-octant-cap-6';
 
 // Place-based scanning: use OSM named places (Mayfair, Canary Wharf, etc.)
 // as zone centers instead of a 3×3 grid. If we find at least this many
@@ -130,8 +130,12 @@ const PLACE_MAX_ZONES = 36;
 // empty in the RegionPicker even when legitimate places exist there. The
 // octant grid is the same 3×3 split the neighborhoods route uses for
 // region classification, so a cap here maps directly to a per-region cap
-// in the UI.
-const PLACE_MAX_PER_OCTANT = 4;
+// in the UI. Set to 6 rather than 4 because Central London / Midtown /
+// Central Tokyo legitimately have ~6-8 named neighborhoods a user would
+// expect to pick (Mayfair, Soho, Knightsbridge, Belgravia, Covent Garden,
+// St James's); 4 was cropping recognizable places without helping outer
+// regions (which never hit the cap).
+const PLACE_MAX_PER_OCTANT = 6;
 // Short TTL for soft-failed lookups (Overpass down). Prevents thrash on
 // every autocomplete keystroke while still letting the user retry soon.
 const FAILURE_CACHE_TTL_MS = 60 * 1000;
@@ -698,6 +702,18 @@ function splitElements(elements: OverpassElement[]): {
     const tags = el.tags ?? {};
     const placeTag = tags.place;
     if (placeTag) {
+      // `place=locality` is OSM's catch-all for "named point that is NOT
+      // a settlement" — gates, squares, springs, single landmarks, old
+      // hamlets that no longer exist. Without filtering, London pulls in
+      // "Albert's Gate", "Queen's Gate", etc. as zone chips, which is
+      // absurd because they aren't neighborhoods; the actual area there
+      // is Knightsbridge. Require localities to be notable enough for
+      // Wikipedia (or tagged `tourism`) before promoting them — keeps
+      // signal-heavy localities (e.g. Wall Street, some international
+      // districts tagged as locality) while dropping the gate/square noise.
+      if (placeTag === 'locality' && !tags.wikidata && !tags.wikipedia && !tags.tourism) {
+        continue;
+      }
       const englishName = pickEnglishName(tags);
       if (englishName) {
         places.push({ lat, lon, name: englishName, prominence: prominenceBonus(tags) });

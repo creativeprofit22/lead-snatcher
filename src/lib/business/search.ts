@@ -81,20 +81,58 @@ export async function searchBusinesses(
   limit: number = 20,
   options: SearchOptions = {}
 ): Promise<BusinessSearchResult[]> {
-  const response = await rapidApiFetch<MapsApiResponse>(userId, {
+  // Maps-data.rapidapi intermittently returns 200 OK with an empty/missing
+  // `data` field for queries that had worked moments earlier. Retry once
+  // after a short delay before giving up — a single retry recovers the
+  // vast majority of these transient misses without meaningfully affecting
+  // search latency. If still empty after retry, we log the raw shape so
+  // the user has *some* answer to "why did this say no results?"
+  const mapsParams = {
+    query: businessType,
+    lat: latitude.toString(),
+    lng: longitude.toString(),
+    limit: Math.min(limit, 50).toString(),
+    zoom: '13',
+    lang: 'en',
+  };
+
+  let response = await rapidApiFetch<MapsApiResponse>(userId, {
     host: MAPS_API_HOST,
     endpoint: '/searchmaps.php',
-    params: {
-      query: businessType,
-      lat: latitude.toString(),
-      lng: longitude.toString(),
-      limit: Math.min(limit, 50).toString(),
-      zoom: '13',
-      lang: 'en',
-    },
+    params: mapsParams,
   });
 
+  const looksEmpty = (r: MapsApiResponse): boolean =>
+    !r.data || !Array.isArray(r.data) || r.data.length === 0;
+
+  if (looksEmpty(response)) {
+    console.warn(
+      '[searchBusinesses] empty/malformed response from Maps API, retrying once',
+      {
+        query: businessType,
+        lat: latitude,
+        lng: longitude,
+        responseShape: {
+          hasData: 'data' in response,
+          dataType: typeof response.data,
+          dataIsArray: Array.isArray(response.data),
+          dataLength: Array.isArray(response.data) ? response.data.length : null,
+        },
+      }
+    );
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    response = await rapidApiFetch<MapsApiResponse>(userId, {
+      host: MAPS_API_HOST,
+      endpoint: '/searchmaps.php',
+      params: mapsParams,
+    });
+  }
+
   if (!response.data || !Array.isArray(response.data)) {
+    console.error(
+      '[searchBusinesses] Maps API returned no `data` array even after retry — provider glitch',
+      { query: businessType, lat: latitude, lng: longitude }
+    );
     return [];
   }
 

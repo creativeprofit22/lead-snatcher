@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { INDUSTRY_TYPES } from '@/lib/constants';
 import { useCyclingPlaceholder } from '@/lib/hooks/useCyclingPlaceholder';
+import { IdleScoreDial } from '@/components/search/IdleScoreDial';
 import type { IndustryType } from '@/types';
 
 const ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -128,6 +129,17 @@ export function BusinessTypeSelector({
               </button>
             );
           })}
+
+          {/* Trailing cell: idle lead-score dial. Lives inside the 5-col grid
+              so it sits flush to the right of "Other" and below "Retail" —
+              visually integrated with the preset tiles. Hidden on mobile
+              (3-col grid) because there's no trailing slot to fill there. */}
+          <div
+            className="relative hidden items-center justify-center overflow-hidden rounded-xl border border-border-bright/50 bg-surface-elevated/60 p-2 backdrop-blur-sm sm:flex"
+            aria-hidden
+          >
+            <IdleScoreDial size={92} />
+          </div>
         </div>
       </div>
 

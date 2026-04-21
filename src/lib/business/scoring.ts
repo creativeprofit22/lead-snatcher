@@ -308,17 +308,32 @@ export function calculateLeadScore(business: ExtendedBusinessData): ScoreBreakdo
   }
 
   // === REVENUE SIGNAL (informational, not scored) ===
-  // High review count = high foot traffic = revenue
-  if (reviewCount >= 200) {
+  // Composite of volume + rating quality. A 2K-review 3.8★ chain and a
+  // 150-review 4.9★ boutique both exist; flat review-count tiers flattened
+  // them together and biased scoring toward high-volume/low-margin places.
+  // The budget estimator does the actual math; this label just mirrors it.
+  const revRating = business.rating || 0;
+  const rL = revRating > 0 ? ` · ${revRating.toFixed(1)}★` : '';
+  if (reviewCount >= 200 && revRating >= 4.0) {
     breakdown.revenueSignal = 'high';
-    breakdown.revenueLabel = `${reviewCount} reviews — high traffic, likely has budget`;
+    breakdown.revenueLabel = `${reviewCount} reviews${rL} — high traffic, likely has budget`;
+  } else if (reviewCount >= 200) {
+    // High volume but poor ratings — demote from 'high' to avoid crediting
+    // churny, low-margin operations as premium revenue.
+    breakdown.revenueSignal = 'medium';
+    breakdown.revenueLabel = `${reviewCount} reviews${rL} — high volume but rating drag`;
+  } else if (reviewCount >= 50 && revRating >= 4.6) {
+    // Low/mid volume but exceptional rating — boutique or specialist.
+    // Surface as 'medium' so it doesn't get buried under mediocre chains.
+    breakdown.revenueSignal = 'medium';
+    breakdown.revenueLabel = `${reviewCount} reviews${rL} — boutique / selective clientele`;
   } else if (reviewCount >= 50) {
     breakdown.revenueSignal = 'medium';
-    breakdown.revenueLabel = `${reviewCount} reviews — established business`;
+    breakdown.revenueLabel = `${reviewCount} reviews${rL} — established business`;
   } else {
     breakdown.revenueSignal = 'low';
     breakdown.revenueLabel = reviewCount > 0
-      ? `${reviewCount} reviews — newer or low-traffic business`
+      ? `${reviewCount} reviews${rL} — newer or low-traffic business`
       : 'No reviews — very new or unlisted';
   }
 

@@ -16,7 +16,13 @@ import { motion } from 'motion/react';
 
 const SCORE_SEQUENCE = [72, 84, 61, 93, 78, 55, 87, 69, 96, 74, 82, 58];
 
-export function IdleScoreDial({ className = '' }: { className?: string }) {
+export function IdleScoreDial({
+  className = '',
+  size = 200,
+}: {
+  className?: string;
+  size?: number;
+}) {
   const [scoreIndex, setScoreIndex] = useState(0);
   useEffect(() => {
     const id = setInterval(
@@ -40,13 +46,18 @@ export function IdleScoreDial({ className = '' }: { className?: string }) {
   const labelColor =
     tier === 'hot' ? 'text-amber-300' : tier === 'mid' ? 'text-sky-300' : 'text-slate-300';
 
-  const SIZE = 200;
+  // All radii scale proportionally from the 200px reference design so the
+  // dial reads the same at hero scale (200) and inline tile scale (~90).
+  const SIZE = size;
   const CENTER = SIZE / 2;
-  const TICK_INNER = 80;
-  const TICK_OUTER_MAJOR = 94;
-  const TICK_OUTER_MINOR = 88;
-  const ARC_R = 70;
+  const TICK_INNER = SIZE * 0.4;
+  const TICK_OUTER_MAJOR = SIZE * 0.47;
+  const TICK_OUTER_MINOR = SIZE * 0.44;
+  const ARC_R = SIZE * 0.35;
   const ARC_CIRCUM = 2 * Math.PI * ARC_R;
+  const scoreFontPx = Math.round(SIZE * 0.24);
+  const labelFontPx = Math.max(Math.round(SIZE * 0.055), 7);
+  const showLabel = SIZE >= 130;
 
   return (
     <div
@@ -109,12 +120,20 @@ export function IdleScoreDial({ className = '' }: { className?: string }) {
         />
       </svg>
       <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-        <span className={`font-orbitron text-5xl font-bold tabular-nums ${labelColor}`}>
+        <span
+          className={`font-orbitron font-bold tabular-nums leading-none ${labelColor}`}
+          style={{ fontSize: `${scoreFontPx}px` }}
+        >
           {score}
         </span>
-        <span className="mt-1 font-mono text-[10px] uppercase tracking-[0.26em] text-white/45">
-          Lead Score
-        </span>
+        {showLabel && (
+          <span
+            className="mt-1 font-mono uppercase tracking-[0.26em] text-white/45"
+            style={{ fontSize: `${labelFontPx}px` }}
+          >
+            Lead Score
+          </span>
+        )}
       </div>
     </div>
   );
