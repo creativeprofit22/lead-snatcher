@@ -1,5 +1,32 @@
-.next
-node_modules
-dist
-build
+# Dependencies
+node_modules/
+
+# Generated and build files
+.next/
+out/
+dist/
+build/
+coverage/
+src/generated/
+next-env.d.ts
 *.min.js
+
+# Environment files
+.env
+.env.*
+
+# Databases
+data/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+
+# Lock files
+package-lock.json
+npm-shrinkwrap.json
+yarn.lock
+pnpm-lock.yaml
+bun.lock
+bun.lockb
+prisma/migrations/migration_lock.toml
