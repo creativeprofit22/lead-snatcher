@@ -14,13 +14,7 @@ import { rapidApiFetch } from '@/lib/rapidapi/client';
 const WEB_SEARCH_HOST = 'real-time-web-search.p.rapidapi.com';
 const SOCIAL_SEARCH_HOST = 'social-links-search.p.rapidapi.com';
 
-type SocialNetwork =
-  | 'facebook'
-  | 'instagram'
-  | 'twitter'
-  | 'linkedin'
-  | 'youtube'
-  | 'tiktok';
+type SocialNetwork = 'facebook' | 'instagram' | 'twitter' | 'linkedin' | 'youtube' | 'tiktok';
 
 export interface DiscoveredSocials {
   facebook?: string;
@@ -131,11 +125,7 @@ export async function discoverWebsite(
       },
     });
 
-    const results =
-      response.data ||
-      response.organic_results ||
-      response.results ||
-      [];
+    const results = response.data || response.organic_results || response.results || [];
 
     for (const result of results) {
       const rawUrl = result.url || result.link;
@@ -144,11 +134,9 @@ export async function discoverWebsite(
       if (!host) continue;
       if (isBlockedHost(host)) continue;
 
-      const haystack = [
-        host,
-        result.title || '',
-        result.snippet || result.description || '',
-      ].join(' ');
+      const haystack = [host, result.title || '', result.snippet || result.description || ''].join(
+        ' '
+      );
       if (!looseNameMatch(businessName, haystack)) continue;
 
       // Return the normalized URL
@@ -189,18 +177,17 @@ export async function discoverSocials(
     const payload = response.data || response.results || {};
     const result: DiscoveredSocials = {};
 
-    (['facebook', 'instagram', 'twitter', 'linkedin', 'youtube', 'tiktok'] as SocialNetwork[]).forEach(
-      (network) => {
-        const candidates = payload[network];
-        if (!candidates || !Array.isArray(candidates) || candidates.length === 0) return;
-        // Pick the first profile URL that loosely matches the business name.
-        // Falls back to the first entry if none match — the social API already
-        // ranks by relevance, so first is usually correct.
-        const match =
-          candidates.find((url) => looseNameMatch(businessName, url)) ?? candidates[0];
-        if (match) result[network] = match;
-      }
-    );
+    (
+      ['facebook', 'instagram', 'twitter', 'linkedin', 'youtube', 'tiktok'] as SocialNetwork[]
+    ).forEach((network) => {
+      const candidates = payload[network];
+      if (!candidates || !Array.isArray(candidates) || candidates.length === 0) return;
+      // Pick the first profile URL that loosely matches the business name.
+      // Falls back to the first entry if none match — the social API already
+      // ranks by relevance, so first is usually correct.
+      const match = candidates.find((url) => looseNameMatch(businessName, url)) ?? candidates[0];
+      if (match) result[network] = match;
+    });
 
     return result;
   } catch {

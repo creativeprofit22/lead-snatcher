@@ -109,7 +109,13 @@ export function estimateBudget(input: BudgetInput): BudgetEstimate {
     const priceMap = [0, 7, 14, 20, 25];
     const pricePoints = priceMap[input.priceLevel] ?? 0;
     budgetPoints += pricePoints;
-    const labels = ['Free / non-commercial', 'Budget pricing ($)', 'Mid-range pricing ($$)', 'Upscale pricing ($$$)', 'Premium pricing ($$$$)'];
+    const labels = [
+      'Free / non-commercial',
+      'Budget pricing ($)',
+      'Mid-range pricing ($$)',
+      'Upscale pricing ($$$)',
+      'Premium pricing ($$$$)',
+    ];
     if (input.priceLevel >= 1) {
       reasons.push(labels[input.priceLevel] ?? 'Known pricing tier');
     }
@@ -147,20 +153,25 @@ export function estimateBudget(input: BudgetInput): BudgetEstimate {
     const pts = Math.round(basePts * gate);
     budgetPoints += pts;
 
-    const tierLabel = input.zoneArchetype === 'luxury'
-      ? 'luxury-retail district'
-      : input.zoneArchetype === 'corporate'
-        ? 'corporate/business district'
-        : input.zoneArchetype === 'mixed'
-          ? 'mixed commercial district'
-          : 'developing area';
+    const tierLabel =
+      input.zoneArchetype === 'luxury'
+        ? 'luxury-retail district'
+        : input.zoneArchetype === 'corporate'
+          ? 'corporate/business district'
+          : input.zoneArchetype === 'mixed'
+            ? 'mixed commercial district'
+            : 'developing area';
 
     if (gate >= 1.0 && pts > 0) {
       reasons.push(`Located in a ${tierLabel} (price proxy)`);
     } else if (gate >= 0.5) {
-      reasons.push(`Located in a ${tierLabel}, but quality signals partial (${rating.toFixed(1)}★)`);
+      reasons.push(
+        `Located in a ${tierLabel}, but quality signals partial (${rating.toFixed(1)}★)`
+      );
     } else if (gate === 0 && rating > 0) {
-      reasons.push(`${tierLabel} address, but ${rating.toFixed(1)}★ rating suggests budget-tier operation`);
+      reasons.push(
+        `${tierLabel} address, but ${rating.toFixed(1)}★ rating suggests budget-tier operation`
+      );
     } else if (pts > 0) {
       reasons.push(`${tierLabel} address — weak quality signals, neighborhood premium reduced`);
     }

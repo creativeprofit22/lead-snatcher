@@ -140,7 +140,10 @@ export function generateOpportunities(
       }
 
       // Missing features based on industry
-      if (!scraped.hasOnlineBooking && ['salon', 'fitness', 'medical', 'restaurant'].includes(industryType)) {
+      if (
+        !scraped.hasOnlineBooking &&
+        ['salon', 'fitness', 'medical', 'restaurant'].includes(industryType)
+      ) {
         opportunities.push('Online appointment/reservation system');
       }
 

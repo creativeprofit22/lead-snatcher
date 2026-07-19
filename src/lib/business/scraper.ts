@@ -272,8 +272,7 @@ export async function scrapeWebsite(websiteUrl: string): Promise<ScrapedWebsiteD
     const response = await fetch(url, {
       signal: controller.signal,
       headers: {
-        'User-Agent':
-          'Mozilla/5.0 (compatible; LeadSnatcher/1.0)',
+        'User-Agent': 'Mozilla/5.0 (compatible; LeadSnatcher/1.0)',
         Accept: 'text/html,application/xhtml+xml',
         'Accept-Language': 'en-US,en;q=0.9,de;q=0.8',
       },
@@ -541,7 +540,8 @@ function detectDesignQuality(html: string, result: ScrapedWebsiteData): void {
   result.imageCount = imgMatches ? imgMatches.length : 0;
 
   // Has video
-  result.hasVideo = /<video/i.test(html) || /youtube\.com\/embed/i.test(html) || /vimeo/i.test(html);
+  result.hasVideo =
+    /<video/i.test(html) || /youtube\.com\/embed/i.test(html) || /vimeo/i.test(html);
 }
 
 function estimateWebsiteAge(html: string, result: ScrapedWebsiteData): void {
@@ -607,10 +607,7 @@ function detectMarketingSignals(html: string, result: ScrapedWebsiteData): void 
 
   // Has marketing budget = running any paid ads (analytics alone doesn't count)
   result.hasMarketingBudget =
-    signals.hasGoogleAds ||
-    signals.hasFacebookAds ||
-    signals.hasBingAds ||
-    signals.hasOtherAds;
+    signals.hasGoogleAds || signals.hasFacebookAds || signals.hasBingAds || signals.hasOtherAds;
 }
 
 // Template fingerprints — pointed at the specific builder so the chip
@@ -641,7 +638,8 @@ function detectQualitySignals(html: string, result: ScrapedWebsiteData): void {
   // smoking gun. Heuristic: the page has 2+ <table> tags and no modern
   // layout CSS (display:flex/grid) detected.
   const tableOpens = (html.match(/<table\b/gi) || []).length;
-  const hasFlexOrGrid = /display\s*:\s*(flex|grid)/i.test(html) || /\bclass\s*=\s*"[^"]*(flex|grid)\b/i.test(html);
+  const hasFlexOrGrid =
+    /display\s*:\s*(flex|grid)/i.test(html) || /\bclass\s*=\s*"[^"]*(flex|grid)\b/i.test(html);
   q.hasTableLayout = tableOpens >= 2 && !hasFlexOrGrid;
 
   // Word count of visible body text — strip script/style then tags.
@@ -659,8 +657,7 @@ function detectQualitySignals(html: string, result: ScrapedWebsiteData): void {
 
   // schema.org JSON-LD structured data
   q.hasSchemaOrg =
-    /<script[^>]+type=["']application\/ld\+json["']/i.test(html) ||
-    /schema\.org/i.test(html);
+    /<script[^>]+type=["']application\/ld\+json["']/i.test(html) || /schema\.org/i.test(html);
 
   // Open Graph tags
   q.hasOpenGraph = /<meta[^>]+property=["']og:/i.test(html);
@@ -671,7 +668,8 @@ function detectQualitySignals(html: string, result: ScrapedWebsiteData): void {
     if (pattern.test(html)) foundDeprecated.push(label);
   }
   // Inline style with fixed pixel widths on layout blocks
-  const fixedWidthMatches = html.match(/(width\s*=\s*["']?\d{3,4}["']?|width\s*:\s*\d{3,4}\s*px)/gi) || [];
+  const fixedWidthMatches =
+    html.match(/(width\s*=\s*["']?\d{3,4}["']?|width\s*:\s*\d{3,4}\s*px)/gi) || [];
   q.hasFixedPixelWidth = fixedWidthMatches.length >= 3;
   q.deprecatedTagsFound = foundDeprecated;
   q.hasDeprecatedTags = foundDeprecated.length > 0;

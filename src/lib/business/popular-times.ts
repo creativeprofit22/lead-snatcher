@@ -33,14 +33,7 @@ const USER_AGENT =
 
 const REQUEST_TIMEOUT_MS = 15000;
 
-export type DayOfWeek =
-  | 'Mon'
-  | 'Tue'
-  | 'Wed'
-  | 'Thu'
-  | 'Fri'
-  | 'Sat'
-  | 'Sun';
+export type DayOfWeek = 'Mon' | 'Tue' | 'Wed' | 'Thu' | 'Fri' | 'Sat' | 'Sun';
 
 const DAY_LABELS: DayOfWeek[] = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
@@ -60,11 +53,7 @@ export interface PopularTimesData {
 }
 
 export interface ScrapeFailure {
-  reason:
-    | 'fetch_failed'
-    | 'response_unparseable'
-    | 'no_data_found'
-    | 'timeout';
+  reason: 'fetch_failed' | 'response_unparseable' | 'no_data_found' | 'timeout';
   message: string;
 }
 
@@ -91,9 +80,7 @@ function indexGet(target: unknown, ...path: (number | string)[]): unknown {
  * Maps would use — typically `name + address`. Returns null-shaped result
  * on any failure; never throws.
  */
-export async function scrapePopularTimes(
-  query: string
-): Promise<PopularTimesResult> {
+export async function scrapePopularTimes(query: string): Promise<PopularTimesResult> {
   const params = new URLSearchParams({
     tbm: 'map',
     tch: '1',
@@ -112,7 +99,7 @@ export async function scrapePopularTimes(
     const res = await fetch(url, {
       headers: {
         'User-Agent': USER_AGENT,
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9',
         'Accept-Language': 'en-US,en;q=0.9',
       },
       signal: controller.signal,
@@ -207,9 +194,7 @@ export async function scrapePopularTimes(
   }
 
   // Initialise 7×24 grid of zeros
-  const weekly: number[][] = Array.from({ length: 7 }, () =>
-    Array.from({ length: 24 }, () => 0)
-  );
+  const weekly: number[][] = Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0));
 
   for (const day of rawWeekly) {
     if (!Array.isArray(day)) continue;
@@ -218,17 +203,12 @@ export async function scrapePopularTimes(
     if (typeof dayNum !== 'number' || !Array.isArray(hours)) continue;
     // Google indexes Sunday=1 in some responses, Monday=1 in others.
     // Empirically the upstream lib treats day_no - 1 as Mon-Sun.
-    const idx = ((dayNum - 1) % 7 + 7) % 7;
+    const idx = (((dayNum - 1) % 7) + 7) % 7;
     for (const hourEntry of hours) {
       if (!Array.isArray(hourEntry)) continue;
       const hour = hourEntry[0];
       const busy = hourEntry[1];
-      if (
-        typeof hour === 'number' &&
-        hour >= 0 &&
-        hour < 24 &&
-        typeof busy === 'number'
-      ) {
+      if (typeof hour === 'number' && hour >= 0 && hour < 24 && typeof busy === 'number') {
         const day = weekly[idx];
         if (day) day[hour] = busy;
       }
@@ -248,8 +228,7 @@ export async function scrapePopularTimes(
     ok: true,
     data: {
       weekly,
-      currentPopularity:
-        typeof currentPopularity === 'number' ? currentPopularity : undefined,
+      currentPopularity: typeof currentPopularity === 'number' ? currentPopularity : undefined,
       timeSpent,
       dayLabels: DAY_LABELS,
     },

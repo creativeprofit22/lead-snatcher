@@ -256,20 +256,13 @@ function toRadians(deg: number): number {
 }
 
 /** Haversine great-circle distance in meters. */
-function haversineMeters(
-  lat1: number,
-  lon1: number,
-  lat2: number,
-  lon2: number
-): number {
+function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const R = 6371000;
   const phi1 = toRadians(lat1);
   const phi2 = toRadians(lat2);
   const dPhi = toRadians(lat2 - lat1);
   const dLambda = toRadians(lon2 - lon1);
-  const a =
-    Math.sin(dPhi / 2) ** 2 +
-    Math.cos(phi1) * Math.cos(phi2) * Math.sin(dLambda / 2) ** 2;
+  const a = Math.sin(dPhi / 2) ** 2 + Math.cos(phi1) * Math.cos(phi2) * Math.sin(dLambda / 2) ** 2;
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 
@@ -282,9 +275,7 @@ function haversineMeters(
  * scanned bbox west and starves the East region (Canary Wharf, Stratford).
  * Use the bbox midpoint when available so coverage stays balanced.
  */
-function bboxCenter(
-  bbox: [number, number, number, number]
-): { lat: number; lon: number } {
+function bboxCenter(bbox: [number, number, number, number]): { lat: number; lon: number } {
   const [south, north, west, east] = bbox;
   return { lat: (south + north) / 2, lon: (west + east) / 2 };
 }
@@ -296,13 +287,11 @@ function clampBbox(
   centerLon: number
 ): [number, number, number, number] {
   const [south, north, west, east] = bbox;
-  const heightKm =
-    haversineMeters(south, centerLon, north, centerLon) / 1000;
+  const heightKm = haversineMeters(south, centerLon, north, centerLon) / 1000;
   const widthKm = haversineMeters(centerLat, west, centerLat, east) / 1000;
 
   const halfMaxLatDeg = MAX_BBOX_SIDE_KM / 2 / 111; // ~111 km per degree lat
-  const halfMaxLonDeg =
-    MAX_BBOX_SIDE_KM / 2 / (111 * Math.cos(toRadians(centerLat)) || 1);
+  const halfMaxLonDeg = MAX_BBOX_SIDE_KM / 2 / (111 * Math.cos(toRadians(centerLat)) || 1);
 
   return [
     heightKm > MAX_BBOX_SIDE_KM ? centerLat - halfMaxLatDeg : south,
@@ -317,8 +306,7 @@ function generateGridPoints(
   bbox: [number, number, number, number]
 ): { lat: number; lon: number; row: number; col: number }[] {
   const [south, north, west, east] = bbox;
-  const fractions =
-    GRID_SIZE === 3 ? [0.2, 0.5, 0.8] : [0.25, 0.5, 0.75];
+  const fractions = GRID_SIZE === 3 ? [0.2, 0.5, 0.8] : [0.25, 0.5, 0.75];
   const points: { lat: number; lon: number; row: number; col: number }[] = [];
   for (let row = 0; row < GRID_SIZE; row++) {
     for (let col = 0; col < GRID_SIZE; col++) {
@@ -379,9 +367,7 @@ function negativesPenalty(counts: ZoneAmenities): number {
   const moneyLenders = logCap(counts.moneyLenders, 3);
   const socialFacilities = logCap(counts.socialFacilities, 3);
   const charityShops = logCap(counts.charityShops, 3);
-  return (
-    -6 * pawnshops + -4 * moneyLenders + -4 * socialFacilities + -2 * charityShops
-  );
+  return -6 * pawnshops + -4 * moneyLenders + -4 * socialFacilities + -2 * charityShops;
 }
 
 /**
@@ -434,12 +420,7 @@ function scoreBusiness(counts: ZoneAmenities): number {
   // like Canary Wharf (40+ named HQs, 50+ offices, 38 banks) still
   // topped out around 47/100 — numerically underselling genuine
   // business density.
-  const raw =
-    5 * prof +
-    4.5 * corporate +
-    3 * banks +
-    2 * premiumHotel +
-    negativesPenalty(counts);
+  const raw = 5 * prof + 4.5 * corporate + 3 * banks + 2 * premiumHotel + negativesPenalty(counts);
 
   return Math.max(0, Math.min(100, Math.round(raw)));
 }
@@ -589,9 +570,13 @@ async function fetchOverpassForBbox(
       error.errors.forEach((err, i) => {
         const ep = OVERPASS_MIRRORS[i];
         if (err instanceof Error && err.name === 'AbortError') {
-          console.error(`Overpass (zone grid) ${ep} -> client timeout after ${OVERPASS_CLIENT_TIMEOUT_MS}ms`);
+          console.error(
+            `Overpass (zone grid) ${ep} -> client timeout after ${OVERPASS_CLIENT_TIMEOUT_MS}ms`
+          );
         } else {
-          console.error(`Overpass (zone grid) ${ep} -> ${err instanceof Error ? err.message : String(err)}`);
+          console.error(
+            `Overpass (zone grid) ${ep} -> ${err instanceof Error ? err.message : String(err)}`
+          );
         }
       });
       console.error('Overpass (zone grid) all mirrors exhausted');
@@ -732,9 +717,9 @@ function splitElements(elements: OverpassElement[]): {
     const boundaryTag = tags.boundary;
     const adminLevel = tags.admin_level;
     if (
-      (landuseTag === 'commercial' || landuseTag === 'retail') ||
-      (boundaryTag === 'administrative' &&
-        (adminLevel === '9' || adminLevel === '10'))
+      landuseTag === 'commercial' ||
+      landuseTag === 'retail' ||
+      (boundaryTag === 'administrative' && (adminLevel === '9' || adminLevel === '10'))
     ) {
       const englishName = pickEnglishName(tags);
       if (englishName) {
@@ -798,10 +783,7 @@ function splitElements(elements: OverpassElement[]): {
     // `building=office + name/operator` (HSBC Tower, Barclays HQ, Citi
     // Tower at Canary Wharf) rather than per-floor `office=*` nodes.
     // Requiring name OR operator keeps out generic 2-story office shells.
-    if (
-      tags.building === 'office' &&
-      (Boolean(tags.name) || Boolean(tags.operator))
-    ) {
+    if (tags.building === 'office' && (Boolean(tags.name) || Boolean(tags.operator))) {
       amenities.push({ lat, lon, key: 'corporateOffices' });
       continue;
     }
@@ -902,11 +884,7 @@ function normalizeLabel(raw: string): string {
  * in sync so a per-octant cap here maps cleanly to per-region coverage
  * downstream.
  */
-function octantKey(
-  lat: number,
-  lon: number,
-  bbox: [number, number, number, number]
-): string {
+function octantKey(lat: number, lon: number, bbox: [number, number, number, number]): string {
   const [south, north, west, east] = bbox;
   const latThird = (north - south) / 3;
   const lonThird = (east - west) / 3;
@@ -953,12 +931,7 @@ function buildPlaceBasedZones(
       level: levelForScore(score),
       amenities: counts,
       radiusMeters: ZONE_RADIUS_METERS,
-      distanceFromCenterMeters: haversineMeters(
-        centerLat,
-        centerLon,
-        p.lat,
-        p.lon
-      ),
+      distanceFromCenterMeters: haversineMeters(centerLat, centerLon, p.lat, p.lon),
     };
   });
 
@@ -975,9 +948,7 @@ function buildPlaceBasedZones(
     const oct = octantKey(z.latitude, z.longitude, clampedBbox);
     if ((perOctant.get(oct) ?? 0) >= PLACE_MAX_PER_OCTANT) continue;
     const tooClose = kept.some(
-      (k) =>
-        haversineMeters(z.latitude, z.longitude, k.latitude, k.longitude) <
-        PLACE_DEDUPE_METERS
+      (k) => haversineMeters(z.latitude, z.longitude, k.latitude, k.longitude) < PLACE_DEDUPE_METERS
     );
     if (tooClose) continue;
     kept.push(z);
@@ -1116,8 +1087,7 @@ export async function scanCityZones(
     let workingBbox = bbox;
     if (workingBbox) {
       const [south, north, west, east] = workingBbox;
-      const diagonalKm =
-        haversineMeters(south, west, north, east) / 1000;
+      const diagonalKm = haversineMeters(south, west, north, east) / 1000;
       if (diagonalKm < SMALL_CITY_DIAGONAL_KM) {
         workingBbox = undefined;
       }
@@ -1127,10 +1097,7 @@ export async function scanCityZones(
 
     if (!workingBbox) {
       const result = await buildSingleZone(centerLat, centerLon, userSearchLabel);
-      const ttl =
-        result.zones[0]?.amenities.total === 0
-          ? FAILURE_CACHE_TTL_MS
-          : CACHE_TTL_MS;
+      const ttl = result.zones[0]?.amenities.total === 0 ? FAILURE_CACHE_TTL_MS : CACHE_TTL_MS;
       zoneGridCache.set(key, { result, expiresAt: Date.now() + ttl });
       return result;
     }
@@ -1160,13 +1127,7 @@ export async function scanCityZones(
     // Canary Wharf, Ginza, Polanco, etc.) rather than at fixed grid
     // corners. Falls back to the geometric grid when there aren't enough
     // named places (sparsely-tagged cities / rural bboxes).
-    let zones = buildPlaceBasedZones(
-      amenities,
-      places,
-      centerLat,
-      centerLon,
-      clamped
-    );
+    let zones = buildPlaceBasedZones(amenities, places, centerLat, centerLon, clamped);
 
     if (zones.length < PLACE_SCAN_MIN_PLACES) {
       // Fallback: fixed 3×3 grid, label each point with the nearest place
@@ -1184,12 +1145,7 @@ export async function scanCityZones(
         const wealthScore = scoreWealth(counts);
         const businessScore = scoreBusiness(counts);
         const score = Math.max(wealthScore, businessScore);
-        const nearName = nearestPlaceName(
-          gp.lat,
-          gp.lon,
-          places,
-          ZONE_RADIUS_METERS
-        );
+        const nearName = nearestPlaceName(gp.lat, gp.lon, places, ZONE_RADIUS_METERS);
         return {
           id: `zone-${i}`,
           label: nearName ?? directionalLabel(gp.row, gp.col),
@@ -1202,12 +1158,7 @@ export async function scanCityZones(
           level: levelForScore(score),
           amenities: counts,
           radiusMeters: ZONE_RADIUS_METERS,
-          distanceFromCenterMeters: haversineMeters(
-            centerLat,
-            centerLon,
-            gp.lat,
-            gp.lon
-          ),
+          distanceFromCenterMeters: haversineMeters(centerLat, centerLon, gp.lat, gp.lon),
         };
       });
     }
@@ -1223,9 +1174,7 @@ export async function scanCityZones(
     //      the user always sees what they searched for represented.
     if (userSearchLabel) {
       const normalizedUser = normalizeLabel(userSearchLabel);
-      const matchIdx = zones.findIndex(
-        (z) => normalizeLabel(z.label) === normalizedUser
-      );
+      const matchIdx = zones.findIndex((z) => normalizeLabel(z.label) === normalizedUser);
       if (matchIdx >= 0) {
         const matchedZone = zones[matchIdx];
         if (matchedZone) zones[matchIdx] = { ...matchedZone, label: userSearchLabel };
