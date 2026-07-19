@@ -1,5 +1,7 @@
 # Lead Snatcher
 
+> Database setup is SQLite-only; PostgreSQL and Docker database tooling are not supported.
+
 A Next.js lead generation platform for finding local businesses that need digital services. Search by industry + city, score leads on digital presence, manage in a lightweight CRM.
 
 ## Project Structure

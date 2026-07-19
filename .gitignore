@@ -64,3 +64,7 @@ railway.json
 
 # Claude Code commands (personal)
 .claude/
+
+# local agent/tool artifacts
+/.gg/
+/tmp/

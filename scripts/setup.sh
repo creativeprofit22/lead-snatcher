@@ -7,7 +7,7 @@
 # 1. Check prerequisites
 # 2. Install dependencies
 # 3. Generate environment file with secrets
-# 4. Setup database (SQLite or PostgreSQL)
+# 4. Setup database (SQLite)
 # 5. Create first user
 # ===========================================
 

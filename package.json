@@ -19,8 +19,6 @@
     "db:push": "prisma db push",
     "db:studio": "prisma studio",
     "db:seed": "npx tsx prisma/seed.ts",
-    "docker:db": "docker compose up -d db",
-    "docker:db:down": "docker compose down",
     "setup": "./scripts/setup.sh",
     "setup:user": "npx tsx scripts/setup-user.ts"
   },
