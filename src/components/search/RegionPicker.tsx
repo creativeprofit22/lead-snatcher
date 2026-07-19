@@ -2,14 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import {
-  ArrowLeft,
-  MapPin,
-  Gem,
-  Building2,
-  Shuffle,
-  TrendingUp,
-} from 'lucide-react';
+import { ArrowLeft, MapPin, Gem, Building2, Shuffle, TrendingUp } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 /**
@@ -24,16 +17,7 @@ import type { LucideIcon } from 'lucide-react';
  * is bypassed — they type "Mayfair, London" and hit search.
  */
 
-type RegionDirection =
-  | 'nw'
-  | 'n'
-  | 'ne'
-  | 'w'
-  | 'central'
-  | 'e'
-  | 'sw'
-  | 's'
-  | 'se';
+type RegionDirection = 'nw' | 'n' | 'ne' | 'w' | 'central' | 'e' | 'sw' | 's' | 'se';
 
 interface RegionSummary {
   direction: RegionDirection;
@@ -182,18 +166,12 @@ function scoreTone(score: number): { text: string; border: string; bg: string } 
   };
 }
 
-export function RegionPicker({
-  city,
-  country,
-  onNeighborhoodSelect,
-  disabled,
-}: RegionPickerProps) {
+export function RegionPicker({ city, country, onNeighborhoodSelect, disabled }: RegionPickerProps) {
   const [regions, setRegions] = useState<RegionSummary[]>([]);
   const [zones, setZones] = useState<Neighborhood[]>([]);
   const [pending, setPending] = useState(false);
   const [singleZone, setSingleZone] = useState(false);
-  const [selectedRegion, setSelectedRegion] =
-    useState<RegionDirection | null>(null);
+  const [selectedRegion, setSelectedRegion] = useState<RegionDirection | null>(null);
   const lastFetchedRef = useRef<string>('');
   const abortRef = useRef<AbortController | null>(null);
 
@@ -226,47 +204,57 @@ export function RegionPicker({
 
     setPending(true);
 
-    const timer = setTimeout(async () => {
-      abortRef.current?.abort();
-      const controller = new AbortController();
-      abortRef.current = controller;
+    let controller: AbortController | null = null;
+    const timer = setTimeout(() => {
+      void (async () => {
+        abortRef.current?.abort();
+        controller = new AbortController();
+        abortRef.current = controller;
 
-      try {
-        const response = await fetch(
-          `/api/business/neighborhoods?city=${encodeURIComponent(base)}&country=${encodeURIComponent(country)}`,
-          { signal: controller.signal }
-        );
-        if (!response.ok) {
-          setRegions([]);
-          setZones([]);
-          return;
+        try {
+          const response = await fetch(
+            `/api/business/neighborhoods?city=${encodeURIComponent(base)}&country=${encodeURIComponent(country)}`,
+            { signal: controller.signal }
+          );
+          if (controller.signal.aborted) return;
+          if (!response.ok) {
+            setRegions([]);
+            setZones([]);
+            return;
+          }
+          const data: unknown = await response.json();
+          if (controller.signal.aborted) return;
+          const payload =
+            typeof data === 'object' && data !== null ? (data as Record<string, unknown>) : {};
+          const nextRegions: RegionSummary[] = Array.isArray(payload.regions)
+            ? payload.regions
+            : [];
+          const nextZones: Neighborhood[] = Array.isArray(payload.zones) ? payload.zones : [];
+          setRegions(nextRegions);
+          setZones(nextZones);
+          setSingleZone(payload.singleZone === true);
+          if (nextRegions.length > 0 || nextZones.length > 0) {
+            lastFetchedRef.current = cacheKey;
+          }
+        } catch (err) {
+          if (err instanceof Error && err.name !== 'AbortError') {
+            setRegions([]);
+            setZones([]);
+          }
+        } finally {
+          if (abortRef.current === controller) {
+            abortRef.current = null;
+            setPending(false);
+          }
         }
-        const data = await response.json();
-        const nextRegions: RegionSummary[] = Array.isArray(data.regions)
-          ? data.regions
-          : [];
-        const nextZones: Neighborhood[] = Array.isArray(data.zones)
-          ? data.zones
-          : [];
-        setRegions(nextRegions);
-        setZones(nextZones);
-        setSingleZone(Boolean(data.singleZone));
-        if (nextRegions.length > 0 || nextZones.length > 0) {
-          lastFetchedRef.current = cacheKey;
-        }
-      } catch (err) {
-        if (err instanceof Error && err.name !== 'AbortError') {
-          setRegions([]);
-          setZones([]);
-        }
-      } finally {
-        if (abortRef.current === controller) {
-          setPending(false);
-        }
-      }
+      })();
     }, DEBOUNCE_MS);
 
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+      controller?.abort();
+      if (abortRef.current === controller) abortRef.current = null;
+    };
   }, [trimmedCity, country, hasRefinement, tooShort, base]);
 
   useEffect(() => {
@@ -327,9 +315,7 @@ export function RegionPicker({
   // neighborhoods directly — forcing a user to click "Central" when there's
   // nothing else is pointless friction.
   if (singleZone || regions.filter((r) => r.zoneCount > 0).length <= 1) {
-    const fallbackNeighborhoods = zones
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 8);
+    const fallbackNeighborhoods = zones.sort((a, b) => b.score - a.score).slice(0, 8);
     if (fallbackNeighborhoods.length === 0) return null;
     return (
       <div className="mt-3 w-full max-w-md">
@@ -379,9 +365,7 @@ export function RegionPicker({
                 // tells the user at a glance whether it's a luxury,
                 // corporate, or mixed money district.
                 const topZone = region?.topLabel
-                  ? zones
-                      .filter((z) => z.region === direction)
-                      .sort((a, b) => b.score - a.score)[0]
+                  ? zones.filter((z) => z.region === direction).sort((a, b) => b.score - a.score)[0]
                   : null;
                 const topArchetype = topZone?.archetype ?? 'developing';
                 const ArcheIcon = ARCHETYPE_DISPLAY[topArchetype].icon;
@@ -431,9 +415,7 @@ export function RegionPicker({
                         )}
                       </>
                     )}
-                    {empty && (
-                      <span className="text-[9px] text-white/30">—</span>
-                    )}
+                    {empty && <span className="text-[9px] text-white/30">—</span>}
                   </motion.button>
                 );
               })}
@@ -458,9 +440,7 @@ export function RegionPicker({
               </button>
               <span className="font-mono text-[10px] uppercase tracking-[0.25em] text-white/50">
                 {regions.find((r) => r.direction === selectedRegion)?.label}
-                <span className="ml-1.5 text-white/30">
-                  · {zonesInRegion.length}
-                </span>
+                <span className="ml-1.5 text-white/30">· {zonesInRegion.length}</span>
               </span>
             </div>
             <NeighborhoodChipRow
@@ -486,9 +466,7 @@ function NeighborhoodChipRow({
 }) {
   if (items.length === 0) {
     return (
-      <p className="px-1 text-[11px] text-white/40">
-        No strongly-tagged neighborhoods found here.
-      </p>
+      <p className="px-1 text-[11px] text-white/40">No strongly-tagged neighborhoods found here.</p>
     );
   }
   return (
@@ -512,13 +490,13 @@ function NeighborhoodChipRow({
             >
               <MapPin className="h-3 w-3 opacity-60 group-hover:opacity-100" />
               <span className="font-medium text-white/90">{n.label}</span>
-              <span className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider ${arche.tone} border-current/30`}>
+              <span
+                className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wider ${arche.tone} border-current/30`}
+              >
                 <ArcheIcon className="h-2.5 w-2.5" />
                 {arche.label}
               </span>
-              <span className="font-mono text-[10px] text-white/45">
-                {n.score}
-              </span>
+              <span className="font-mono text-[10px] text-white/45">{n.score}</span>
             </motion.button>
           );
         })}

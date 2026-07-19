@@ -15,6 +15,14 @@ import { motion } from 'motion/react';
  */
 
 const SCORE_SEQUENCE = [72, 84, 61, 93, 78, 55, 87, 69, 96, 74, 82, 58];
+const FALLBACK_SCORE = 72;
+
+export function getIdleScore(
+  scoreIndex: number,
+  scores: readonly number[] = SCORE_SEQUENCE
+): number {
+  return scores[scoreIndex] ?? scores[0] ?? FALLBACK_SCORE;
+}
 
 export function IdleScoreDial({
   className = '',
@@ -25,16 +33,12 @@ export function IdleScoreDial({
 }) {
   const [scoreIndex, setScoreIndex] = useState(0);
   useEffect(() => {
-    const id = setInterval(
-      () => setScoreIndex((i) => (i + 1) % SCORE_SEQUENCE.length),
-      2200
-    );
+    const id = setInterval(() => setScoreIndex((i) => (i + 1) % SCORE_SEQUENCE.length), 2200);
     return () => clearInterval(id);
   }, []);
 
-  const score = SCORE_SEQUENCE[scoreIndex];
-  const tier =
-    score >= 80 ? 'hot' : score >= 60 ? 'mid' : 'cold';
+  const score = getIdleScore(scoreIndex);
+  const tier = score >= 80 ? 'hot' : score >= 60 ? 'mid' : 'cold';
   const ringColor =
     tier === 'hot'
       ? 'rgba(253, 186, 116, 0.9)'

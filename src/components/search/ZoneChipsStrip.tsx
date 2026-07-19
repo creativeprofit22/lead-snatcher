@@ -1,27 +1,17 @@
 'use client';
 
 import { motion } from 'motion/react';
-import {
-  MapPin,
-  Loader2,
-  Radar,
-  Gem,
-  Building2,
-  Shuffle,
-  TrendingUp,
-} from 'lucide-react';
+import { MapPin, Loader2, Radar, Gem, Building2, Shuffle, TrendingUp } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { Zone, ZoneArchetype } from '@/lib/business/zone-grid';
 
-const ARCHETYPE_DISPLAY: Record<
-  ZoneArchetype,
-  { icon: LucideIcon; label: string; tone: string }
-> = {
-  luxury: { icon: Gem, label: 'Luxury', tone: 'text-amber-300' },
-  corporate: { icon: Building2, label: 'Corporate', tone: 'text-sky-300' },
-  mixed: { icon: Shuffle, label: 'Mixed', tone: 'text-violet-300' },
-  developing: { icon: TrendingUp, label: 'Developing', tone: 'text-white/45' },
-};
+const ARCHETYPE_DISPLAY: Record<ZoneArchetype, { icon: LucideIcon; label: string; tone: string }> =
+  {
+    luxury: { icon: Gem, label: 'Luxury', tone: 'text-amber-300' },
+    corporate: { icon: Building2, label: 'Corporate', tone: 'text-sky-300' },
+    mixed: { icon: Shuffle, label: 'Mixed', tone: 'text-violet-300' },
+    developing: { icon: TrendingUp, label: 'Developing', tone: 'text-white/45' },
+  };
 
 interface ZoneChipsStripProps {
   zones: Zone[];
@@ -62,6 +52,7 @@ export function ZoneChipsStrip({
   if (ranked.length <= 1) return null;
 
   const activeZone = ranked.find((z) => z.id === focusedZoneId) ?? ranked[0];
+  if (!activeZone) return null;
 
   return (
     <div className="mb-4 rounded-xl border border-sky-400/20 bg-gradient-to-br from-sky-500/[0.06] via-surface/60 to-surface/80 p-3 backdrop-blur-sm">
@@ -88,7 +79,7 @@ export function ZoneChipsStrip({
 
       <div className="flex flex-wrap gap-2">
         {ranked.map((z, i) => {
-          const isActive = focusedZoneId === z.id;
+          const isActive = activeZone.id === z.id;
           const isRescanning = rescanningZoneId === z.id;
           const isPremium = z.level === 'premium' || z.level === 'commercial';
           const isDirectional = DIRECTIONAL_FALLBACK_LABELS.has(z.label);
@@ -114,18 +105,14 @@ export function ZoneChipsStrip({
                   : isPremium
                     ? 'border-sky-400/40 bg-sky-500/10 text-sky-100/95 hover:border-sky-400/70 hover:bg-sky-500/18 hover:text-sky-50 hover:shadow-[0_0_14px_rgba(56,189,248,0.3)]'
                     : 'border-white/12 bg-white/[0.05] text-white/75 hover:border-white/28 hover:bg-white/[0.09] hover:text-white'
-              } ${
-                isRescanning ? 'animate-pulse' : ''
-              } disabled:cursor-not-allowed`}
+              } ${isRescanning ? 'animate-pulse' : ''} disabled:cursor-not-allowed`}
             >
               {isRescanning ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : (
                 <MapPin className="h-3.5 w-3.5 opacity-80 group-hover:opacity-100" />
               )}
-              <span className={`${isDirectional ? 'italic' : ''}`}>
-                {z.label}
-              </span>
+              <span className={`${isDirectional ? 'italic' : ''}`}>{z.label}</span>
               <span
                 className={`inline-flex items-center gap-1 font-mono text-[9px] uppercase tracking-wider ${arche.tone}`}
               >
@@ -134,9 +121,7 @@ export function ZoneChipsStrip({
               </span>
               <span
                 className={`inline-flex items-center justify-center rounded-md px-1.5 py-0.5 font-mono text-[10px] ${
-                  isActive
-                    ? 'bg-sky-400/20 text-sky-100'
-                    : 'bg-white/5 text-white/50'
+                  isActive ? 'bg-sky-400/20 text-sky-100' : 'bg-white/5 text-white/50'
                 }`}
               >
                 {z.score}

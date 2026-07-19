@@ -99,7 +99,7 @@ interface LevelPalette {
   halo: string;
 }
 
-const LEVEL_COLORS: Record<string, LevelPalette> = {
+const LEVEL_COLORS: Record<'high' | 'medium' | 'low', LevelPalette> = {
   high: {
     progress: 'text-emerald-400',
     track: 'text-emerald-500/15',
@@ -127,7 +127,9 @@ const LEVEL_COLORS: Record<string, LevelPalette> = {
 };
 
 function getLevelColors(level: string): LevelPalette {
-  return LEVEL_COLORS[level] ?? LEVEL_COLORS.medium;
+  return Object.hasOwn(LEVEL_COLORS, level)
+    ? LEVEL_COLORS[level as keyof typeof LEVEL_COLORS]
+    : LEVEL_COLORS.medium;
 }
 
 export function AreaDensityMeter({
@@ -248,9 +250,7 @@ export function AreaDensityMeter({
                   }}
                   className="absolute inset-0 flex flex-col items-center justify-center text-center"
                 >
-                  <div
-                    className={`font-mono text-6xl font-bold leading-none ${colors.accent}`}
-                  >
+                  <div className={`font-mono text-6xl font-bold leading-none ${colors.accent}`}>
                     <SlidingNumber value={displayScore} />
                   </div>
                   <div className="mt-3 font-mono text-[10px] uppercase tracking-[0.3em] text-gray-500">
@@ -295,9 +295,7 @@ export function AreaDensityMeter({
                         flow) — if it sits in the column it pushes the disk
                         upward off the ring. */}
                     {(() => {
-                      const activeAccent = a.negative
-                        ? 'text-rose-400'
-                        : colors.accent;
+                      const activeAccent = a.negative ? 'text-rose-400' : colors.accent;
                       const borderClass = dim
                         ? 'border-white/10 bg-white/[0.02]'
                         : a.negative
@@ -307,9 +305,7 @@ export function AreaDensityMeter({
                         <div
                           className={`relative flex h-11 w-11 items-center justify-center rounded-full border backdrop-blur-sm ${borderClass}`}
                         >
-                          <Icon
-                            className={`h-5 w-5 ${dim ? 'text-gray-600' : activeAccent}`}
-                          />
+                          <Icon className={`h-5 w-5 ${dim ? 'text-gray-600' : activeAccent}`} />
                           {count > 0 && (
                             <div
                               className={`absolute -bottom-1 -right-1 flex h-[19px] min-w-[19px] items-center justify-center rounded-full border border-white/10 bg-black/90 px-1 font-mono text-[10px] font-bold ${activeAccent}`}
@@ -331,14 +327,10 @@ export function AreaDensityMeter({
 
         {/* Typography panel */}
         <div className="min-w-0 flex-1 text-center lg:text-left">
-          <div
-            className={`mb-2 font-mono text-[11px] uppercase tracking-[0.3em] ${colors.accent}`}
-          >
+          <div className={`mb-2 font-mono text-[11px] uppercase tracking-[0.3em] ${colors.accent}`}>
             {level} density zone
           </div>
-          <div className="mb-2 text-2xl font-semibold text-white sm:text-3xl">
-            {label}
-          </div>
+          <div className="mb-2 text-2xl font-semibold text-white sm:text-3xl">{label}</div>
           <div className="max-w-xl text-sm text-gray-400">{description}</div>
 
           {focusedZone && (
@@ -381,9 +373,7 @@ export function AreaDensityMeter({
 
           {amenities && amenities.total > 0 && (
             <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 font-mono text-[11px] text-gray-400">
-              <span
-                className={`h-1.5 w-1.5 rounded-full ${colors.accentBg}`}
-              />
+              <span className={`h-1.5 w-1.5 rounded-full ${colors.accentBg}`} />
               {amenities.total} points of interest in scan radius
             </div>
           )}
