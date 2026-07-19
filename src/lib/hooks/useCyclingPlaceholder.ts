@@ -30,15 +30,20 @@ export function useCyclingPlaceholder({
   const [phraseIndex, setPhraseIndex] = useState(0);
   const [display, setDisplay] = useState('');
   const [mode, setMode] = useState<'typing' | 'holding' | 'deleting'>('typing');
+  const current = phrases.length > 0 ? (phrases[phraseIndex % phrases.length] ?? '') : '';
+  const visibleDisplay = current.startsWith(display)
+    ? display
+    : display.startsWith(current)
+      ? current
+      : '';
 
   useEffect(() => {
     if (paused || phrases.length === 0) return;
-    const current = phrases[phraseIndex % phrases.length];
 
     if (mode === 'typing') {
-      if (display.length < current.length) {
+      if (visibleDisplay.length < current.length) {
         const t = setTimeout(
-          () => setDisplay(current.slice(0, display.length + 1)),
+          () => setDisplay(current.slice(0, visibleDisplay.length + 1)),
           typeSpeedMs
         );
         return () => clearTimeout(t);
@@ -48,9 +53,9 @@ export function useCyclingPlaceholder({
     }
 
     if (mode === 'deleting') {
-      if (display.length > 0) {
+      if (visibleDisplay.length > 0) {
         const t = setTimeout(
-          () => setDisplay(current.slice(0, display.length - 1)),
+          () => setDisplay(visibleDisplay.slice(0, visibleDisplay.length - 1)),
           deleteSpeedMs
         );
         return () => clearTimeout(t);
@@ -62,7 +67,7 @@ export function useCyclingPlaceholder({
       }, 240);
       return () => clearTimeout(t);
     }
-  }, [display, mode, phraseIndex, phrases, typeSpeedMs, deleteSpeedMs, holdMs, paused]);
+  }, [current, deleteSpeedMs, holdMs, mode, paused, phrases.length, typeSpeedMs, visibleDisplay]);
 
-  return display;
+  return phrases.length === 0 ? '' : visibleDisplay;
 }

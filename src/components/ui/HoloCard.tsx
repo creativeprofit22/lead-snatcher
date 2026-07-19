@@ -38,17 +38,18 @@ export function HoloCard({
   const [spotPos, setSpotPos] = useState({ x: 0, y: 0 });
   const [spotOpacity, setSpotOpacity] = useState(0);
 
-  const hex = glareColor.replace('#', '');
-  let glareRgba = glareColor;
+  const hex = glareColor.startsWith('#') ? glareColor.slice(1) : glareColor;
+  let glareRgba = `rgba(155, 232, 255, ${glareOpacity})`;
   if (/^[\dA-Fa-f]{6}$/.test(hex)) {
     const r = parseInt(hex.slice(0, 2), 16);
     const g = parseInt(hex.slice(2, 4), 16);
     const b = parseInt(hex.slice(4, 6), 16);
     glareRgba = `rgba(${r}, ${g}, ${b}, ${glareOpacity})`;
   } else if (/^[\dA-Fa-f]{3}$/.test(hex)) {
-    const r = parseInt(hex[0] + hex[0], 16);
-    const g = parseInt(hex[1] + hex[1], 16);
-    const b = parseInt(hex[2] + hex[2], 16);
+    const [rHex = '0', gHex = '0', bHex = '0'] = hex;
+    const r = parseInt(rHex + rHex, 16);
+    const g = parseInt(gHex + gHex, 16);
+    const b = parseInt(bHex + bHex, 16);
     glareRgba = `rgba(${r}, ${g}, ${b}, ${glareOpacity})`;
   }
 
