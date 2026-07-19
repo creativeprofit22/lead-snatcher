@@ -8,7 +8,7 @@ import { TaskItem } from './TaskItem';
 interface TaskListProps {
   tasks: Task[];
   isLoading?: boolean;
-  onComplete: (taskId: string, completed: boolean) => void;
+  onComplete: (taskId: string, completed: boolean) => Promise<void>;
   onEdit: (task: Task) => void;
   onDelete: (taskId: string) => void;
   showCompleted?: boolean;
@@ -55,10 +55,7 @@ export function TaskList({
     return (
       <div className="space-y-3">
         {[1, 2, 3].map((i) => (
-          <div
-            key={i}
-            className="h-20 rounded-lg bg-white/5 animate-pulse"
-          />
+          <div key={i} className="h-20 rounded-lg bg-white/5 animate-pulse" />
         ))}
       </div>
     );

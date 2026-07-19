@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Check, Trash2, Pencil, Phone, Mail, Calendar, Clock, CheckCircle } from 'lucide-react';
 import type { Task, TaskType } from '@/types';
 import { TaskPriorityBadge } from './TaskPriorityBadge';
@@ -15,7 +15,7 @@ const typeIcons: Record<TaskType, typeof Phone> = {
 
 interface TaskItemProps {
   task: Task;
-  onComplete: (taskId: string, completed: boolean) => void;
+  onComplete: (taskId: string, completed: boolean) => Promise<void>;
   onEdit: (task: Task) => void;
   onDelete: (taskId: string) => void;
   compact?: boolean;
@@ -23,20 +23,35 @@ interface TaskItemProps {
 
 export function TaskItem({ task, onComplete, onEdit, onDelete, compact = false }: TaskItemProps) {
   const [isCompleting, setIsCompleting] = useState(false);
-  const isCompleted = !!task.completedAt;
+  const [completionOverride, setCompletionOverride] = useState<boolean | null>(null);
+  const taskIsCompleted = !!task.completedAt;
+  const isCompleted = completionOverride ?? taskIsCompleted;
   const TypeIcon = typeIcons[task.type];
+
+  useEffect(() => {
+    if (completionOverride === taskIsCompleted) {
+      setCompletionOverride(null);
+    }
+  }, [completionOverride, taskIsCompleted]);
 
   const dueDate = new Date(task.dueAt);
   const now = new Date();
   const isOverdue = !isCompleted && dueDate < now;
-  const isToday =
-    dueDate.toDateString() === now.toDateString() &&
-    !isCompleted;
+  const isToday = dueDate.toDateString() === now.toDateString() && !isCompleted;
 
   const handleComplete = async () => {
+    const nextIsCompleted = !isCompleted;
+
+    setCompletionOverride(nextIsCompleted);
     setIsCompleting(true);
-    await onComplete(task.id, !isCompleted);
-    setIsCompleting(false);
+
+    try {
+      await onComplete(task.id, nextIsCompleted);
+    } catch {
+      setCompletionOverride(null);
+    } finally {
+      setIsCompleting(false);
+    }
   };
 
   const formatDueDate = () => {
@@ -66,6 +81,9 @@ export function TaskItem({ task, onComplete, onEdit, onDelete, compact = false }
         }`}
       >
         <button
+          type="button"
+          aria-label={isCompleted ? `Reopen ${task.title}` : `Complete ${task.title}`}
+          aria-pressed={isCompleted}
           onClick={handleComplete}
           disabled={isCompleting}
           className={`flex-shrink-0 w-4 h-4 rounded border transition-colors ${
@@ -76,10 +94,14 @@ export function TaskItem({ task, onComplete, onEdit, onDelete, compact = false }
         >
           {isCompleted && <Check className="w-3 h-3" />}
         </button>
-        <span className={`flex-1 text-sm truncate ${isCompleted ? 'line-through text-gray-500' : 'text-gray-200'}`}>
+        <span
+          className={`flex-1 text-sm truncate ${isCompleted ? 'line-through text-gray-500' : 'text-gray-200'}`}
+        >
           {task.title}
         </span>
-        <span className={`text-xs ${isOverdue ? 'text-red-400' : isToday ? 'text-orange-400' : 'text-gray-500'}`}>
+        <span
+          className={`text-xs ${isOverdue ? 'text-red-400' : isToday ? 'text-orange-400' : 'text-gray-500'}`}
+        >
           {formatDueDate()}
         </span>
       </div>
@@ -96,6 +118,9 @@ export function TaskItem({ task, onComplete, onEdit, onDelete, compact = false }
     >
       {/* Checkbox */}
       <button
+        type="button"
+        aria-label={isCompleted ? `Reopen ${task.title}` : `Complete ${task.title}`}
+        aria-pressed={isCompleted}
         onClick={handleComplete}
         disabled={isCompleting}
         className={`flex-shrink-0 w-5 h-5 mt-0.5 rounded border-2 transition-all flex items-center justify-center ${
@@ -111,7 +136,9 @@ export function TaskItem({ task, onComplete, onEdit, onDelete, compact = false }
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <TypeIcon className="w-4 h-4 text-gray-500" />
-          <span className={`font-medium ${isCompleted ? 'line-through text-gray-500' : 'text-gray-200'}`}>
+          <span
+            className={`font-medium ${isCompleted ? 'line-through text-gray-500' : 'text-gray-200'}`}
+          >
             {task.title}
           </span>
           <TaskPriorityBadge priority={task.priority} />
@@ -122,15 +149,13 @@ export function TaskItem({ task, onComplete, onEdit, onDelete, compact = false }
         )}
 
         <div className="mt-2 flex items-center gap-3 text-xs">
-          <span className={isOverdue ? 'text-red-400' : isToday ? 'text-orange-400' : 'text-gray-500'}>
+          <span
+            className={isOverdue ? 'text-red-400' : isToday ? 'text-orange-400' : 'text-gray-500'}
+          >
             {isOverdue && '⚠ '}
             {formatDueDate()}
           </span>
-          {task.lead && (
-            <span className="text-gray-500">
-              → {task.lead.name}
-            </span>
-          )}
+          {task.lead && <span className="text-gray-500">→ {task.lead.name}</span>}
         </div>
       </div>
 
