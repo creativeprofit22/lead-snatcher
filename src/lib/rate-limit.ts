@@ -76,7 +76,7 @@ export function getClientIp(request: { headers: { get(name: string): string | nu
     // Take the first (leftmost) IP — this is the client IP when the
     // proxy chain is trusted. Stripping later entries prevents an
     // attacker from injecting extra IPs to shift the trusted one.
-    const firstIp = xff.split(',')[0].trim();
+    const firstIp = xff.split(',')[0]?.trim();
     if (firstIp) return firstIp;
   }
 

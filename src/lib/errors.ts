@@ -67,7 +67,7 @@ export function getErrorMessage(error: unknown): string {
     // Check for common patterns and shorten
     const msg = error.message;
     if (msg.includes('API key not configured')) {
-      return msg.split('.')[0]; // Just first sentence
+      return msg.split('.')[0] ?? msg; // Just first sentence
     }
     return msg.slice(0, 100);
   }
