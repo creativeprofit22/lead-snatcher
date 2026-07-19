@@ -1,11 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/db';
-import {
-  geocodeCity,
-  searchBusinesses,
-  scanCityZones,
-} from '@/lib/business';
+import { geocodeCity, searchBusinesses, scanCityZones } from '@/lib/business';
 import { getPageSpeedKey } from '@/lib/business/pagespeed-key';
 import type { Zone, ZoneLevel } from '@/lib/business/zone-grid';
 import { estimateBudget, buildBudgetInput, computeFitScore } from '@/lib/business/budget-estimate';
@@ -71,6 +67,9 @@ function describeZone(zone: Zone): string {
   return `Limited commercial infrastructure (${total} amenities) — emerging market`;
 }
 
+export function getFallbackZoneLabel(displayName: string | null | undefined): string {
+  return displayName?.split(',')[0]?.trim() || 'Area';
+}
 export async function POST(request: NextRequest) {
   try {
     const session = await auth();
@@ -96,16 +95,8 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
-    const {
-      businessType,
-      city,
-      country,
-      limit,
-      deepAnalysis,
-      searchLat,
-      searchLng,
-      zoneLabel,
-    } = parsed.data;
+    const { businessType, city, country, limit, deepAnalysis, searchLat, searchLng, zoneLabel } =
+      parsed.data;
 
     // Geocode the city. Always needed for the zone-grid bbox, even when the
     // caller supplies explicit search coords (zone-targeted rescan).
@@ -119,12 +110,9 @@ export async function POST(request: NextRequest) {
 
     // Resolve the exact Maps search center: explicit zone coords win, else
     // fall back to the geocoded city centroid.
-    const searchCenterLat =
-      typeof searchLat === 'number' ? searchLat : geocodeResult.latitude;
-    const searchCenterLng =
-      typeof searchLng === 'number' ? searchLng : geocodeResult.longitude;
-    const isZoneTargeted =
-      typeof searchLat === 'number' && typeof searchLng === 'number';
+    const searchCenterLat = typeof searchLat === 'number' ? searchLat : geocodeResult.latitude;
+    const searchCenterLng = typeof searchLng === 'number' ? searchLng : geocodeResult.longitude;
+    const isZoneTargeted = typeof searchLat === 'number' && typeof searchLng === 'number';
 
     // Get localized search query for better results
     // e.g., "real_estate" + "de" → "Immobilienmakler"
@@ -132,28 +120,19 @@ export async function POST(request: NextRequest) {
 
     // Pull the user's PageSpeed key (optional; falls back to env, then to
     // the unauthenticated endpoint which Google rate-limits hard).
-    const pageSpeedApiKey = deepAnalysis
-      ? await getPageSpeedKey(session.user.id)
-      : undefined;
+    const pageSpeedApiKey = deepAnalysis ? await getPageSpeedKey(session.user.id) : undefined;
 
     // Run business search and city zone scan in parallel. Zone scan is free
     // (one Overpass call, cached 7d per city) and now serves as the single
     // source of truth for area density — no separate scoreArea call that
     // could fail when Overpass is rate-limited.
     const [results, zoneGrid] = await Promise.all([
-      searchBusinesses(
-        session.user.id,
-        searchQuery,
-        searchCenterLat,
-        searchCenterLng,
-        limit,
-        {
-          enableWebsiteScraping: true, // Always scrape for tech stack & features
-          enableWebsiteAnalysis: deepAnalysis, // Optional PageSpeed analysis
-          pageSpeedApiKey,
-          city,
-        }
-      ),
+      searchBusinesses(session.user.id, searchQuery, searchCenterLat, searchCenterLng, limit, {
+        enableWebsiteScraping: true, // Always scrape for tech stack & features
+        enableWebsiteAnalysis: deepAnalysis, // Optional PageSpeed analysis
+        pageSpeedApiKey,
+        city,
+      }),
       scanCityZones(
         city,
         country,
@@ -168,11 +147,10 @@ export async function POST(request: NextRequest) {
     //  - Else the top-scoring zone (zones are already sorted desc by score)
     //  - Fallback for empty zones list: synthesize a neutral zone so the
     //    response is always well-formed.
-    const focusedZone: Zone =
-      (zoneLabel && zoneGrid.zones.find((z) => z.label === zoneLabel)) ||
+    const focusedZone: Zone = (zoneLabel && zoneGrid.zones.find((z) => z.label === zoneLabel)) ||
       zoneGrid.zones[0] || {
         id: 'zone-fallback',
-        label: geocodeResult.displayName.split(',')[0].trim() || 'Area',
+        label: getFallbackZoneLabel(geocodeResult.displayName),
         latitude: searchCenterLat,
         longitude: searchCenterLng,
         score: 50,
@@ -299,9 +277,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    return NextResponse.json(
-      { error: 'Search failed. Please try again.' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Search failed. Please try again.' }, { status: 500 });
   }
 }

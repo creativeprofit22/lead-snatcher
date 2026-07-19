@@ -19,16 +19,7 @@ const DIRECTIONAL_FALLBACK_LABELS = new Set([
   'Zone',
 ]);
 
-type RegionDirection =
-  | 'nw'
-  | 'n'
-  | 'ne'
-  | 'w'
-  | 'central'
-  | 'e'
-  | 'sw'
-  | 's'
-  | 'se';
+type RegionDirection = 'nw' | 'n' | 'ne' | 'w' | 'central' | 'e' | 'sw' | 's' | 'se';
 
 interface RegionSummary {
   direction: RegionDirection;
@@ -65,6 +56,14 @@ const DIRECTION_LABELS: Record<RegionDirection, string> = {
   se: 'Southeast',
 };
 
+export function getRegionAt(
+  grid: readonly (readonly RegionDirection[])[],
+  latIndex: number,
+  lonIndex: number
+): RegionDirection {
+  return grid[latIndex]?.[lonIndex] ?? 'central';
+}
+
 /**
  * Classify a lat/lng into one of 9 regions based on the city bbox.
  * Splits bbox into a 3×3 grid. Lat axis: south third / mid third / north
@@ -88,20 +87,10 @@ function classifyRegion(
     ['w', 'central', 'e'],
     ['nw', 'n', 'ne'],
   ];
-  return grid[latIdx][lonIdx];
+  return getRegionAt(grid, latIdx, lonIdx);
 }
 
-const REGION_ORDER: RegionDirection[] = [
-  'nw',
-  'n',
-  'ne',
-  'w',
-  'central',
-  'e',
-  'sw',
-  's',
-  'se',
-];
+const REGION_ORDER: RegionDirection[] = ['nw', 'n', 'ne', 'w', 'central', 'e', 'sw', 's', 'se'];
 
 function buildRegionSummaries(zones: NeighborhoodOut[]): RegionSummary[] {
   const byRegion = new Map<RegionDirection, NeighborhoodOut[]>();
@@ -139,10 +128,7 @@ export async function GET(request: NextRequest) {
       RATE_LIMITS.standard
     );
     if (!rateLimit.success) {
-      return NextResponse.json(
-        { error: 'Too many requests. Slow down a touch.' },
-        { status: 429 }
-      );
+      return NextResponse.json({ error: 'Too many requests. Slow down a touch.' }, { status: 429 });
     }
 
     const { searchParams } = new URL(request.url);
@@ -176,10 +162,7 @@ export async function GET(request: NextRequest) {
 
     // Filter out directional fallbacks + empty zones before region grouping.
     const validZones = zoneGrid.zones.filter(
-      (z) =>
-        !DIRECTIONAL_FALLBACK_LABELS.has(z.label) &&
-        z.score > 0 &&
-        z.amenities.total > 0
+      (z) => !DIRECTIONAL_FALLBACK_LABELS.has(z.label) && z.score > 0 && z.amenities.total > 0
     );
 
     // Annotate each zone with its region based on city bbox. Small-city
@@ -195,9 +178,7 @@ export async function GET(request: NextRequest) {
       level: z.level,
       latitude: z.latitude,
       longitude: z.longitude,
-      region: zoneGrid.singleZone
-        ? 'central'
-        : classifyRegion(z.latitude, z.longitude, cityBbox),
+      region: zoneGrid.singleZone ? 'central' : classifyRegion(z.latitude, z.longitude, cityBbox),
     }));
 
     const regions = buildRegionSummaries(annotated);

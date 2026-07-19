@@ -28,6 +28,10 @@ import { businessEnrichSchema } from '@/lib/validations';
 
 const ENRICH_CONCURRENCY = 5;
 
+export function getQueuedLead<T>(leads: readonly T[], index: number): T | undefined {
+  return leads[index];
+}
+
 export async function POST(request: NextRequest) {
   const session = await auth();
   if (!session?.user?.id) {
@@ -104,7 +108,8 @@ export async function POST(request: NextRequest) {
       const worker = async () => {
         while (cursor < toFetch.length) {
           const i = cursor++;
-          const lead = toFetch[i];
+          const lead = getQueuedLead(toFetch, i);
+          if (!lead) continue;
 
           const rl = checkRateLimit(rateKey, RATE_LIMITS.enrich);
           if (!rl.success) {
@@ -118,12 +123,8 @@ export async function POST(request: NextRequest) {
 
           try {
             const [website, socials] = await Promise.all([
-              lead.needsWebsite
-                ? discoverWebsite(userId, lead.name, city)
-                : Promise.resolve(null),
-              lead.needsSocials
-                ? discoverSocials(userId, lead.name, city)
-                : Promise.resolve({}),
+              lead.needsWebsite ? discoverWebsite(userId, lead.name, city) : Promise.resolve(null),
+              lead.needsSocials ? discoverSocials(userId, lead.name, city) : Promise.resolve({}),
             ]);
 
             const payload: EnrichmentPayload = {};
@@ -153,10 +154,7 @@ export async function POST(request: NextRequest) {
         }
       };
 
-      const workers = Array.from(
-        { length: Math.min(ENRICH_CONCURRENCY, toFetch.length) },
-        worker
-      );
+      const workers = Array.from({ length: Math.min(ENRICH_CONCURRENCY, toFetch.length) }, worker);
       await Promise.all(workers);
       controller.close();
     },
