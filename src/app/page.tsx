@@ -84,7 +84,7 @@ function formatUserSearchLabel(raw: string): string | null {
   const source = cleaned || firstSegment;
   return source
     .split(/\s+/)
-    .map((w) => (w.length > 0 ? w[0].toUpperCase() + w.slice(1).toLowerCase() : w))
+    .map((w) => (w.length > 0 ? `${w.charAt(0).toUpperCase()}${w.slice(1).toLowerCase()}` : w))
     .join(' ');
 }
 
@@ -176,7 +176,6 @@ function HomeInner() {
       updatedAt: new Date(cached.timestamp).toISOString(),
       payload: cached,
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Cross-session "resume your last search" — only fetched when the
@@ -1031,7 +1030,7 @@ function HomeInner() {
                           if (socialKeys.length > 0) {
                             deltas.push(
                               socialKeys.length === 1
-                                ? socialKeys[0]
+                                ? (socialKeys[0] ?? 'social')
                                 : `${socialKeys.length} socials`
                             );
                           }
@@ -1471,7 +1470,12 @@ function PriceTier({ level }: { level: number }) {
       tip: 'Premium pricing — deep pockets',
     },
   };
-  const cfg = tierConfig[capped];
+  const cfg = tierConfig[capped] ?? {
+    label: '$',
+    color: 'text-slate-400',
+    glow: '',
+    tip: 'Budget pricing — tight margins',
+  };
   return (
     <span
       className={`lead-stat flex items-center gap-1 font-mono font-semibold tabular-nums ${cfg.color} ${cfg.glow}`}
