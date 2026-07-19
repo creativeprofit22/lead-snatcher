@@ -151,7 +151,7 @@ export async function scrapePopularTimes(
   // Google's response wraps the JSON in a `/*""*/` prefix marker; trim it
   // and clip to the last closing brace so JSON.parse sees clean input.
   const marker = '/*""*/';
-  const head = raw.split(marker)[0];
+  const head = raw.split(marker)[0] ?? raw;
   const lastBrace = head.lastIndexOf('}');
   if (lastBrace < 0) {
     return {
@@ -229,7 +229,8 @@ export async function scrapePopularTimes(
         hour < 24 &&
         typeof busy === 'number'
       ) {
-        weekly[idx][hour] = busy;
+        const day = weekly[idx];
+        if (day) day[hour] = busy;
       }
     }
   }

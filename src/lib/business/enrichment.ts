@@ -222,7 +222,9 @@ export async function runBatch<T, R>(
   const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
     while (cursor < items.length) {
       const i = cursor++;
-      results[i] = await worker(items[i], i);
+      // The loop bound guarantees this index exists; keep `undefined` valid when T includes it.
+      const item = items[i] as T;
+      results[i] = await worker(item, i);
     }
   });
   await Promise.all(workers);

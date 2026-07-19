@@ -48,12 +48,21 @@ export async function geocodeCity(
     }
 
     const result = results[0];
+    if (!result) {
+      return null;
+    }
 
     let bbox: [number, number, number, number] | undefined;
     if (result.boundingbox && result.boundingbox.length === 4) {
-      const parsed = result.boundingbox.map(parseFloat);
-      if (parsed.every((n) => Number.isFinite(n))) {
-        bbox = [parsed[0], parsed[1], parsed[2], parsed[3]];
+      const [south, north, west, east] = result.boundingbox.map(parseFloat);
+      if (
+        south !== undefined &&
+        north !== undefined &&
+        west !== undefined &&
+        east !== undefined &&
+        [south, north, west, east].every((n) => Number.isFinite(n))
+      ) {
+        bbox = [south, north, west, east];
       }
     }
 

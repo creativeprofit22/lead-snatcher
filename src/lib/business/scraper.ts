@@ -384,20 +384,20 @@ function isSocialMediaUrl(url: string): boolean {
 function extractBasicInfo(html: string, result: ScrapedWebsiteData): void {
   // Title
   const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
-  if (titleMatch) {
+  if (titleMatch?.[1]) {
     result.title = titleMatch[1].trim();
   }
 
   // Description
   const descMatch = html.match(/<meta[^>]+name=["']description["'][^>]+content=["']([^"']+)["']/i);
-  if (descMatch) {
+  if (descMatch?.[1]) {
     result.description = descMatch[1].trim();
   }
 
   // Language
   const langMatch = html.match(/<html[^>]+lang=["']([^"']+)["']/i);
-  if (langMatch) {
-    result.language = langMatch[1].split('-')[0];
+  if (langMatch?.[1]) {
+    result.language = langMatch[1].split('-')[0] ?? langMatch[1];
   }
 
   // Mobile viewport
@@ -557,8 +557,8 @@ function estimateWebsiteAge(html: string, result: ScrapedWebsiteData): void {
 
   for (const pattern of copyrightPatterns) {
     const match = html.match(pattern);
-    if (match) {
-      const year = parseInt(match[1]);
+    if (match?.[1]) {
+      const year = parseInt(match[1], 10);
       if (year >= 2000 && year <= currentYear) {
         result.copyrightYear = year;
         break;
@@ -683,7 +683,7 @@ function detectQualitySignals(html: string, result: ScrapedWebsiteData): void {
   const jqMatch =
     html.match(/jquery[-/.](\d+)\.(\d+)(?:\.(\d+))?/i) ||
     html.match(/jquery@(\d+)\.(\d+)(?:\.(\d+))?/i);
-  if (jqMatch) {
+  if (jqMatch?.[1] && jqMatch[2]) {
     const major = parseInt(jqMatch[1], 10);
     const minor = parseInt(jqMatch[2], 10);
     q.jqueryVersion = `${jqMatch[1]}.${jqMatch[2]}${jqMatch[3] ? `.${jqMatch[3]}` : ''}`;

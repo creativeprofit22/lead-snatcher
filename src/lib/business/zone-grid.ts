@@ -322,8 +322,8 @@ function generateGridPoints(
   const points: { lat: number; lon: number; row: number; col: number }[] = [];
   for (let row = 0; row < GRID_SIZE; row++) {
     for (let col = 0; col < GRID_SIZE; col++) {
-      const lat = south + (north - south) * fractions[row];
-      const lon = west + (east - west) * fractions[col];
+      const lat = south + (north - south) * (fractions[row] ?? 0.5);
+      const lon = west + (east - west) * (fractions[col] ?? 0.5);
       points.push({ lat, lon, row, col });
     }
   }
@@ -668,7 +668,7 @@ function formatUserSearchLabel(raw: string): string | null {
   const source = cleaned || firstSegment;
   return source
     .split(/\s+/)
-    .map((w) => (w.length > 0 ? w[0].toUpperCase() + w.slice(1).toLowerCase() : w))
+    .map((w) => (w.length > 0 ? `${w.charAt(0).toUpperCase()}${w.slice(1).toLowerCase()}` : w))
     .join(' ');
 }
 
@@ -683,6 +683,7 @@ function isPremiumHotel(tags: Record<string, string>): boolean {
   const stars = tags.stars?.trim();
   if (!stars) return false;
   const first = stars[0];
+  if (!first) return false;
   const n = parseInt(first, 10);
   return Number.isFinite(n) && n >= 4;
 }
@@ -1226,7 +1227,8 @@ export async function scanCityZones(
         (z) => normalizeLabel(z.label) === normalizedUser
       );
       if (matchIdx >= 0) {
-        zones[matchIdx] = { ...zones[matchIdx], label: userSearchLabel };
+        const matchedZone = zones[matchIdx];
+        if (matchedZone) zones[matchIdx] = { ...matchedZone, label: userSearchLabel };
       } else if (zones.length > 0) {
         let nearestIdx = 0;
         let nearestDist = Infinity;
@@ -1239,7 +1241,8 @@ export async function scanCityZones(
         // Only repurpose a nearby zone if it's genuinely close — otherwise
         // we'd be rebranding a far-off zone with the user's label.
         if (nearestDist <= ZONE_RADIUS_METERS) {
-          zones[nearestIdx] = { ...zones[nearestIdx], label: userSearchLabel };
+          const nearestZone = zones[nearestIdx];
+          if (nearestZone) zones[nearestIdx] = { ...nearestZone, label: userSearchLabel };
         }
       }
     }

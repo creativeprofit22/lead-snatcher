@@ -111,7 +111,7 @@ export function estimateBudget(input: BudgetInput): BudgetEstimate {
     budgetPoints += pricePoints;
     const labels = ['Free / non-commercial', 'Budget pricing ($)', 'Mid-range pricing ($$)', 'Upscale pricing ($$$)', 'Premium pricing ($$$$)'];
     if (input.priceLevel >= 1) {
-      reasons.push(labels[input.priceLevel]);
+      reasons.push(labels[input.priceLevel] ?? 'Known pricing tier');
     }
   } else if (isLowMargin) {
     // Force budget pricing regardless of neighborhood.

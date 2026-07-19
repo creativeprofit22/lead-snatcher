@@ -186,7 +186,8 @@ export function generateOpportunities(
   // 4. Industry-specific opportunities (only add if not already covered)
   const industryOpps = INDUSTRY_OPPORTUNITIES[industryType] || INDUSTRY_OPPORTUNITIES.other;
   for (const opp of industryOpps) {
-    if (!opportunities.some((o) => o.toLowerCase().includes(opp.toLowerCase().split(' ')[0]))) {
+    const firstWord = opp.toLowerCase().split(' ')[0] ?? '';
+    if (!opportunities.some((o) => o.toLowerCase().includes(firstWord))) {
       opportunities.push(opp);
     }
   }
