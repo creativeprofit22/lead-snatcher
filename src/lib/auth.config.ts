@@ -8,8 +8,7 @@ export const authConfig: NextAuthConfig = {
     authorized({ auth, request: { nextUrl } }) {
       const isLoggedIn = !!auth?.user;
       const isAuthPage =
-        nextUrl.pathname.startsWith('/login') ||
-        nextUrl.pathname.startsWith('/set-password');
+        nextUrl.pathname.startsWith('/login') || nextUrl.pathname.startsWith('/set-password');
 
       if (isAuthPage) {
         // Redirect logged-in users away from login page only

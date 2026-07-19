@@ -1,7 +1,16 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Flame, Snowflake, Sparkles, DollarSign, CircleSlash, TrendingUp, Minus, TrendingDown } from 'lucide-react';
+import {
+  Flame,
+  Snowflake,
+  Sparkles,
+  DollarSign,
+  CircleSlash,
+  TrendingUp,
+  Minus,
+  TrendingDown,
+} from 'lucide-react';
 import { SlidingNumber } from '@/components/motion-primitives/sliding-number';
 import { TextEffect } from '@/components/motion-primitives/text-effect';
 import { GlowEffect } from '@/components/motion-primitives/glow-effect';
@@ -43,11 +52,7 @@ function NeutralLeadIcon() {
   );
 }
 
-export function LeadScoreBadge({
-  score,
-  breakdown,
-  websiteAnalysis,
-}: LeadScoreBadgeProps) {
+export function LeadScoreBadge({ score, breakdown, websiteAnalysis }: LeadScoreBadgeProps) {
   const [isExpanded, setIsExpanded] = useState(false);
 
   // Keep digit count stable during count-up so SlidingNumber doesn't remount
@@ -321,16 +326,24 @@ export function LeadScoreBadge({
               </div>
               <div className="grid grid-cols-2 gap-1 text-[11px] text-gray-400">
                 <div>
-                  Performance: <span className="text-gray-300">{websiteAnalysis.performanceScore}/100</span>
+                  Performance:{' '}
+                  <span className="text-gray-300">{websiteAnalysis.performanceScore}/100</span>
                 </div>
                 <div>
-                  Mobile: <span className="text-gray-300">{websiteAnalysis.isMobileFriendly ? 'Yes' : 'No'}</span>
+                  Mobile:{' '}
+                  <span className="text-gray-300">
+                    {websiteAnalysis.isMobileFriendly ? 'Yes' : 'No'}
+                  </span>
                 </div>
                 <div>
-                  HTTPS: <span className="text-gray-300">{websiteAnalysis.isHttps ? 'Yes' : 'No'}</span>
+                  HTTPS:{' '}
+                  <span className="text-gray-300">{websiteAnalysis.isHttps ? 'Yes' : 'No'}</span>
                 </div>
                 <div>
-                  Response: <span className="text-gray-300">{Math.round(websiteAnalysis.responseTime)}ms</span>
+                  Response:{' '}
+                  <span className="text-gray-300">
+                    {Math.round(websiteAnalysis.responseTime)}ms
+                  </span>
                 </div>
               </div>
             </div>

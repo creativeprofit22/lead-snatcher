@@ -31,9 +31,7 @@ interface PreviewInput {
 
 export function previewEnrichment(lead: PreviewInput): EnrichmentPreview {
   const hasWebsite = !!lead.website?.trim();
-  const socialCount = lead.socialLinks
-    ? Object.values(lead.socialLinks).filter(Boolean).length
-    : 0;
+  const socialCount = lead.socialLinks ? Object.values(lead.socialLinks).filter(Boolean).length : 0;
   const hasSocials = socialCount > 0;
 
   const willFind: EnrichmentTarget[] = [];

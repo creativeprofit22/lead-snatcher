@@ -14,7 +14,12 @@ interface TaskSlideOverProps {
   initialLeadName?: string;
 }
 
-export function TaskSlideOver({ isOpen, onClose, initialLeadId, initialLeadName }: TaskSlideOverProps) {
+export function TaskSlideOver({
+  isOpen,
+  onClose,
+  initialLeadId,
+  initialLeadName,
+}: TaskSlideOverProps) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [showForm, setShowForm] = useState(false);
@@ -228,7 +233,7 @@ export function TaskSlideOver({ isOpen, onClose, initialLeadId, initialLeadName 
                   {initialLeadName ? `Tasks for ${initialLeadName}` : 'All Tasks'}
                 </h2>
                 <p className="text-sm text-gray-500">
-                  {tasks.filter(t => !t.completedAt).length} pending
+                  {tasks.filter((t) => !t.completedAt).length} pending
                 </p>
               </div>
             </div>
@@ -254,7 +259,10 @@ export function TaskSlideOver({ isOpen, onClose, initialLeadId, initialLeadName 
             </button>
           ) : (
             /* Task Form */
-            <form onSubmit={handleSubmit} className="mb-6 p-4 bg-white/[0.02] border border-white/10 rounded-lg space-y-4">
+            <form
+              onSubmit={handleSubmit}
+              className="mb-6 p-4 bg-white/[0.02] border border-white/10 rounded-lg space-y-4"
+            >
               <div className="flex items-center justify-between mb-2">
                 <h3 className="text-sm font-medium text-gray-200">
                   {editingTask ? 'Edit Task' : 'New Task'}

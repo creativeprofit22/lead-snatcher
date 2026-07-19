@@ -66,10 +66,7 @@ export function EnrichmentExplainer({ isOpen, onClose, onContinue }: Props) {
           <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-sky-500/15 text-sky-300">
             <Zap className="w-5 h-5" />
           </div>
-          <h2
-            id="enrichment-explainer-title"
-            className="text-lg font-semibold text-white"
-          >
+          <h2 id="enrichment-explainer-title" className="text-lg font-semibold text-white">
             What enrichment does
           </h2>
         </div>
@@ -114,15 +111,7 @@ export function EnrichmentExplainer({ isOpen, onClose, onContinue }: Props) {
   );
 }
 
-function Bullet({
-  icon,
-  title,
-  body,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  body: string;
-}) {
+function Bullet({ icon, title, body }: { icon: React.ReactNode; title: string; body: string }) {
   return (
     <div className="flex items-start gap-3">
       <div className="flex-shrink-0 mt-0.5 text-sky-300">{icon}</div>

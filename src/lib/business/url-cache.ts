@@ -32,10 +32,7 @@ export function canonicalUrl(raw: string): string {
   }
 }
 
-export async function getCached<T>(
-  service: Service,
-  url: string
-): Promise<T | null> {
+export async function getCached<T>(service: Service, url: string): Promise<T | null> {
   const canon = canonicalUrl(url);
   if (!canon) return null;
   try {
@@ -77,10 +74,7 @@ export async function putCached<T>(
  * for any that are present and unexpired. Caller fetches the remainder
  * fresh and writes them back via putCached.
  */
-export async function getCachedMany<T>(
-  service: Service,
-  urls: string[]
-): Promise<Map<string, T>> {
+export async function getCachedMany<T>(service: Service, urls: string[]): Promise<Map<string, T>> {
   const result = new Map<string, T>();
   if (urls.length === 0) return result;
   const canonByOriginal = new Map(urls.map((u) => [u, canonicalUrl(u)]));

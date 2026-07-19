@@ -13,10 +13,7 @@ type PersistablePayload = Omit<
   'enrichStatusMap' | 'enrichResultMap' | 'selectedForEnrich'
 >;
 
-export async function putLastSearch(
-  userId: string,
-  payload: PersistablePayload
-): Promise<void> {
+export async function putLastSearch(userId: string, payload: PersistablePayload): Promise<void> {
   const serialized = JSON.stringify(payload);
   await prisma.lastSearchSession.upsert({
     where: { userId },
@@ -30,9 +27,7 @@ export interface LastSearchRecord {
   updatedAt: Date;
 }
 
-export async function getLastSearch(
-  userId: string
-): Promise<LastSearchRecord | null> {
+export async function getLastSearch(userId: string): Promise<LastSearchRecord | null> {
   const row = await prisma.lastSearchSession.findUnique({
     where: { userId },
   });
@@ -47,9 +42,7 @@ export async function getLastSearch(
 }
 
 export async function clearLastSearch(userId: string): Promise<void> {
-  await prisma.lastSearchSession
-    .delete({ where: { userId } })
-    .catch(() => {
-      // Already gone — dismissing a nonexistent card is fine.
-    });
+  await prisma.lastSearchSession.delete({ where: { userId } }).catch(() => {
+    // Already gone — dismissing a nonexistent card is fine.
+  });
 }

@@ -164,12 +164,7 @@ export function FilterSidebar({
   return (
     <>
       {/* Mobile Overlay */}
-      {isOpen && (
-        <div
-          className="fixed inset-0 bg-black/50 z-40 lg:hidden"
-          onClick={onClose}
-        />
-      )}
+      {isOpen && <div className="fixed inset-0 bg-black/50 z-40 lg:hidden" onClick={onClose} />}
 
       {/* Sidebar */}
       <aside
@@ -262,9 +257,7 @@ export function FilterSidebar({
                     min={0}
                     max={100}
                     value={filters.scoreRange.min}
-                    onChange={(e) =>
-                      updateScoreRange('min', parseInt(e.target.value) || 0)
-                    }
+                    onChange={(e) => updateScoreRange('min', parseInt(e.target.value) || 0)}
                     className="w-16 px-2 py-1 text-sm bg-white/5 border border-white/10 rounded-lg text-gray-300 text-center focus:border-white/20 outline-none"
                   />
                   <span className="text-gray-600">to</span>
@@ -273,9 +266,7 @@ export function FilterSidebar({
                     min={0}
                     max={100}
                     value={filters.scoreRange.max}
-                    onChange={(e) =>
-                      updateScoreRange('max', parseInt(e.target.value) || 100)
-                    }
+                    onChange={(e) => updateScoreRange('max', parseInt(e.target.value) || 100)}
                     className="w-16 px-2 py-1 text-sm bg-white/5 border border-white/10 rounded-lg text-gray-300 text-center focus:border-white/20 outline-none"
                   />
                 </div>
@@ -286,9 +277,7 @@ export function FilterSidebar({
                     min={0}
                     max={100}
                     value={filters.scoreRange.min}
-                    onChange={(e) =>
-                      updateScoreRange('min', parseInt(e.target.value))
-                    }
+                    onChange={(e) => updateScoreRange('min', parseInt(e.target.value))}
                     className="absolute w-full h-1 appearance-none bg-transparent pointer-events-none [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:cursor-pointer"
                   />
                   <input
@@ -296,9 +285,7 @@ export function FilterSidebar({
                     min={0}
                     max={100}
                     value={filters.scoreRange.max}
-                    onChange={(e) =>
-                      updateScoreRange('max', parseInt(e.target.value))
-                    }
+                    onChange={(e) => updateScoreRange('max', parseInt(e.target.value))}
                     className="absolute w-full h-1 appearance-none bg-transparent pointer-events-none [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:cursor-pointer"
                   />
                   <div className="h-1 bg-white/10 rounded">
@@ -418,9 +405,7 @@ export function FilterSidebar({
                 {followUpOptions.map((option) => (
                   <button
                     key={option.id}
-                    onClick={() =>
-                      onFiltersChange({ ...filters, followUp: option.id })
-                    }
+                    onClick={() => onFiltersChange({ ...filters, followUp: option.id })}
                     className={`flex items-center gap-2 w-full px-2 py-1.5 rounded-lg text-sm transition-colors ${
                       filters.followUp === option.id
                         ? 'bg-white/10 text-white'

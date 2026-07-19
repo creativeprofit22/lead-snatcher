@@ -30,8 +30,6 @@ interface StatusBadgeProps {
 
 export function StatusBadge({ status }: StatusBadgeProps) {
   return (
-    <span className={`text-xs font-medium ${statusStyles[status]}`}>
-      {statusLabels[status]}
-    </span>
+    <span className={`text-xs font-medium ${statusStyles[status]}`}>{statusLabels[status]}</span>
   );
 }

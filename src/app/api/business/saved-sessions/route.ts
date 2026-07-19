@@ -1,9 +1,6 @@
 import { NextRequest } from 'next/server';
 import { auth } from '@/lib/auth';
-import {
-  createSavedSession,
-  listSavedSessions,
-} from '@/lib/business/saved-sessions-store';
+import { createSavedSession, listSavedSessions } from '@/lib/business/saved-sessions-store';
 import type { CachedSearch } from '@/lib/search-cache';
 
 /**
@@ -61,8 +58,7 @@ export async function POST(request: NextRequest) {
   ) {
     return new Response(
       JSON.stringify({
-        error:
-          'Payload must include non-empty name, results[], industry, city, country',
+        error: 'Payload must include non-empty name, results[], industry, city, country',
       }),
       { status: 400, headers: { 'Content-Type': 'application/json' } }
     );

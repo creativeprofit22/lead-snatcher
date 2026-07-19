@@ -12,14 +12,10 @@ export function OpportunitiesList({ opportunities, maxVisible = 3 }: Opportuniti
   const [isExpanded, setIsExpanded] = useState(false);
 
   if (!opportunities || opportunities.length === 0) {
-    return (
-      <p className="text-sm text-gray-500 italic">No opportunities identified</p>
-    );
+    return <p className="text-sm text-gray-500 italic">No opportunities identified</p>;
   }
 
-  const visibleOpportunities = isExpanded
-    ? opportunities
-    : opportunities.slice(0, maxVisible);
+  const visibleOpportunities = isExpanded ? opportunities : opportunities.slice(0, maxVisible);
   const hasMore = opportunities.length > maxVisible;
 
   return (
@@ -30,16 +26,11 @@ export function OpportunitiesList({ opportunities, maxVisible = 3 }: Opportuniti
           <Lightbulb className="relative w-3.5 h-3.5 text-emerald-300" />
         </span>
         <span className="text-white/75">Opportunities</span>
-        <span className="tabular-nums text-emerald-300/80">
-          ({opportunities.length})
-        </span>
+        <span className="tabular-nums text-emerald-300/80">({opportunities.length})</span>
       </div>
       <ul className="space-y-1.5">
         {visibleOpportunities.map((opportunity, index) => (
-          <li
-            key={index}
-            className="opps-row flex items-start gap-2 text-sm text-gray-200"
-          >
+          <li key={index} className="opps-row flex items-start gap-2 text-sm text-gray-200">
             <ChevronRight className="opps-wedge w-3.5 h-3.5 mt-0.5 shrink-0 text-emerald-400" />
             <span className="leading-snug">{opportunity}</span>
           </li>

@@ -1,10 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/db';
-import {
-  scrapePopularTimes,
-  type PopularTimesData,
-} from '@/lib/business/popular-times';
+import { scrapePopularTimes, type PopularTimesData } from '@/lib/business/popular-times';
 
 interface RouteContext {
   params: Promise<{ id: string }>;

@@ -22,9 +22,7 @@ export function WelcomeHeader() {
       <h1 className="font-orbitron text-4xl font-bold tracking-wider text-white drop-shadow-[0_0_24px_rgba(56,189,248,0.15)] sm:text-5xl md:text-6xl lg:text-7xl">
         {TEXT}
       </h1>
-      <p className="font-orbitron text-sm tracking-[0.24em] text-white/55 sm:text-base">
-        {SLOGAN}
-      </p>
+      <p className="font-orbitron text-sm tracking-[0.24em] text-white/55 sm:text-base">{SLOGAN}</p>
     </div>
   );
 }

@@ -330,4 +330,3 @@ export interface TaskPriorityConfig {
   label: string;
   color: string;
 }
-

@@ -76,7 +76,8 @@ export function calculateLeadScore(business: ExtendedBusinessData): ScoreBreakdo
     total: 0,
   };
 
-  const isServiceBusiness = business.industryType && BOOKING_INDUSTRIES.includes(business.industryType);
+  const isServiceBusiness =
+    business.industryType && BOOKING_INDUSTRIES.includes(business.industryType);
 
   // === LAYER 1: Basic Presence ===
 
@@ -183,7 +184,8 @@ export function calculateLeadScore(business: ExtendedBusinessData): ScoreBreakdo
     );
     const isBasicWordPress = scraped.hasWordPress && !scraped.hasModernDesign;
     const isPlainHtml =
-      scraped.techStack.length === 0 || (scraped.techStack.length === 1 && scraped.techStack[0] === 'jQuery');
+      scraped.techStack.length === 0 ||
+      (scraped.techStack.length === 1 && scraped.techStack[0] === 'jQuery');
 
     if (!hasModernTech && (isBasicWordPress || isPlainHtml)) {
       breakdown.basicTechStack = 7;
@@ -332,9 +334,10 @@ export function calculateLeadScore(business: ExtendedBusinessData): ScoreBreakdo
     breakdown.revenueLabel = `${reviewCount} reviews${rL} — established business`;
   } else {
     breakdown.revenueSignal = 'low';
-    breakdown.revenueLabel = reviewCount > 0
-      ? `${reviewCount} reviews${rL} — newer or low-traffic business`
-      : 'No reviews — very new or unlisted';
+    breakdown.revenueLabel =
+      reviewCount > 0
+        ? `${reviewCount} reviews${rL} — newer or low-traffic business`
+        : 'No reviews — very new or unlisted';
   }
 
   // Calculate total

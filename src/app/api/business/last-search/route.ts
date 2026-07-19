@@ -1,10 +1,6 @@
 import { NextRequest } from 'next/server';
 import { auth } from '@/lib/auth';
-import {
-  putLastSearch,
-  getLastSearch,
-  clearLastSearch,
-} from '@/lib/business/last-search-store';
+import { putLastSearch, getLastSearch, clearLastSearch } from '@/lib/business/last-search-store';
 import type { CachedSearch } from '@/lib/search-cache';
 
 /**

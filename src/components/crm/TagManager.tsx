@@ -194,10 +194,7 @@ export function TagManager({ isOpen, onClose, onTagsChange }: TagManagerProps) {
               <div className="space-y-2">
                 {/* Existing tags */}
                 {tags.map((tag) => (
-                  <div
-                    key={tag.id}
-                    className="flex items-center gap-3 p-3 bg-white/5 rounded-lg"
-                  >
+                  <div key={tag.id} className="flex items-center gap-3 p-3 bg-white/5 rounded-lg">
                     {editingId === tag.id ? (
                       /* Edit mode */
                       <div className="flex-1 space-y-3">

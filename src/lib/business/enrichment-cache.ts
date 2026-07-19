@@ -19,9 +19,7 @@ export interface EnrichmentPayload {
 
 const DEFAULT_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
-export async function getEnrichment(
-  businessId: string
-): Promise<EnrichmentPayload | null> {
+export async function getEnrichment(businessId: string): Promise<EnrichmentPayload | null> {
   if (!businessId) return null;
   try {
     const row = await prisma.businessEnrichmentCache.findUnique({

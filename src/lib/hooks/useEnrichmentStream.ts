@@ -38,11 +38,7 @@ export interface UseEnrichmentStream {
    * that already have both website + socials are skipped (0 API cost).
    * Returns a promise that resolves when the stream closes.
    */
-  enrichLeads: (
-    leads: BusinessSearchResult[],
-    city: string,
-    country: string
-  ) => Promise<void>;
+  enrichLeads: (leads: BusinessSearchResult[], city: string, country: string) => Promise<void>;
   /** Clear a lead's ephemeral enriched/error state back to idle. */
   clearStatus: (businessId: string) => void;
   /**
@@ -75,14 +71,9 @@ interface StreamRow {
  * `resultMap[id]` to render the found-data diff / merged fields.
  */
 export function useEnrichmentStream(): UseEnrichmentStream {
-  const [statusMap, setStatusMap] = useState<Record<string, EnrichmentStatus>>(
-    {}
-  );
-  const [resultMap, setResultMap] = useState<Record<string, EnrichmentResult>>(
-    {}
-  );
-  const [bannerError, setBannerError] =
-    useState<EnrichmentBannerError | null>(null);
+  const [statusMap, setStatusMap] = useState<Record<string, EnrichmentStatus>>({});
+  const [resultMap, setResultMap] = useState<Record<string, EnrichmentResult>>({});
+  const [bannerError, setBannerError] = useState<EnrichmentBannerError | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   const clearBannerError = useCallback(() => setBannerError(null), []);
@@ -97,11 +88,7 @@ export function useEnrichmentStream(): UseEnrichmentStream {
   }, []);
 
   const enrichLeads = useCallback(
-    async (
-      leads: BusinessSearchResult[],
-      city: string,
-      country: string
-    ): Promise<void> => {
+    async (leads: BusinessSearchResult[], city: string, country: string): Promise<void> => {
       // STEP 1 — flip every requested lead to 'enriching' FIRST. This
       // is the "every click produces visible feedback" guarantee: even
       // if the payload ends up empty (all already enriched) or the
@@ -164,8 +151,7 @@ export function useEnrichmentStream(): UseEnrichmentStream {
           for (const l of payload) next[l.businessId] = 'error';
           return next;
         });
-        const msg =
-          "Couldn't reach enrichment service — check your connection";
+        const msg = "Couldn't reach enrichment service — check your connection";
         toast.error(msg);
         setBannerError({ kind: 'network', message: msg });
         return;
@@ -183,14 +169,12 @@ export function useEnrichmentStream(): UseEnrichmentStream {
         let serverMessage = '';
         try {
           const body = await response.clone().json();
-          serverMessage =
-            typeof body?.error === 'string' ? `: ${body.error}` : '';
+          serverMessage = typeof body?.error === 'string' ? `: ${body.error}` : '';
         } catch {
           /* response wasn't JSON — that's fine */
         }
         if (response.status === 401) {
-          const msg =
-            'Your session expired. Log in again to keep enriching leads.';
+          const msg = 'Your session expired. Log in again to keep enriching leads.';
           toast.error(msg, { duration: 8000 });
           setBannerError({
             kind: 'session_expired',
@@ -301,12 +285,8 @@ export function useEnrichmentStream(): UseEnrichmentStream {
       // Don't clobber an in-flight stream — rehydration is a mount-time
       // convenience, not a runtime override. Only seed when both maps
       // are empty.
-      setStatusMap((prev) =>
-        Object.keys(prev).length === 0 && status ? status : prev
-      );
-      setResultMap((prev) =>
-        Object.keys(prev).length === 0 && result ? result : prev
-      );
+      setStatusMap((prev) => (Object.keys(prev).length === 0 && status ? status : prev));
+      setResultMap((prev) => (Object.keys(prev).length === 0 && result ? result : prev));
     },
     []
   );

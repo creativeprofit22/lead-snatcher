@@ -61,10 +61,7 @@ export function KanbanBoard({
     if (!destination) return;
 
     // Dropped in the same position
-    if (
-      destination.droppableId === source.droppableId &&
-      destination.index === source.index
-    ) {
+    if (destination.droppableId === source.droppableId && destination.index === source.index) {
       return;
     }
 
@@ -88,10 +85,7 @@ export function KanbanBoard({
             </div>
             <div className="p-2 space-y-2">
               {[1, 2].map((i) => (
-                <div
-                  key={i}
-                  className="h-28 bg-white/[0.03] rounded-lg animate-pulse"
-                />
+                <div key={i} className="h-28 bg-white/[0.03] rounded-lg animate-pulse" />
               ))}
             </div>
           </div>

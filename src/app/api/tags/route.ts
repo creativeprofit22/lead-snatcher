@@ -70,10 +70,7 @@ export async function POST(request: Request) {
     });
 
     if (existing) {
-      return NextResponse.json(
-        { error: 'A tag with this name already exists' },
-        { status: 409 }
-      );
+      return NextResponse.json({ error: 'A tag with this name already exists' }, { status: 409 });
     }
 
     const tag = await prisma.tag.create({

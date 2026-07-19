@@ -124,9 +124,7 @@ export function TasksWidget({ onOpenSlideOver }: TasksWidgetProps) {
               <div className="flex-1 min-w-0">
                 <p className="text-sm text-gray-200 truncate">{task.title}</p>
                 <div className="flex items-center gap-2 mt-0.5">
-                  <span
-                    className={`text-xs ${isOverdue ? 'text-red-400' : 'text-gray-500'}`}
-                  >
+                  <span className={`text-xs ${isOverdue ? 'text-red-400' : 'text-gray-500'}`}>
                     {dueDate.toLocaleDateString('en-US', {
                       month: 'short',
                       day: 'numeric',
@@ -135,9 +133,7 @@ export function TasksWidget({ onOpenSlideOver }: TasksWidgetProps) {
                     })}
                   </span>
                   {task.lead && (
-                    <span className="text-xs text-gray-600 truncate">
-                      • {task.lead.name}
-                    </span>
+                    <span className="text-xs text-gray-600 truncate">• {task.lead.name}</span>
                   )}
                 </div>
               </div>

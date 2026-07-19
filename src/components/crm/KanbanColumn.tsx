@@ -12,13 +12,7 @@ interface KanbanColumnProps {
   onDelete: (leadId: string) => void;
 }
 
-export function KanbanColumn({
-  status,
-  label,
-  leads,
-  onLeadClick,
-  onDelete,
-}: KanbanColumnProps) {
+export function KanbanColumn({ status, label, leads, onLeadClick, onDelete }: KanbanColumnProps) {
   return (
     <div className="flex flex-col w-72 min-w-[288px] bg-white/[0.02] rounded-xl border border-white/10">
       {/* Column Header */}

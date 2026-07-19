@@ -67,20 +67,16 @@ interface MetricsRowProps {
   isLoading?: boolean;
 }
 
-export function MetricsRow({
-  total,
-  inProgress,
-  won,
-  conversionRate,
-  isLoading,
-}: MetricsRowProps) {
+export function MetricsRow({ total, inProgress, won, conversionRate, isLoading }: MetricsRowProps) {
   // Calculate performance levels
   const pipelineRatio = total > 0 ? inProgress / total : 0;
 
   const totalLeadsPerf: PerformanceLevel = total >= 10 ? 'good' : total > 0 ? 'neutral' : 'poor';
-  const inProgressPerf: PerformanceLevel = pipelineRatio >= 0.3 ? 'good' : pipelineRatio > 0.1 ? 'neutral' : 'poor';
+  const inProgressPerf: PerformanceLevel =
+    pipelineRatio >= 0.3 ? 'good' : pipelineRatio > 0.1 ? 'neutral' : 'poor';
   const wonPerf: PerformanceLevel = won >= 3 ? 'good' : won > 0 ? 'neutral' : 'poor';
-  const conversionPerf: PerformanceLevel = conversionRate >= 20 ? 'good' : conversionRate >= 10 ? 'neutral' : 'poor';
+  const conversionPerf: PerformanceLevel =
+    conversionRate >= 20 ? 'good' : conversionRate >= 10 ? 'neutral' : 'poor';
 
   return (
     <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">

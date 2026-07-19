@@ -20,18 +20,12 @@ export async function GET(request: Request) {
     const result = await geocodeCity(city, country);
 
     if (!result) {
-      return NextResponse.json(
-        { error: `Could not find location: ${city}` },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: `Could not find location: ${city}` }, { status: 404 });
     }
 
     return NextResponse.json(result);
   } catch (error) {
     console.error('Geocode error:', error);
-    return NextResponse.json(
-      { error: 'Geocoding failed. Please try again.' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: 'Geocoding failed. Please try again.' }, { status: 500 });
   }
 }

@@ -1,6 +1,16 @@
 'use client';
 
-import { Flame, Snowflake, TrendingUp, TrendingDown, Minus, Users, Target, Trophy, Percent } from 'lucide-react';
+import {
+  Flame,
+  Snowflake,
+  TrendingUp,
+  TrendingDown,
+  Minus,
+  Users,
+  Target,
+  Trophy,
+  Percent,
+} from 'lucide-react';
 import { LEAD_STATUSES } from '@/lib/constants';
 import type { PipelineStats } from '@/types';
 
@@ -56,14 +66,22 @@ export function PipelineStatsDisplay({ stats, isLoading }: PipelineStatsProps) {
   }
 
   // Calculate performance levels
-  const inProgress = stats.byStatus.contacted + stats.byStatus.called + stats.byStatus.proposal_sent + stats.byStatus.negotiating;
+  const inProgress =
+    stats.byStatus.contacted +
+    stats.byStatus.called +
+    stats.byStatus.proposal_sent +
+    stats.byStatus.negotiating;
   const pipelineRatio = stats.total > 0 ? inProgress / stats.total : 0;
 
   // Performance logic
-  const totalLeadsPerf: PerformanceLevel = stats.total >= 10 ? 'good' : stats.total > 0 ? 'neutral' : 'poor';
-  const inProgressPerf: PerformanceLevel = pipelineRatio >= 0.3 ? 'good' : pipelineRatio > 0.1 ? 'neutral' : 'poor';
-  const wonPerf: PerformanceLevel = stats.byStatus.won >= 3 ? 'good' : stats.byStatus.won > 0 ? 'neutral' : 'poor';
-  const conversionPerf: PerformanceLevel = stats.conversionRate >= 20 ? 'good' : stats.conversionRate >= 10 ? 'neutral' : 'poor';
+  const totalLeadsPerf: PerformanceLevel =
+    stats.total >= 10 ? 'good' : stats.total > 0 ? 'neutral' : 'poor';
+  const inProgressPerf: PerformanceLevel =
+    pipelineRatio >= 0.3 ? 'good' : pipelineRatio > 0.1 ? 'neutral' : 'poor';
+  const wonPerf: PerformanceLevel =
+    stats.byStatus.won >= 3 ? 'good' : stats.byStatus.won > 0 ? 'neutral' : 'poor';
+  const conversionPerf: PerformanceLevel =
+    stats.conversionRate >= 20 ? 'good' : stats.conversionRate >= 10 ? 'neutral' : 'poor';
 
   return (
     <div className="space-y-4">

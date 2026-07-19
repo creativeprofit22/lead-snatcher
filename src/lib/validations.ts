@@ -3,12 +3,26 @@ import { z } from 'zod';
 // ─── Shared enums ───────────────────────────────────────────────
 
 export const leadStatusSchema = z.enum([
-  'new', 'contacted', 'called', 'proposal_sent', 'negotiating', 'won', 'lost', 'not_interested',
+  'new',
+  'contacted',
+  'called',
+  'proposal_sent',
+  'negotiating',
+  'won',
+  'lost',
+  'not_interested',
 ]);
 
 export const industryTypeSchema = z.enum([
-  'restaurant', 'salon', 'fitness', 'medical', 'retail', 'automotive',
-  'real_estate', 'professional_services', 'other',
+  'restaurant',
+  'salon',
+  'fitness',
+  'medical',
+  'retail',
+  'automotive',
+  'real_estate',
+  'professional_services',
+  'other',
 ]);
 
 export const contactTypeSchema = z.enum(['email', 'call', 'meeting', 'note']);
@@ -30,7 +44,8 @@ export const inviteSchema = z.object({
 // POST /api/auth/set-password
 export const setPasswordSchema = z.object({
   token: z.string().min(1, 'Token is required'),
-  password: z.string()
+  password: z
+    .string()
     .min(8, 'Password must be at least 8 characters')
     .max(128)
     .regex(/[A-Z]/, 'Password must include an uppercase letter')
@@ -87,7 +102,9 @@ export const createLeadSchema = z.object({
   photoUrl: z.string().max(2000).nullish(),
   mapsUrl: z.string().max(2000).nullish(),
   leadScore: z.number().int().min(0).max(100).default(0),
-  scoreBreakdown: z.record(z.string(), z.union([z.number(), z.boolean(), z.string(), z.array(z.string())])).nullish(),
+  scoreBreakdown: z
+    .record(z.string(), z.union([z.number(), z.boolean(), z.string(), z.array(z.string())]))
+    .nullish(),
   opportunities: z.array(z.string()).nullish(),
   /** Optional: pre-scraped Popular Times data from search-time enrichment. */
   popularTimesData: z.string().max(50_000).nullish(),
@@ -114,19 +131,21 @@ export const addTagToLeadSchema = z.object({
 });
 
 // PATCH /api/leads/bulk
-export const bulkUpdateLeadsSchema = z.object({
-  leadIds: z.array(z.string()).min(1, 'At least one lead ID is required'),
-  action: z.enum(['status', 'add_tag']),
-  status: leadStatusSchema.optional(),
-  tagId: z.string().optional(),
-}).refine(
-  (data) => {
-    if (data.action === 'status') return !!data.status;
-    if (data.action === 'add_tag') return !!data.tagId;
-    return true;
-  },
-  { message: 'Status is required for status action, tagId for add_tag action' },
-);
+export const bulkUpdateLeadsSchema = z
+  .object({
+    leadIds: z.array(z.string()).min(1, 'At least one lead ID is required'),
+    action: z.enum(['status', 'add_tag']),
+    status: leadStatusSchema.optional(),
+    tagId: z.string().optional(),
+  })
+  .refine(
+    (data) => {
+      if (data.action === 'status') return !!data.status;
+      if (data.action === 'add_tag') return !!data.tagId;
+      return true;
+    },
+    { message: 'Status is required for status action, tagId for add_tag action' }
+  );
 
 // DELETE /api/leads/bulk
 export const bulkDeleteLeadsSchema = z.object({
@@ -148,7 +167,10 @@ export const createTagSchema = z.object({
 // PATCH /api/tags/[id]
 export const updateTagSchema = z.object({
   name: z.string().min(1).max(100).optional(),
-  color: z.string().regex(/^#[0-9A-Fa-f]{6}$/, 'Invalid color format. Use hex (e.g., #3b82f6)').optional(),
+  color: z
+    .string()
+    .regex(/^#[0-9A-Fa-f]{6}$/, 'Invalid color format. Use hex (e.g., #3b82f6)')
+    .optional(),
 });
 
 // POST /api/tasks

@@ -45,9 +45,7 @@ export async function createSavedSession(
   return toRecord(row, payload);
 }
 
-export async function listSavedSessions(
-  userId: string
-): Promise<SavedSessionSummary[]> {
+export async function listSavedSessions(userId: string): Promise<SavedSessionSummary[]> {
   const rows = await prisma.savedSearchSession.findMany({
     where: { userId },
     orderBy: { updatedAt: 'desc' },
@@ -71,10 +69,7 @@ export async function getSavedSession(
   return toRecord(row, payload);
 }
 
-export async function deleteSavedSession(
-  userId: string,
-  id: string
-): Promise<boolean> {
+export async function deleteSavedSession(userId: string, id: string): Promise<boolean> {
   // findFirst+delete to enforce user scoping — users can only delete
   // their own sessions, not anyone else's cuid.
   const row = await prisma.savedSearchSession.findFirst({

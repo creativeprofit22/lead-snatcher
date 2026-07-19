@@ -157,12 +157,8 @@ export function RadarScan({
     const sorted = [...zones].sort((a, b) => b.score - a.score);
 
     // Only label zones that have real place names (not directional fallbacks)
-    const nameable = sorted.filter(
-      (z) => !DIRECTIONAL_FALLBACK_LABELS.has(z.label)
-    );
-    const labeledIds = new Set(
-      nameable.slice(0, LABELED_ZONE_COUNT).map((z) => z.id)
-    );
+    const nameable = sorted.filter((z) => !DIRECTIONAL_FALLBACK_LABELS.has(z.label));
+    const labeledIds = new Set(nameable.slice(0, LABELED_ZONE_COUNT).map((z) => z.id));
 
     return sorted.map((z, i) => {
       const { x, y } = projectToRadar(z.latitude, z.longitude, effectiveBbox);
@@ -345,8 +341,7 @@ export function RadarScan({
   const headerLabel = (() => {
     if (phase === 'complete' || allLit) return 'Scan Complete';
     if (phase === 'pins') return 'Acquiring Targets';
-    if (phase === 'zooming')
-      return topZone ? `Locking On ${topZone.label}` : 'Locking On';
+    if (phase === 'zooming') return topZone ? `Locking On ${topZone.label}` : 'Locking On';
     if (phase === 'bloom') {
       const premium = zoneDots.filter((z) => z.score >= 50).length;
       return premium > 0
@@ -361,14 +356,9 @@ export function RadarScan({
   const wedgeEndY = RADAR_CENTER + RADAR_RADIUS * Math.sin(wedgeEndRad);
 
   // Camera transform — scales + offsets SVG so topZone lands at container center.
-  const tightView =
-    !!topZone && (phase === 'zooming' || phase === 'pins' || phase === 'complete');
-  const zoomXPct = topZone
-    ? ((RADAR_CENTER - topZone.x * ZOOM_SCALE) / RADAR_SIZE) * 100
-    : 0;
-  const zoomYPct = topZone
-    ? ((RADAR_CENTER - topZone.y * ZOOM_SCALE) / RADAR_SIZE) * 100
-    : 0;
+  const tightView = !!topZone && (phase === 'zooming' || phase === 'pins' || phase === 'complete');
+  const zoomXPct = topZone ? ((RADAR_CENTER - topZone.x * ZOOM_SCALE) / RADAR_SIZE) * 100 : 0;
+  const zoomYPct = topZone ? ((RADAR_CENTER - topZone.y * ZOOM_SCALE) / RADAR_SIZE) * 100 : 0;
 
   return (
     <motion.div
@@ -424,231 +414,282 @@ export function RadarScan({
               viewBox={`0 0 ${RADAR_SIZE} ${RADAR_SIZE}`}
               className="absolute inset-0 h-full w-full"
             >
-          <defs>
-            <radialGradient id="radar-bg" cx="50%" cy="50%" r="50%">
-              <stop offset="0%" stopColor="#0a2540" stopOpacity="0.6" />
-              <stop offset="70%" stopColor="#041226" stopOpacity="0.3" />
-              <stop offset="100%" stopColor="#050810" stopOpacity="0" />
-            </radialGradient>
-            <linearGradient id="sweep-grad" x1="0%" y1="0%" x2="100%" y2="0%">
-              <stop offset="0%" stopColor="#0ea5e9" stopOpacity="0" />
-              <stop offset="70%" stopColor="#0ea5e9" stopOpacity="0.4" />
-              <stop offset="100%" stopColor="#7dd3fc" stopOpacity="0.95" />
-            </linearGradient>
-            <radialGradient id="zone-halo" cx="50%" cy="50%" r="50%">
-              <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.6" />
-              <stop offset="100%" stopColor="#38bdf8" stopOpacity="0" />
-            </radialGradient>
-          </defs>
+              <defs>
+                <radialGradient id="radar-bg" cx="50%" cy="50%" r="50%">
+                  <stop offset="0%" stopColor="#0a2540" stopOpacity="0.6" />
+                  <stop offset="70%" stopColor="#041226" stopOpacity="0.3" />
+                  <stop offset="100%" stopColor="#050810" stopOpacity="0" />
+                </radialGradient>
+                <linearGradient id="sweep-grad" x1="0%" y1="0%" x2="100%" y2="0%">
+                  <stop offset="0%" stopColor="#0ea5e9" stopOpacity="0" />
+                  <stop offset="70%" stopColor="#0ea5e9" stopOpacity="0.4" />
+                  <stop offset="100%" stopColor="#7dd3fc" stopOpacity="0.95" />
+                </linearGradient>
+                <radialGradient id="zone-halo" cx="50%" cy="50%" r="50%">
+                  <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.6" />
+                  <stop offset="100%" stopColor="#38bdf8" stopOpacity="0" />
+                </radialGradient>
+              </defs>
 
-          <circle cx={RADAR_CENTER} cy={RADAR_CENTER} r={RADAR_RADIUS} fill="url(#radar-bg)" />
+              <circle cx={RADAR_CENTER} cy={RADAR_CENTER} r={RADAR_RADIUS} fill="url(#radar-bg)" />
 
-          {[0.33, 0.66, 1].map((f) => (
-            <circle
-              key={f}
-              cx={RADAR_CENTER}
-              cy={RADAR_CENTER}
-              r={RADAR_RADIUS * f}
-              fill="none"
-              stroke="#38bdf8"
-              strokeOpacity="0.18"
-              strokeWidth="1"
-            />
-          ))}
+              {[0.33, 0.66, 1].map((f) => (
+                <circle
+                  key={f}
+                  cx={RADAR_CENTER}
+                  cy={RADAR_CENTER}
+                  r={RADAR_RADIUS * f}
+                  fill="none"
+                  stroke="#38bdf8"
+                  strokeOpacity="0.18"
+                  strokeWidth="1"
+                />
+              ))}
 
-          <line
-            x1={RADAR_CENTER}
-            y1={RADAR_CENTER - RADAR_RADIUS}
-            x2={RADAR_CENTER}
-            y2={RADAR_CENTER + RADAR_RADIUS}
-            stroke="#38bdf8"
-            strokeOpacity="0.14"
-            strokeDasharray="2 4"
-          />
-          <line
-            x1={RADAR_CENTER - RADAR_RADIUS}
-            y1={RADAR_CENTER}
-            x2={RADAR_CENTER + RADAR_RADIUS}
-            y2={RADAR_CENTER}
-            stroke="#38bdf8"
-            strokeOpacity="0.14"
-            strokeDasharray="2 4"
-          />
+              <line
+                x1={RADAR_CENTER}
+                y1={RADAR_CENTER - RADAR_RADIUS}
+                x2={RADAR_CENTER}
+                y2={RADAR_CENTER + RADAR_RADIUS}
+                stroke="#38bdf8"
+                strokeOpacity="0.14"
+                strokeDasharray="2 4"
+              />
+              <line
+                x1={RADAR_CENTER - RADAR_RADIUS}
+                y1={RADAR_CENTER}
+                x2={RADAR_CENTER + RADAR_RADIUS}
+                y2={RADAR_CENTER}
+                stroke="#38bdf8"
+                strokeOpacity="0.14"
+                strokeDasharray="2 4"
+              />
 
-          <g>
-            <animateTransform
-              attributeName="transform"
-              attributeType="XML"
-              type="rotate"
-              from={`0 ${RADAR_CENTER} ${RADAR_CENTER}`}
-              to={`360 ${RADAR_CENTER} ${RADAR_CENTER}`}
-              dur={`${SWEEP_DURATION_MS / 1000}s`}
-              repeatCount="indefinite"
-            />
-            <path
-              d={`M ${RADAR_CENTER} ${RADAR_CENTER} L ${RADAR_CENTER + RADAR_RADIUS} ${RADAR_CENTER} A ${RADAR_RADIUS} ${RADAR_RADIUS} 0 0 0 ${wedgeEndX} ${wedgeEndY} Z`}
-              fill="url(#sweep-grad)"
-              opacity="0.85"
-            />
-            <line
-              x1={RADAR_CENTER}
-              y1={RADAR_CENTER}
-              x2={RADAR_CENTER + RADAR_RADIUS}
-              y2={RADAR_CENTER}
-              stroke="#7dd3fc"
-              strokeWidth="1.5"
-              strokeOpacity="0.9"
-            />
-          </g>
-
-          <circle cx={RADAR_CENTER} cy={RADAR_CENTER} r="4" fill="#38bdf8" />
-          <circle
-            cx={RADAR_CENTER}
-            cy={RADAR_CENTER}
-            r="10"
-            fill="none"
-            stroke="#38bdf8"
-            strokeOpacity="0.4"
-          />
-          <circle cx={RADAR_CENTER} cy={RADAR_CENTER} fill="none" stroke="#38bdf8" strokeWidth="1">
-            <animate attributeName="r" values="12;22;12" dur="2.2s" repeatCount="indefinite" />
-            <animate
-              attributeName="stroke-opacity"
-              values="0.4;0;0.4"
-              dur="2.2s"
-              repeatCount="indefinite"
-            />
-          </circle>
-
-          {/* Ambient scanner pings — only during sweep + bloom phases */}
-          {(phase === 'sweep' || phase === 'bloom') &&
-            ambientPings.map((p) => (
-              <circle key={p.id} cx={p.x} cy={p.y} fill="#7dd3fc" r="0" opacity="0">
-                <animate
-                  attributeName="r"
-                  values="0;2.5;0"
-                  dur="2.4s"
-                  begin={`${p.delay}s`}
+              <g>
+                <animateTransform
+                  attributeName="transform"
+                  attributeType="XML"
+                  type="rotate"
+                  from={`0 ${RADAR_CENTER} ${RADAR_CENTER}`}
+                  to={`360 ${RADAR_CENTER} ${RADAR_CENTER}`}
+                  dur={`${SWEEP_DURATION_MS / 1000}s`}
                   repeatCount="indefinite"
                 />
+                <path
+                  d={`M ${RADAR_CENTER} ${RADAR_CENTER} L ${RADAR_CENTER + RADAR_RADIUS} ${RADAR_CENTER} A ${RADAR_RADIUS} ${RADAR_RADIUS} 0 0 0 ${wedgeEndX} ${wedgeEndY} Z`}
+                  fill="url(#sweep-grad)"
+                  opacity="0.85"
+                />
+                <line
+                  x1={RADAR_CENTER}
+                  y1={RADAR_CENTER}
+                  x2={RADAR_CENTER + RADAR_RADIUS}
+                  y2={RADAR_CENTER}
+                  stroke="#7dd3fc"
+                  strokeWidth="1.5"
+                  strokeOpacity="0.9"
+                />
+              </g>
+
+              <circle cx={RADAR_CENTER} cy={RADAR_CENTER} r="4" fill="#38bdf8" />
+              <circle
+                cx={RADAR_CENTER}
+                cy={RADAR_CENTER}
+                r="10"
+                fill="none"
+                stroke="#38bdf8"
+                strokeOpacity="0.4"
+              />
+              <circle
+                cx={RADAR_CENTER}
+                cy={RADAR_CENTER}
+                fill="none"
+                stroke="#38bdf8"
+                strokeWidth="1"
+              >
+                <animate attributeName="r" values="12;22;12" dur="2.2s" repeatCount="indefinite" />
                 <animate
-                  attributeName="opacity"
-                  values="0;0.6;0"
-                  dur="2.4s"
-                  begin={`${p.delay}s`}
+                  attributeName="stroke-opacity"
+                  values="0.4;0;0.4"
+                  dur="2.2s"
                   repeatCount="indefinite"
                 />
               </circle>
-            ))}
 
-          {/* Zone dots — visible during bloom, fade non-top zones on lock-in */}
-          {(phase === 'bloom' ||
-            phase === 'zooming' ||
-            phase === 'pins' ||
-            phase === 'complete') &&
-            zoneDots.map((z, i) => {
-              const visible = phase !== 'bloom' || i < bloomedCount;
-              if (!visible) return null;
-              // Halo radius scales from 10px (score 0) to 36px (score 100).
-              const haloR = 10 + (z.score / 100) * 26;
-              const dotOpacity = 0.35 + (z.score / 100) * 0.65;
-              const isTop = i === 0;
-              const locked =
-                phase === 'zooming' || phase === 'pins' || phase === 'complete';
-              // During lock-on, non-top zones fade; top zone stays bright.
-              // Once pins start, even the top zone softens so pins dominate.
-              const groupOpacity = locked
-                ? isTop
-                  ? phase === 'pins' || phase === 'complete'
-                    ? 0.55
-                    : 1
-                  : 0
-                : 1;
-              return (
-                <motion.g
-                  key={z.id}
-                  initial={{ opacity: 0, scale: 0.2 }}
-                  animate={{ opacity: groupOpacity, scale: 1 }}
-                  transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
-                  style={{ transformOrigin: `${z.x}px ${z.y}px` }}
-                >
-                  <circle cx={z.x} cy={z.y} r={haloR} fill="url(#zone-halo)" />
-                  <circle
-                    cx={z.x}
-                    cy={z.y}
-                    r={5}
-                    fill="#7dd3fc"
-                    fillOpacity={dotOpacity}
-                  />
-                  <circle cx={z.x} cy={z.y} r={3} fill="#e0f2fe" />
-                  {/* Corner-bracket lock indicator, only on top zone during lock-on */}
-                  {isTop && locked && (
+              {/* Ambient scanner pings — only during sweep + bloom phases */}
+              {(phase === 'sweep' || phase === 'bloom') &&
+                ambientPings.map((p) => (
+                  <circle key={p.id} cx={p.x} cy={p.y} fill="#7dd3fc" r="0" opacity="0">
+                    <animate
+                      attributeName="r"
+                      values="0;2.5;0"
+                      dur="2.4s"
+                      begin={`${p.delay}s`}
+                      repeatCount="indefinite"
+                    />
+                    <animate
+                      attributeName="opacity"
+                      values="0;0.6;0"
+                      dur="2.4s"
+                      begin={`${p.delay}s`}
+                      repeatCount="indefinite"
+                    />
+                  </circle>
+                ))}
+
+              {/* Zone dots — visible during bloom, fade non-top zones on lock-in */}
+              {(phase === 'bloom' ||
+                phase === 'zooming' ||
+                phase === 'pins' ||
+                phase === 'complete') &&
+                zoneDots.map((z, i) => {
+                  const visible = phase !== 'bloom' || i < bloomedCount;
+                  if (!visible) return null;
+                  // Halo radius scales from 10px (score 0) to 36px (score 100).
+                  const haloR = 10 + (z.score / 100) * 26;
+                  const dotOpacity = 0.35 + (z.score / 100) * 0.65;
+                  const isTop = i === 0;
+                  const locked = phase === 'zooming' || phase === 'pins' || phase === 'complete';
+                  // During lock-on, non-top zones fade; top zone stays bright.
+                  // Once pins start, even the top zone softens so pins dominate.
+                  const groupOpacity = locked
+                    ? isTop
+                      ? phase === 'pins' || phase === 'complete'
+                        ? 0.55
+                        : 1
+                      : 0
+                    : 1;
+                  return (
                     <motion.g
-                      initial={{ opacity: 0, scale: 0.6 }}
-                      animate={{ opacity: 0.9, scale: 1 }}
-                      transition={{ duration: 0.3, ease: 'easeOut' }}
+                      key={z.id}
+                      initial={{ opacity: 0, scale: 0.2 }}
+                      animate={{ opacity: groupOpacity, scale: 1 }}
+                      transition={{ duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
                       style={{ transformOrigin: `${z.x}px ${z.y}px` }}
                     >
-                      {(() => {
-                        const r = haloR + 8;
-                        const t = 5;
-                        return (
-                          <>
-                            {/* TL */}
-                            <line x1={z.x - r} y1={z.y - r} x2={z.x - r + t} y2={z.y - r} stroke="#7dd3fc" strokeWidth="1.5" />
-                            <line x1={z.x - r} y1={z.y - r} x2={z.x - r} y2={z.y - r + t} stroke="#7dd3fc" strokeWidth="1.5" />
-                            {/* TR */}
-                            <line x1={z.x + r} y1={z.y - r} x2={z.x + r - t} y2={z.y - r} stroke="#7dd3fc" strokeWidth="1.5" />
-                            <line x1={z.x + r} y1={z.y - r} x2={z.x + r} y2={z.y - r + t} stroke="#7dd3fc" strokeWidth="1.5" />
-                            {/* BL */}
-                            <line x1={z.x - r} y1={z.y + r} x2={z.x - r + t} y2={z.y + r} stroke="#7dd3fc" strokeWidth="1.5" />
-                            <line x1={z.x - r} y1={z.y + r} x2={z.x - r} y2={z.y + r - t} stroke="#7dd3fc" strokeWidth="1.5" />
-                            {/* BR */}
-                            <line x1={z.x + r} y1={z.y + r} x2={z.x + r - t} y2={z.y + r} stroke="#7dd3fc" strokeWidth="1.5" />
-                            <line x1={z.x + r} y1={z.y + r} x2={z.x + r} y2={z.y + r - t} stroke="#7dd3fc" strokeWidth="1.5" />
-                          </>
-                        );
-                      })()}
+                      <circle cx={z.x} cy={z.y} r={haloR} fill="url(#zone-halo)" />
+                      <circle cx={z.x} cy={z.y} r={5} fill="#7dd3fc" fillOpacity={dotOpacity} />
+                      <circle cx={z.x} cy={z.y} r={3} fill="#e0f2fe" />
+                      {/* Corner-bracket lock indicator, only on top zone during lock-on */}
+                      {isTop && locked && (
+                        <motion.g
+                          initial={{ opacity: 0, scale: 0.6 }}
+                          animate={{ opacity: 0.9, scale: 1 }}
+                          transition={{ duration: 0.3, ease: 'easeOut' }}
+                          style={{ transformOrigin: `${z.x}px ${z.y}px` }}
+                        >
+                          {(() => {
+                            const r = haloR + 8;
+                            const t = 5;
+                            return (
+                              <>
+                                {/* TL */}
+                                <line
+                                  x1={z.x - r}
+                                  y1={z.y - r}
+                                  x2={z.x - r + t}
+                                  y2={z.y - r}
+                                  stroke="#7dd3fc"
+                                  strokeWidth="1.5"
+                                />
+                                <line
+                                  x1={z.x - r}
+                                  y1={z.y - r}
+                                  x2={z.x - r}
+                                  y2={z.y - r + t}
+                                  stroke="#7dd3fc"
+                                  strokeWidth="1.5"
+                                />
+                                {/* TR */}
+                                <line
+                                  x1={z.x + r}
+                                  y1={z.y - r}
+                                  x2={z.x + r - t}
+                                  y2={z.y - r}
+                                  stroke="#7dd3fc"
+                                  strokeWidth="1.5"
+                                />
+                                <line
+                                  x1={z.x + r}
+                                  y1={z.y - r}
+                                  x2={z.x + r}
+                                  y2={z.y - r + t}
+                                  stroke="#7dd3fc"
+                                  strokeWidth="1.5"
+                                />
+                                {/* BL */}
+                                <line
+                                  x1={z.x - r}
+                                  y1={z.y + r}
+                                  x2={z.x - r + t}
+                                  y2={z.y + r}
+                                  stroke="#7dd3fc"
+                                  strokeWidth="1.5"
+                                />
+                                <line
+                                  x1={z.x - r}
+                                  y1={z.y + r}
+                                  x2={z.x - r}
+                                  y2={z.y + r - t}
+                                  stroke="#7dd3fc"
+                                  strokeWidth="1.5"
+                                />
+                                {/* BR */}
+                                <line
+                                  x1={z.x + r}
+                                  y1={z.y + r}
+                                  x2={z.x + r - t}
+                                  y2={z.y + r}
+                                  stroke="#7dd3fc"
+                                  strokeWidth="1.5"
+                                />
+                                <line
+                                  x1={z.x + r}
+                                  y1={z.y + r}
+                                  x2={z.x + r}
+                                  y2={z.y + r - t}
+                                  stroke="#7dd3fc"
+                                  strokeWidth="1.5"
+                                />
+                              </>
+                            );
+                          })()}
+                        </motion.g>
+                      )}
                     </motion.g>
-                  )}
-                </motion.g>
-              );
-            })}
+                  );
+                })}
 
-          {/* Business pins */}
-          {(phase === 'pins' || phase === 'complete') &&
-            pins.map((pin) =>
-              lit.has(pin.key) ? (
-                <g key={pin.key}>
-                  <circle
-                    cx={pin.x}
-                    cy={pin.y}
-                    fill="none"
-                    stroke="#7dd3fc"
-                    strokeWidth="1.5"
-                    className="radar-pin-ripple"
-                  />
-                  <circle cx={pin.x} cy={pin.y} fill="#38bdf8" className="radar-pin-dot" />
-                </g>
-              ) : null
-            )}
-          </svg>
+              {/* Business pins */}
+              {(phase === 'pins' || phase === 'complete') &&
+                pins.map((pin) =>
+                  lit.has(pin.key) ? (
+                    <g key={pin.key}>
+                      <circle
+                        cx={pin.x}
+                        cy={pin.y}
+                        fill="none"
+                        stroke="#7dd3fc"
+                        strokeWidth="1.5"
+                        className="radar-pin-ripple"
+                      />
+                      <circle cx={pin.x} cy={pin.y} fill="#38bdf8" className="radar-pin-dot" />
+                    </g>
+                  ) : null
+                )}
+            </svg>
           </motion.div>
         </div>
 
         {/* Zone labels — live OUTSIDE the clipping layer so names near the
             radar edge don't get cut off. */}
-        {(phase === 'bloom' ||
-          phase === 'zooming' ||
-          phase === 'pins' ||
-          phase === 'complete') &&
+        {(phase === 'bloom' || phase === 'zooming' || phase === 'pins' || phase === 'complete') &&
           zoneDots.map((z, i) => {
             if (!z.labeled) return null;
             const visible = phase !== 'bloom' || i < bloomedCount;
             if (!visible) return null;
             const isTop = i === 0;
-            const locked =
-              phase === 'zooming' || phase === 'pins' || phase === 'complete';
+            const locked = phase === 'zooming' || phase === 'pins' || phase === 'complete';
             // Non-top zones fade out on lock-in. Top zone slides to container
             // center so it tracks its dot through the zoom.
             const labelLeft = locked && isTop ? 50 : (z.x / RADAR_SIZE) * 100;
@@ -671,8 +712,7 @@ export function RadarScan({
                 className="pointer-events-none absolute -translate-x-1/2 -translate-y-full whitespace-nowrap text-center"
                 style={{
                   marginTop: '-18px',
-                  textShadow:
-                    '0 0 6px rgba(8, 18, 38, 0.95), 0 1px 2px rgba(0,0,0,0.9)',
+                  textShadow: '0 0 6px rgba(8, 18, 38, 0.95), 0 1px 2px rgba(0,0,0,0.9)',
                 }}
               >
                 <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-sky-100 font-semibold">

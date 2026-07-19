@@ -29,18 +29,12 @@ interface Props {
  * when the next successful action lands — so users don't see stale
  * errors after fixing the root cause.
  */
-export function ErrorBanner({
-  message,
-  severity = 'error',
-  action,
-  onDismiss,
-}: Props) {
+export function ErrorBanner({ message, severity = 'error', action, onDismiss }: Props) {
   const palette =
     severity === 'warning'
       ? 'border-amber-500/40 bg-amber-500/10 text-amber-200'
       : 'border-rose-500/40 bg-rose-500/10 text-rose-200';
-  const iconPalette =
-    severity === 'warning' ? 'text-amber-300' : 'text-rose-300';
+  const iconPalette = severity === 'warning' ? 'text-amber-300' : 'text-rose-300';
 
   return (
     <div

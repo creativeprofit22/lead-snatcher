@@ -33,7 +33,15 @@ export async function GET(request: Request) {
     const tags = searchParams.get('tags'); // comma-separated tag IDs
 
     // Sorting - whitelist allowed fields to prevent injection
-    const ALLOWED_SORT_FIELDS = ['savedAt', 'leadScore', 'name', 'status', 'lastContactedAt', 'nextFollowUpAt', 'updatedAt'];
+    const ALLOWED_SORT_FIELDS = [
+      'savedAt',
+      'leadScore',
+      'name',
+      'status',
+      'lastContactedAt',
+      'nextFollowUpAt',
+      'updatedAt',
+    ];
     const requestedSortBy = searchParams.get('sortBy') || 'savedAt';
     const sortBy = ALLOWED_SORT_FIELDS.includes(requestedSortBy) ? requestedSortBy : 'savedAt';
     const sortOrder = searchParams.get('sortOrder') === 'asc' ? 'asc' : 'desc';
@@ -45,7 +53,9 @@ export async function GET(request: Request) {
 
     // Multi-status filter — validate each value against the enum
     if (statuses) {
-      const statusList = statuses.split(',').filter((s) => leadStatusSchema.safeParse(s).success) as LeadStatus[];
+      const statusList = statuses
+        .split(',')
+        .filter((s) => leadStatusSchema.safeParse(s).success) as LeadStatus[];
       if (statusList.length > 0) where.status = { in: statusList };
     } else if (status) {
       if (leadStatusSchema.safeParse(status).success) where.status = status;
@@ -60,7 +70,9 @@ export async function GET(request: Request) {
 
     // Multi-industry filter — validate each value against the enum
     if (industries) {
-      const industryList = industries.split(',').filter((s) => industryTypeSchema.safeParse(s).success) as IndustryType[];
+      const industryList = industries
+        .split(',')
+        .filter((s) => industryTypeSchema.safeParse(s).success) as IndustryType[];
       if (industryList.length > 0) where.industryType = { in: industryList };
     } else if (industry) {
       if (industryTypeSchema.safeParse(industry).success) where.industryType = industry;
@@ -229,9 +241,7 @@ export async function POST(request: Request) {
         opportunities: opportunities ? JSON.stringify(opportunities) : '[]',
         status: 'new',
         popularTimesData: popularTimesData ?? undefined,
-        popularTimesScrapedAt: popularTimesScrapedAt
-          ? new Date(popularTimesScrapedAt)
-          : undefined,
+        popularTimesScrapedAt: popularTimesScrapedAt ? new Date(popularTimesScrapedAt) : undefined,
       },
     });
 

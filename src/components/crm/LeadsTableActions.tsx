@@ -70,9 +70,7 @@ export function LeadsTableActions({ lead, onView, onDelete }: LeadsTableActionsP
             Website
           </DropdownMenuItem>
         )}
-        {(lead.phone || lead.website) && (
-          <DropdownMenuSeparator className="bg-white/10" />
-        )}
+        {(lead.phone || lead.website) && <DropdownMenuSeparator className="bg-white/10" />}
         <DropdownMenuItem
           onClick={() => onDelete(lead.id)}
           className="text-red-400 focus:bg-red-500/10 focus:text-red-400 cursor-pointer"

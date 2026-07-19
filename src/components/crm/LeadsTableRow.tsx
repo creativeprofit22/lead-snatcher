@@ -76,10 +76,15 @@ export function LeadsTableRow({
               <Snowflake className="relative w-4 h-4 text-blue-400" />
             </div>
           )}
-          <span className={`font-mono ${
-            lead.leadScore >= 55 ? 'text-orange-300' :
-            lead.leadScore >= 35 ? 'text-amber-300' : 'text-blue-300'
-          }`}>
+          <span
+            className={`font-mono ${
+              lead.leadScore >= 55
+                ? 'text-orange-300'
+                : lead.leadScore >= 35
+                  ? 'text-amber-300'
+                  : 'text-blue-300'
+            }`}
+          >
             {lead.leadScore}
           </span>
         </div>

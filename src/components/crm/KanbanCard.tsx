@@ -119,9 +119,7 @@ export function KanbanCard({ lead, index, onLeadClick, onDelete }: KanbanCardPro
           )}
 
           {/* Notes preview */}
-          {lead.notes && (
-            <p className="mt-2 text-xs text-gray-600 line-clamp-2">{lead.notes}</p>
-          )}
+          {lead.notes && <p className="mt-2 text-xs text-gray-600 line-clamp-2">{lead.notes}</p>}
         </div>
       )}
     </Draggable>

@@ -1,15 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import {
-  Trash2,
-  Tag,
-  RefreshCw,
-  Download,
-  X,
-  Check,
-  Loader2,
-} from 'lucide-react';
+import { Trash2, Tag, RefreshCw, Download, X, Check, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { LEAD_STATUSES } from '@/lib/constants';
 import type { Lead, LeadStatus, Tag as TagType } from '@/types';
@@ -98,7 +90,11 @@ export function BulkActions({ selectedLeads, onClearSelection, onBulkUpdate }: B
   };
 
   const handleBulkDelete = async () => {
-    if (!confirm(`Are you sure you want to delete ${selectedLeads.length} leads? This action cannot be undone.`)) {
+    if (
+      !confirm(
+        `Are you sure you want to delete ${selectedLeads.length} leads? This action cannot be undone.`
+      )
+    ) {
       return;
     }
 
@@ -149,9 +145,7 @@ export function BulkActions({ selectedLeads, onClearSelection, onBulkUpdate }: B
   return (
     <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-gray-900 border border-white/20 rounded-2xl shadow-2xl px-4 py-3 flex items-center gap-4 animate-in slide-in-from-bottom-4 duration-300">
       <div className="flex items-center gap-2">
-        <span className="text-sm font-medium text-gray-200">
-          {selectedLeads.length} selected
-        </span>
+        <span className="text-sm font-medium text-gray-200">{selectedLeads.length} selected</span>
         <button
           onClick={onClearSelection}
           className="p-1 hover:bg-white/10 rounded-lg transition-colors"
@@ -220,10 +214,7 @@ export function BulkActions({ selectedLeads, onClearSelection, onBulkUpdate }: B
                 disabled={isUpdating}
                 className="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-white/10 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
               >
-                <span
-                  className="w-3 h-3 rounded-full"
-                  style={{ backgroundColor: tag.color }}
-                />
+                <span className="w-3 h-3 rounded-full" style={{ backgroundColor: tag.color }} />
                 {tag.name}
               </button>
             ))}
@@ -253,11 +244,7 @@ export function BulkActions({ selectedLeads, onClearSelection, onBulkUpdate }: B
         disabled={isDeleting}
         className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-red-500/10 hover:bg-red-500/20 text-red-400 text-sm transition-colors disabled:opacity-50"
       >
-        {isDeleting ? (
-          <Loader2 className="w-4 h-4 animate-spin" />
-        ) : (
-          <Trash2 className="w-4 h-4" />
-        )}
+        {isDeleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
         Delete
       </button>
     </div>

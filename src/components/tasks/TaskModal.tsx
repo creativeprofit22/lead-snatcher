@@ -174,9 +174,7 @@ export function TaskModal({ isOpen, onClose, onSave, task, leadId, leadName }: T
 
             {/* Description */}
             <div>
-              <label className="block text-sm font-medium text-gray-300 mb-1.5">
-                Description
-              </label>
+              <label className="block text-sm font-medium text-gray-300 mb-1.5">Description</label>
               <textarea
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}

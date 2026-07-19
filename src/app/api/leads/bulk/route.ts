@@ -45,7 +45,7 @@ export async function PATCH(request: Request) {
         },
         data: {
           status: newStatus,
-          ...((['contacted', 'called'].includes(newStatus)) && { lastContactedAt: new Date() }),
+          ...(['contacted', 'called'].includes(newStatus) && { lastContactedAt: new Date() }),
         },
       });
 

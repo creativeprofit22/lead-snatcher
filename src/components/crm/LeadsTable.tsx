@@ -1,13 +1,7 @@
 'use client';
 
 import { ArrowUp, ArrowDown } from 'lucide-react';
-import {
-  Table,
-  TableBody,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/Table';
+import { Table, TableBody, TableHead, TableHeader, TableRow } from '@/components/ui/Table';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { LeadsTableRow } from './LeadsTableRow';
 import { EmptyState } from './EmptyState';
@@ -88,7 +82,8 @@ export function LeadsTable({
   }
 
   const hasSelection = selectedLeadIds !== undefined && onToggleSelect !== undefined;
-  const allSelected = hasSelection && leads.length > 0 && leads.every((l) => selectedLeadIds.has(l.id));
+  const allSelected =
+    hasSelection && leads.length > 0 && leads.every((l) => selectedLeadIds.has(l.id));
   const someSelected = hasSelection && leads.some((l) => selectedLeadIds.has(l.id));
 
   return (

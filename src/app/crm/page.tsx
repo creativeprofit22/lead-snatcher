@@ -192,9 +192,7 @@ export default function CRMPage() {
 
   // Update lead from modal
   const handleLeadUpdate = (updatedLead: Lead) => {
-    setLeads((prev) =>
-      prev.map((lead) => (lead.id === updatedLead.id ? updatedLead : lead))
-    );
+    setLeads((prev) => prev.map((lead) => (lead.id === updatedLead.id ? updatedLead : lead)));
     setSelectedLead(updatedLead);
     fetchStats();
   };
@@ -233,13 +231,16 @@ export default function CRMPage() {
   }, [fetchLeads, fetchStats]);
 
   // Handle sort change from table header
-  const handleSortChange = useCallback((field: 'savedAt' | 'leadScore' | 'name' | 'nextFollowUpAt') => {
-    setFilters((prev) => ({
-      ...prev,
-      sortBy: field,
-      sortOrder: prev.sortBy === field && prev.sortOrder === 'desc' ? 'asc' : 'desc',
-    }));
-  }, []);
+  const handleSortChange = useCallback(
+    (field: 'savedAt' | 'leadScore' | 'name' | 'nextFollowUpAt') => {
+      setFilters((prev) => ({
+        ...prev,
+        sortBy: field,
+        sortOrder: prev.sortBy === field && prev.sortOrder === 'desc' ? 'asc' : 'desc',
+      }));
+    },
+    []
+  );
 
   // Get selected leads for BulkActions
   const selectedLeads = useMemo(() => {
@@ -250,9 +251,7 @@ export default function CRMPage() {
   const handleStatusChange = async (leadId: string, newStatus: LeadStatus) => {
     // Optimistically update UI
     setLeads((prev) =>
-      prev.map((lead) =>
-        lead.id === leadId ? { ...lead, status: newStatus } : lead
-      )
+      prev.map((lead) => (lead.id === leadId ? { ...lead, status: newStatus } : lead))
     );
 
     try {
@@ -389,16 +388,10 @@ export default function CRMPage() {
       />
 
       {/* Tag Manager Modal */}
-      <TagManager
-        isOpen={isTagManagerOpen}
-        onClose={() => setIsTagManagerOpen(false)}
-      />
+      <TagManager isOpen={isTagManagerOpen} onClose={() => setIsTagManagerOpen(false)} />
 
       {/* Task SlideOver */}
-      <TaskSlideOver
-        isOpen={isTaskSlideOverOpen}
-        onClose={() => setIsTaskSlideOverOpen(false)}
-      />
+      <TaskSlideOver isOpen={isTaskSlideOverOpen} onClose={() => setIsTaskSlideOverOpen(false)} />
 
       {/* Bulk Actions */}
       {selectedLeads.length > 0 && (

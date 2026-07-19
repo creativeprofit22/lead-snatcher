@@ -41,7 +41,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="dark" suppressHydrationWarning>
-      <body className={`${inter.variable} ${doto.variable} ${orbitron.variable} antialiased min-h-screen`}>
+      <body
+        className={`${inter.variable} ${doto.variable} ${orbitron.variable} antialiased min-h-screen`}
+      >
         <AmbientParticles />
         <SessionProvider>{children}</SessionProvider>
         <Toaster

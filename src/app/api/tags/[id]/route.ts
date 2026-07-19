@@ -54,10 +54,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       });
 
       if (existing) {
-        return NextResponse.json(
-          { error: 'A tag with this name already exists' },
-          { status: 409 }
-        );
+        return NextResponse.json({ error: 'A tag with this name already exists' }, { status: 409 });
       }
 
       updateData.name = trimmedName;

@@ -109,8 +109,7 @@ export function SaveSessionButton({ getPayload, defaultName, compact }: Props) {
               className="w-full rounded-lg border border-border-bright/50 bg-surface-elevated/70 px-3 py-2.5 text-sm text-white outline-none placeholder:text-white/35 focus:border-sky-400/60"
             />
             <p className="mt-2 text-[11px] text-white/45">
-              Saved sessions persist until you delete them — good for long
-              projects or demo takes.
+              Saved sessions persist until you delete them — good for long projects or demo takes.
             </p>
             <div className="mt-5 flex items-center justify-end gap-2">
               <button

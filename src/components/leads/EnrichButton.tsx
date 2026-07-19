@@ -1,17 +1,9 @@
 'use client';
 
 import { Zap, Check, RotateCcw, Loader2 } from 'lucide-react';
-import {
-  previewEnrichment,
-  tooltipCopy,
-} from '@/lib/business/enrichment-preview';
+import { previewEnrichment, tooltipCopy } from '@/lib/business/enrichment-preview';
 
-export type EnrichmentStatus =
-  | 'idle'
-  | 'enriching'
-  | 'enriched'
-  | 'rate_limited'
-  | 'error';
+export type EnrichmentStatus = 'idle' | 'enriching' | 'enriched' | 'rate_limited' | 'error';
 
 interface Props {
   lead: {
@@ -104,8 +96,7 @@ function renderState(
       return {
         label: 'Retry',
         icon: <RotateCcw className={iconClass} />,
-        tooltip:
-          'Rate-limited — wait a moment, then click to retry this lead',
+        tooltip: 'Rate-limited — wait a moment, then click to retry this lead',
         tone: 'bg-amber-500/15 text-amber-300 hover:bg-amber-500/25',
       };
     case 'error':

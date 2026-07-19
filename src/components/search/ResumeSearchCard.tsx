@@ -27,8 +27,7 @@ export function ResumeSearchCard({
   onResume,
   onDismiss,
 }: Props) {
-  const industryLabel =
-    INDUSTRY_TYPES.find((t) => t.id === industry)?.label ?? industry;
+  const industryLabel = INDUSTRY_TYPES.find((t) => t.id === industry)?.label ?? industry;
   const timeAgo = formatTimeAgo(updatedAt);
 
   return (

@@ -21,13 +21,7 @@ interface Props {
  * as selection changes — call count is real (sum of missing data
  * minus cache hits), not a guess, so users see truthful cost.
  */
-export function BatchEnrichBar({
-  selectedLeads,
-  cachedCount,
-  onEnrich,
-  onClear,
-  isBusy,
-}: Props) {
+export function BatchEnrichBar({ selectedLeads, cachedCount, onEnrich, onClear, isBusy }: Props) {
   if (selectedLeads.length === 0) return null;
 
   const preview = previewBatch(selectedLeads);
@@ -47,15 +41,9 @@ export function BatchEnrichBar({
           </span>
           <span className="text-[11px] text-gray-400">
             ~{liveCalls} API call{liveCalls === 1 ? '' : 's'}
-            {cachedCount > 0 && (
-              <>
-                {' '}· {cachedCount} cached (free)
-              </>
-            )}
+            {cachedCount > 0 && <> · {cachedCount} cached (free)</>}
             {preview.alreadyEnrichedCount > 0 && (
-              <>
-                {' '}· {preview.alreadyEnrichedCount} already full
-              </>
+              <> · {preview.alreadyEnrichedCount} already full</>
             )}
           </span>
         </div>

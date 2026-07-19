@@ -1,15 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import {
-  BookmarkCheck,
-  Loader2,
-  MapPin,
-  Play,
-  Trash2,
-  X,
-  Library,
-} from 'lucide-react';
+import { BookmarkCheck, Loader2, MapPin, Play, Trash2, X, Library } from 'lucide-react';
 import { toast } from 'sonner';
 import { INDUSTRY_TYPES } from '@/lib/constants';
 import type { CachedSearch } from '@/lib/search-cache';
@@ -27,7 +19,9 @@ interface SavedSessionSummary {
 
 interface Props {
   /** Called with the full CachedSearch payload once a session is loaded. */
-  onLoad: (payload: Omit<CachedSearch, 'enrichStatusMap' | 'enrichResultMap' | 'selectedForEnrich'>) => void;
+  onLoad: (
+    payload: Omit<CachedSearch, 'enrichStatusMap' | 'enrichResultMap' | 'selectedForEnrich'>
+  ) => void;
 }
 
 /**
@@ -74,7 +68,9 @@ export function SavedSessionsPanel({ onLoad }: Props) {
         return;
       }
       const data = (await res.json()) as {
-        session?: { payload: Omit<CachedSearch, 'enrichStatusMap' | 'enrichResultMap' | 'selectedForEnrich'> };
+        session?: {
+          payload: Omit<CachedSearch, 'enrichStatusMap' | 'enrichResultMap' | 'selectedForEnrich'>;
+        };
       };
       if (!data.session?.payload) {
         toast.error(`"${name}" is empty or corrupted`);
@@ -158,16 +154,15 @@ export function SavedSessionsPanel({ onLoad }: Props) {
                   <Library className="mx-auto mb-3 h-8 w-8 opacity-40" />
                   <p>No saved sessions yet.</p>
                   <p className="mt-1 text-[11px] text-white/40">
-                    Run a search, then hit &ldquo;Save Session&rdquo; from the
-                    results view to pin it here.
+                    Run a search, then hit &ldquo;Save Session&rdquo; from the results view to pin
+                    it here.
                   </p>
                 </div>
               ) : (
                 <ul className="divide-y divide-border-bright/30">
                   {items.map((s) => {
                     const industryLabel =
-                      INDUSTRY_TYPES.find((t) => t.id === s.industry)?.label ??
-                      s.industry;
+                      INDUSTRY_TYPES.find((t) => t.id === s.industry)?.label ?? s.industry;
                     const isBusy = busyId === s.id;
                     return (
                       <li

@@ -33,9 +33,7 @@ interface MapsBusinessResult {
 
 // Parse any of the shapes a Maps provider might return for price tier
 // into a canonical 0-4 integer. Returns undefined when absent/unusable.
-function parsePriceLevel(
-  raw: MapsBusinessResult
-): number | undefined {
+function parsePriceLevel(raw: MapsBusinessResult): number | undefined {
   const candidate = raw.price_level ?? raw.priceLevel ?? raw.price_range;
   if (typeof candidate === 'number') {
     return candidate >= 0 && candidate <= 4 ? Math.round(candidate) : undefined;
@@ -106,20 +104,17 @@ export async function searchBusinesses(
     !r.data || !Array.isArray(r.data) || r.data.length === 0;
 
   if (looksEmpty(response)) {
-    console.warn(
-      '[searchBusinesses] empty/malformed response from Maps API, retrying once',
-      {
-        query: businessType,
-        lat: latitude,
-        lng: longitude,
-        responseShape: {
-          hasData: 'data' in response,
-          dataType: typeof response.data,
-          dataIsArray: Array.isArray(response.data),
-          dataLength: Array.isArray(response.data) ? response.data.length : null,
-        },
-      }
-    );
+    console.warn('[searchBusinesses] empty/malformed response from Maps API, retrying once', {
+      query: businessType,
+      lat: latitude,
+      lng: longitude,
+      responseShape: {
+        hasData: 'data' in response,
+        dataType: typeof response.data,
+        dataIsArray: Array.isArray(response.data),
+        dataLength: Array.isArray(response.data) ? response.data.length : null,
+      },
+    });
     await new Promise((resolve) => setTimeout(resolve, 1200));
     response = await rapidApiFetch<MapsApiResponse>(userId, {
       host: MAPS_API_HOST,
@@ -137,16 +132,12 @@ export async function searchBusinesses(
   }
 
   // Filter valid businesses
-  const validBusinesses = response.data.filter(
-    (business) => business.name && business.business_id
-  );
+  const validBusinesses = response.data.filter((business) => business.name && business.business_id);
 
   // Collect websites for analysis. Enrichment used to inject discovered
   // websites here; that's been moved to POST /api/business/enrich (user-
   // triggered, per-card) to keep the sweep fast and quota-cheap.
-  const websites = validBusinesses
-    .map((b) => b.website)
-    .filter((w): w is string => !!w);
+  const websites = validBusinesses.map((b) => b.website).filter((w): w is string => !!w);
 
   let websiteAnalysisMap: Map<string, WebsiteAnalysis> = new Map();
   let scrapedDataMap: Map<string, ScrapedWebsiteData> = new Map();
@@ -217,11 +208,7 @@ export async function searchBusinesses(
 
       if (ranked.length > 0) {
         try {
-          websiteAnalysisMap = await analyzeWebsitesBatch(
-            ranked,
-            options.pageSpeedApiKey,
-            2
-          );
+          websiteAnalysisMap = await analyzeWebsitesBatch(ranked, options.pageSpeedApiKey, 2);
         } catch (err) {
           console.error(
             'PageSpeed pipeline failed — continuing without Lighthouse scores:',

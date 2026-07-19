@@ -153,4 +153,3 @@ export const TASK_PRIORITIES: TaskPriorityConfig[] = [
   { id: 'high', label: 'High', color: '#f97316' },
   { id: 'urgent', label: 'Urgent', color: '#ef4444' },
 ];
-
