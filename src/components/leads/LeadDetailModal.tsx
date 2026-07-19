@@ -34,6 +34,54 @@ interface LeadDetailModalProps {
   onUpdate: (updatedLead: Lead) => void;
 }
 
+interface FollowUpDate {
+  inputValue: string;
+  displayValue: string;
+}
+
+const DATE_ONLY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+function parseDateOnly(value: string): Date | null {
+  const match = DATE_ONLY_PATTERN.exec(value);
+  if (!match) return null;
+
+  const [, yearValue, monthValue, dayValue] = match;
+  const year = Number(yearValue);
+  const month = Number(monthValue);
+  const day = Number(dayValue);
+  const date = new Date(year, month - 1, day);
+
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) {
+    return null;
+  }
+
+  return date;
+}
+
+function parseFollowUpDate(value: string | null | undefined): FollowUpDate | null {
+  const normalizedValue = value?.trim();
+  if (!normalizedValue) return null;
+
+  const dateOnly = parseDateOnly(normalizedValue);
+  if (dateOnly) {
+    return {
+      inputValue: normalizedValue,
+      displayValue: dateOnly.toLocaleDateString(),
+    };
+  }
+
+  const datePart = normalizedValue.slice(0, 10);
+  if (!normalizedValue.startsWith(`${datePart}T`) || !parseDateOnly(datePart)) return null;
+
+  const timestamp = new Date(normalizedValue);
+  if (Number.isNaN(timestamp.getTime())) return null;
+
+  return {
+    inputValue: datePart,
+    displayValue: timestamp.toLocaleDateString(),
+  };
+}
+
 export function LeadDetailModal({ lead, isOpen, onClose, onUpdate }: LeadDetailModalProps) {
   const [activeTab, setActiveTab] = useState<'details' | 'activity' | 'tasks' | 'notes'>('details');
   const [contactLogs, setContactLogs] = useState<ContactLogEntry[]>([]);
@@ -94,7 +142,7 @@ export function LeadDetailModal({ lead, isOpen, onClose, onUpdate }: LeadDetailM
   useEffect(() => {
     if (lead && isOpen) {
       setNotes(lead.notes || '');
-      setFollowUpDate(lead.nextFollowUpAt ? lead.nextFollowUpAt.split('T')[0] : '');
+      setFollowUpDate(parseFollowUpDate(lead.nextFollowUpAt)?.inputValue ?? '');
       fetchContactLogs();
       fetchTasks();
     }
@@ -112,6 +160,8 @@ export function LeadDetailModal({ lead, isOpen, onClose, onUpdate }: LeadDetailM
   }, [isOpen, onClose]);
 
   if (!isOpen || !lead) return null;
+
+  const nextFollowUpDate = parseFollowUpDate(lead.nextFollowUpAt);
 
   // Update status
   const handleUpdateStatus = async (status: LeadStatus) => {
@@ -404,10 +454,10 @@ export function LeadDetailModal({ lead, isOpen, onClose, onUpdate }: LeadDetailM
                     {isSavingFollowUp ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Set'}
                   </button>
                 </div>
-                {lead.nextFollowUpAt && (
+                {nextFollowUpDate && (
                   <p className="text-xs text-gray-600 mt-1 flex items-center gap-1">
                     <Clock className="w-3 h-3" />
-                    Currently set: {new Date(lead.nextFollowUpAt).toLocaleDateString()}
+                    Currently set: {nextFollowUpDate.displayValue}
                   </p>
                 )}
               </div>
