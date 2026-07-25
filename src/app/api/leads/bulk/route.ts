@@ -1,31 +1,19 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/db';
 import { bulkUpdateLeadsSchema, bulkDeleteLeadsSchema } from '@/lib/validations';
+import { parseRouteBody, requireRouteUserId, routeErrorResponse } from '@/lib/route-utils';
 
 // PATCH - Bulk update leads (status change or add tag)
 export async function PATCH(request: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const rawBody = await request.json();
-    const parsed = bulkUpdateLeadsSchema.safeParse(rawBody);
-    if (!parsed.success) {
-      return NextResponse.json(
-        { error: parsed.error.issues[0]?.message ?? 'Invalid request body' },
-        { status: 400 }
-      );
-    }
-    const { leadIds, action, status, tagId } = parsed.data;
+    const userId = await requireRouteUserId();
+    const { leadIds, action, status, tagId } = await parseRouteBody(request, bulkUpdateLeadsSchema);
 
     // Verify all leads belong to user
     const leads = await prisma.lead.findMany({
       where: {
         id: { in: leadIds },
-        userId: session.user.id,
+        userId: userId,
       },
     });
 
@@ -41,7 +29,7 @@ export async function PATCH(request: Request) {
       await prisma.lead.updateMany({
         where: {
           id: { in: leadIds },
-          userId: session.user.id,
+          userId: userId,
         },
         data: {
           status: newStatus,
@@ -64,7 +52,7 @@ export async function PATCH(request: Request) {
       const tag = await prisma.tag.findFirst({
         where: {
           id: tagId,
-          userId: session.user.id,
+          userId: userId,
         },
       });
 
@@ -105,33 +93,21 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
   } catch (error) {
     console.error('Bulk update error:', error);
-    return NextResponse.json({ error: 'Failed to update leads' }, { status: 500 });
+    return routeErrorResponse(error, 'Failed to update leads');
   }
 }
 
 // DELETE - Bulk delete leads
 export async function DELETE(request: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const rawBody = await request.json();
-    const parsed = bulkDeleteLeadsSchema.safeParse(rawBody);
-    if (!parsed.success) {
-      return NextResponse.json(
-        { error: parsed.error.issues[0]?.message ?? 'Invalid request body' },
-        { status: 400 }
-      );
-    }
-    const { leadIds } = parsed.data;
+    const userId = await requireRouteUserId();
+    const { leadIds } = await parseRouteBody(request, bulkDeleteLeadsSchema);
 
     // Delete all leads (Prisma will cascade delete related records)
     const result = await prisma.lead.deleteMany({
       where: {
         id: { in: leadIds },
-        userId: session.user.id,
+        userId: userId,
       },
     });
 
@@ -141,6 +117,6 @@ export async function DELETE(request: Request) {
     });
   } catch (error) {
     console.error('Bulk delete error:', error);
-    return NextResponse.json({ error: 'Failed to delete leads' }, { status: 500 });
+    return routeErrorResponse(error, 'Failed to delete leads');
   }
 }

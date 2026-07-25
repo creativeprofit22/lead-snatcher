@@ -99,7 +99,7 @@ model ApiKey {
   id        String   @id @default(cuid())
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  service   String // "rapidapi_maps"
+  service   String // "rapidapi"
   key       String // encrypted API key
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -116,7 +116,7 @@ model BusinessSearch {
   user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   businessType String // e.g., "restaurant", "salon", "gym"
   city         String
-  country      String   @default("au")
+  country      String   @default("us")
   latitude     Float?
   longitude    Float?
   createdAt    DateTime @default(now())

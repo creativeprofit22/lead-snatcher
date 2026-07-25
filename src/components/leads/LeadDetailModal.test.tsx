@@ -1,4 +1,4 @@
-import { cleanup, render } from '@testing-library/react';
+import { cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 import type { Lead } from '@/types';
@@ -30,15 +30,15 @@ const baseLead = {
   updatedAt: '2026-01-01T12:00:00.000Z',
 } as unknown as Lead;
 
-function renderFollowUpDate(nextFollowUpAt: string | null) {
+function renderFollowUpDate(nextFollowUpAt: string | null, onUpdate = vi.fn()) {
   const lead = { ...baseLead, nextFollowUpAt } as unknown as Lead;
-  const { container } = render(
-    <LeadDetailModal lead={lead} isOpen onClose={vi.fn()} onUpdate={vi.fn()} />
+  const { container, getByRole } = render(
+    <LeadDetailModal lead={lead} isOpen onClose={vi.fn()} onUpdate={onUpdate} />
   );
   const input = container.querySelector<HTMLInputElement>('input[type="date"]');
   if (!input) throw new Error('Follow-up date input was not rendered');
 
-  return { container, input };
+  return { container, getByRole, input, onUpdate };
 }
 
 beforeEach(() => {
@@ -92,5 +92,51 @@ describe('LeadDetailModal follow-up date safety', () => {
     expect(input.value).toBe('');
     expect(container.textContent).not.toContain('Currently set:');
     expect(container.textContent).not.toContain('Invalid Date');
+  });
+
+  test('saves a date-only follow-up as the agreed ISO timestamp', async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation((_input, init) =>
+      Promise.resolve({ ok: init?.method === 'PATCH' } as Response)
+    );
+    const { getByRole, input, onUpdate } = renderFollowUpDate(null);
+
+    fireEvent.change(input, { target: { value: '2026-07-19' } });
+    fireEvent.click(getByRole('button', { name: 'Set' }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/leads/lead-1',
+        expect.objectContaining({
+          method: 'PATCH',
+          body: JSON.stringify({ nextFollowUpAt: '2026-07-19T12:00:00.000Z' }),
+        })
+      );
+    });
+    expect(onUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ nextFollowUpAt: '2026-07-19T12:00:00.000Z' })
+    );
+  });
+
+  test('clears a follow-up with null', async () => {
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockImplementation((_input, init) =>
+      Promise.resolve({ ok: init?.method === 'PATCH' } as Response)
+    );
+    const { getByRole, input, onUpdate } = renderFollowUpDate('2026-07-19T12:00:00.000Z');
+
+    fireEvent.change(input, { target: { value: '' } });
+    fireEvent.click(getByRole('button', { name: 'Set' }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/leads/lead-1',
+        expect.objectContaining({
+          method: 'PATCH',
+          body: JSON.stringify({ nextFollowUpAt: null }),
+        })
+      );
+    });
+    expect(onUpdate).toHaveBeenCalledWith(expect.objectContaining({ nextFollowUpAt: null }));
   });
 });

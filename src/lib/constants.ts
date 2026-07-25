@@ -87,8 +87,10 @@ export const LEAD_STATUSES: LeadStatusConfig[] = [
   { id: 'not_interested', label: 'Not Interested', color: '#6b7280', bgColor: 'transparent' },
 ];
 
-// Country codes for search with example cities
-// US is first as default selection
+// Canonical product default used by UI and request validation.
+export const DEFAULT_COUNTRY_CODE = 'us';
+
+// Country codes for search with example cities; the default remains first.
 export const COUNTRIES = [
   { code: 'us', name: 'United States', examples: ['New York, Los Angeles, Chicago'] },
   { code: 'ca', name: 'Canada', examples: ['Toronto, Vancouver, Montreal'] },
@@ -147,6 +149,13 @@ export const TASK_TYPES: TaskTypeConfig[] = [
 ];
 
 // Task priorities
+export const TASK_PRIORITY_RANK = {
+  low: 0,
+  medium: 1,
+  high: 2,
+  urgent: 3,
+} as const satisfies Record<TaskPriorityConfig['id'], number>;
+
 export const TASK_PRIORITIES: TaskPriorityConfig[] = [
   { id: 'low', label: 'Low', color: '#6b7280' },
   { id: 'medium', label: 'Medium', color: '#3b82f6' },

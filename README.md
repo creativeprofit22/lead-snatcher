@@ -23,7 +23,12 @@ npm run dev
 
 Open [localhost:3000](http://localhost:3000) and login with the credentials shown after setup.
 
+### Country default
+
+New searches default to the United States (`us`) in the UI, API validation, and database. Existing searches keep their stored country, including Australian (`au`) rows created under the previous database default; these cannot be safely distinguished from searches where Australia was explicitly selected.
+
 The setup script automatically:
+
 1. Installs dependencies
 2. Creates SQLite database
 3. Generates all secrets
@@ -57,14 +62,14 @@ npm run dev
 
 ## Environment Variables
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `DATABASE_URL` | Yes | `file:./data/lead-snatcher.db` |
-| `NEXTAUTH_SECRET` | Yes | Auth encryption key |
-| `NEXTAUTH_URL` | Yes | App URL (http://localhost:3000) |
-| `ADMIN_SECRET` | Yes | Secret for /admin user management |
-| `ENCRYPTION_SECRET` | Yes | API key encryption |
-| `RAPIDAPI_KEY` | No | For Google Maps search |
+| Variable            | Required | Description                       |
+| ------------------- | -------- | --------------------------------- |
+| `DATABASE_URL`      | Yes      | `file:./data/lead-snatcher.db`    |
+| `NEXTAUTH_SECRET`   | Yes      | Auth encryption key               |
+| `NEXTAUTH_URL`      | Yes      | App URL (http://localhost:3000)   |
+| `ADMIN_SECRET`      | Yes      | Secret for /admin user management |
+| `ENCRYPTION_SECRET` | Yes      | API key encryption                |
+| `RAPIDAPI_KEY`      | No       | For Google Maps search            |
 
 ## Scripts
 

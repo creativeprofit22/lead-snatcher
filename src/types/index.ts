@@ -213,20 +213,31 @@ export interface BusinessSearchResult {
   scrapedData?: ScrapedWebsiteData;
 }
 
-// Saved lead in CRM
-export interface Lead extends BusinessSearchResult {
+// Persisted lead returned by CRM APIs
+export interface Lead {
   id: string;
+  placeId: string;
+  name: string;
+  address: string | null;
+  phone: string | null;
+  website: string | null;
+  rating: number | null;
+  reviewCount: number | null;
+  industryType: IndustryType;
+  photoUrl: string | null;
+  mapsUrl: string | null;
+  leadScore: number;
+  scoreBreakdown: ScoreBreakdown | null;
   status: LeadStatus;
-  notes?: string;
-  lastContactedAt?: string;
-  nextFollowUpAt?: string;
+  notes: string | null;
+  opportunities: string[];
+  lastContactedAt: string | null;
+  nextFollowUpAt: string | null;
   savedAt: string;
   updatedAt: string;
-  tags?: Tag[];
-  /** Cached Popular Times scrape — JSON string conforming to PopularTimesData */
-  popularTimesData?: string | null;
-  /** ISO date of last Popular Times scrape */
-  popularTimesScrapedAt?: string | null;
+  tags: Tag[];
+  popularTimesData: string | null;
+  popularTimesScrapedAt: string | null;
 }
 
 // Contact log entry

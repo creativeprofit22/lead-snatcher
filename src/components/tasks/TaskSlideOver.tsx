@@ -143,7 +143,7 @@ export function TaskSlideOver({
           type,
           dueAt: new Date(dueAt).toISOString(),
           priority,
-          leadId: selectedLeadId || undefined,
+          leadId: selectedLeadId || null,
         }),
       });
 

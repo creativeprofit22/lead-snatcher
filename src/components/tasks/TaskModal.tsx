@@ -109,7 +109,7 @@ export function TaskModal({ isOpen, onClose, onSave, task, leadId, leadName }: T
           type,
           dueAt: new Date(dueAt).toISOString(),
           priority,
-          leadId: selectedLeadId || undefined,
+          leadId: selectedLeadId || null,
         }),
       });
 

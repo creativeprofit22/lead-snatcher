@@ -1,38 +1,42 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/db';
 import { updateTaskSchema } from '@/lib/validations';
+import { parseRouteBody, requireRouteUserId, routeErrorResponse } from '@/lib/route-utils';
 import type { TaskType, TaskPriority } from '@/types';
 
 // PATCH - Update a task
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
+    const userId = await requireRouteUserId();
     const { id } = await params;
-    const rawBody = await request.json();
-    const parsed = updateTaskSchema.safeParse(rawBody);
-    if (!parsed.success) {
-      return NextResponse.json(
-        { error: parsed.error.issues[0]?.message ?? 'Invalid request body' },
-        { status: 400 }
-      );
-    }
-    const { title, description, type, dueAt, priority, completedAt } = parsed.data;
+    const { title, description, type, dueAt, priority, completedAt, leadId } = await parseRouteBody(
+      request,
+      updateTaskSchema
+    );
 
     // Verify task belongs to user
     const existingTask = await prisma.task.findFirst({
       where: {
         id,
-        userId: session.user.id,
+        userId,
       },
     });
 
     if (!existingTask) {
       return NextResponse.json({ error: 'Task not found' }, { status: 404 });
+    }
+
+    if (leadId !== undefined && leadId !== null) {
+      const lead = await prisma.lead.findFirst({
+        where: {
+          id: leadId,
+          userId,
+        },
+      });
+
+      if (!lead) {
+        return NextResponse.json({ error: 'Lead not found' }, { status: 404 });
+      }
     }
 
     // Build update data
@@ -42,6 +46,9 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     if (type !== undefined) updateData.type = type;
     if (dueAt !== undefined) updateData.dueAt = new Date(dueAt);
     if (priority !== undefined) updateData.priority = priority;
+    if (leadId !== undefined) {
+      updateData.lead = leadId === null ? { disconnect: true } : { connect: { id: leadId } };
+    }
     if (completedAt !== undefined) {
       updateData.completedAt = completedAt ? new Date(completedAt) : null;
     }
@@ -75,25 +82,21 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
     });
   } catch (error) {
     console.error('Update task error:', error);
-    return NextResponse.json({ error: 'Failed to update task' }, { status: 500 });
+    return routeErrorResponse(error, 'Failed to update task');
   }
 }
 
 // DELETE - Delete a task
 export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
+    const userId = await requireRouteUserId();
     const { id } = await params;
 
     // Verify task belongs to user
     const existingTask = await prisma.task.findFirst({
       where: {
         id,
-        userId: session.user.id,
+        userId,
       },
     });
 
@@ -108,6 +111,6 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
     return NextResponse.json({ message: 'Task deleted successfully' });
   } catch (error) {
     console.error('Delete task error:', error);
-    return NextResponse.json({ error: 'Failed to delete task' }, { status: 500 });
+    return routeErrorResponse(error, 'Failed to delete task');
   }
 }

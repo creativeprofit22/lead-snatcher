@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/db';
 import { updateLeadSchema } from '@/lib/validations';
+import { toLeadDto } from '@/lib/lead-dto';
 
 interface RouteContext {
   params: Promise<{ id: string }>;
@@ -26,6 +27,7 @@ export async function GET(request: Request, context: RouteContext) {
         contactLogs: {
           orderBy: { createdAt: 'desc' },
         },
+        tags: { include: { tag: true } },
       },
     });
 
@@ -33,7 +35,7 @@ export async function GET(request: Request, context: RouteContext) {
       return NextResponse.json({ error: 'Lead not found' }, { status: 404 });
     }
 
-    return NextResponse.json({ lead });
+    return NextResponse.json({ lead: toLeadDto(lead) });
   } catch (error) {
     console.error('Get lead error:', error);
     return NextResponse.json({ error: 'Failed to fetch lead' }, { status: 500 });
@@ -87,9 +89,15 @@ export async function PATCH(request: Request, context: RouteContext) {
     const lead = await prisma.lead.update({
       where: { id },
       data: updateData,
+      include: {
+        tags: { include: { tag: true } },
+      },
     });
 
-    return NextResponse.json({ lead, message: 'Lead updated successfully' });
+    return NextResponse.json({
+      lead: toLeadDto(lead),
+      message: 'Lead updated successfully',
+    });
   } catch (error) {
     console.error('Update lead error:', error);
     return NextResponse.json({ error: 'Failed to update lead' }, { status: 500 });

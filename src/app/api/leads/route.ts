@@ -1,17 +1,14 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/db';
 import { createLeadSchema, leadStatusSchema, industryTypeSchema } from '@/lib/validations';
+import { parseRouteBody, requireRouteUserId, routeErrorResponse } from '@/lib/route-utils';
+import { toLeadDto } from '@/lib/lead-dto';
 import type { LeadStatus, IndustryType } from '@/types';
 
 // GET - Fetch user's leads with optional filters
 export async function GET(request: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
+    const userId = await requireRouteUserId();
     const { searchParams } = new URL(request.url);
 
     // Single status (legacy) or multi-status
@@ -48,7 +45,7 @@ export async function GET(request: Request) {
 
     // Build where clause
     const where: Record<string, unknown> = {
-      userId: session.user.id,
+      userId,
     };
 
     // Multi-status filter — validate each value against the enum
@@ -133,60 +130,17 @@ export async function GET(request: Request) {
       },
     });
 
-    // Transform to our type format
-    const transformedLeads = leads.map((lead) => ({
-      id: lead.id,
-      placeId: lead.placeId,
-      name: lead.name,
-      address: lead.address,
-      phone: lead.phone,
-      website: lead.website,
-      rating: lead.rating,
-      reviewCount: lead.reviewCount,
-      industryType: lead.industryType,
-      photoUrl: lead.photoUrl,
-      mapsUrl: lead.mapsUrl,
-      leadScore: lead.leadScore,
-      scoreBreakdown: lead.scoreBreakdown ? JSON.parse(lead.scoreBreakdown) : null,
-      status: lead.status,
-      notes: lead.notes,
-      opportunities: lead.opportunities ? JSON.parse(lead.opportunities) : [],
-      lastContactedAt: lead.lastContactedAt?.toISOString(),
-      nextFollowUpAt: lead.nextFollowUpAt?.toISOString(),
-      savedAt: lead.savedAt.toISOString(),
-      updatedAt: lead.updatedAt.toISOString(),
-      lastContact: lead.contactLogs[0] || null,
-      tags: lead.tags.map((lt) => ({
-        id: lt.tag.id,
-        name: lt.tag.name,
-        color: lt.tag.color,
-        createdAt: lt.tag.createdAt.toISOString(),
-      })),
-    }));
-
-    return NextResponse.json({ leads: transformedLeads });
+    return NextResponse.json({ leads: leads.map(toLeadDto) });
   } catch (error) {
     console.error('Get leads error:', error);
-    return NextResponse.json({ error: 'Failed to fetch leads' }, { status: 500 });
+    return routeErrorResponse(error, 'Failed to fetch leads');
   }
 }
 
 // POST - Save a new lead
 export async function POST(request: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const rawBody = await request.json();
-    const parsed = createLeadSchema.safeParse(rawBody);
-    if (!parsed.success) {
-      return NextResponse.json(
-        { error: parsed.error.issues[0]?.message ?? 'Invalid request body' },
-        { status: 400 }
-      );
-    }
+    const userId = await requireRouteUserId();
     const {
       placeId,
       name,
@@ -203,13 +157,13 @@ export async function POST(request: Request) {
       opportunities,
       popularTimesData,
       popularTimesScrapedAt,
-    } = parsed.data;
+    } = await parseRouteBody(request, createLeadSchema);
 
     // Check if already saved
     const existing = await prisma.lead.findUnique({
       where: {
         userId_placeId: {
-          userId: session.user.id,
+          userId,
           placeId,
         },
       },
@@ -225,7 +179,7 @@ export async function POST(request: Request) {
     // Create lead
     const lead = await prisma.lead.create({
       data: {
-        userId: session.user.id,
+        userId,
         placeId,
         name,
         address,
@@ -243,11 +197,14 @@ export async function POST(request: Request) {
         popularTimesData: popularTimesData ?? undefined,
         popularTimesScrapedAt: popularTimesScrapedAt ? new Date(popularTimesScrapedAt) : undefined,
       },
+      include: {
+        tags: { include: { tag: true } },
+      },
     });
 
-    return NextResponse.json({ lead, message: 'Lead saved successfully' });
+    return NextResponse.json({ lead: toLeadDto(lead), message: 'Lead saved successfully' });
   } catch (error) {
     console.error('Save lead error:', error);
-    return NextResponse.json({ error: 'Failed to save lead' }, { status: 500 });
+    return routeErrorResponse(error, 'Failed to save lead');
   }
 }

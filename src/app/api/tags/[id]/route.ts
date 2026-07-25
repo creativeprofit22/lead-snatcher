@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/db';
 import { updateTagSchema } from '@/lib/validations';
+import { parseRouteBody, requireRouteUserId, routeErrorResponse } from '@/lib/route-utils';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -10,21 +10,9 @@ interface RouteParams {
 // PATCH - Update a tag
 export async function PATCH(request: Request, { params }: RouteParams) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
+    const userId = await requireRouteUserId();
     const { id } = await params;
-    const rawBody = await request.json();
-    const parsed = updateTagSchema.safeParse(rawBody);
-    if (!parsed.success) {
-      return NextResponse.json(
-        { error: parsed.error.issues[0]?.message ?? 'Invalid request body' },
-        { status: 400 }
-      );
-    }
-    const { name, color } = parsed.data;
+    const { name, color } = await parseRouteBody(request, updateTagSchema);
 
     // Find the tag and verify ownership
     const tag = await prisma.tag.findUnique({
@@ -35,7 +23,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       return NextResponse.json({ error: 'Tag not found' }, { status: 404 });
     }
 
-    if (tag.userId !== session.user.id) {
+    if (tag.userId !== userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
     }
 
@@ -47,7 +35,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       // Check if another tag has this name
       const existing = await prisma.tag.findFirst({
         where: {
-          userId: session.user.id,
+          userId: userId,
           name: trimmedName,
           id: { not: id },
         },
@@ -85,18 +73,14 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     });
   } catch (error) {
     console.error('Update tag error:', error);
-    return NextResponse.json({ error: 'Failed to update tag' }, { status: 500 });
+    return routeErrorResponse(error, 'Failed to update tag');
   }
 }
 
 // DELETE - Delete a tag
 export async function DELETE(_request: Request, { params }: RouteParams) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
+    const userId = await requireRouteUserId();
     const { id } = await params;
 
     // Find the tag and verify ownership
@@ -108,7 +92,7 @@ export async function DELETE(_request: Request, { params }: RouteParams) {
       return NextResponse.json({ error: 'Tag not found' }, { status: 404 });
     }
 
-    if (tag.userId !== session.user.id) {
+    if (tag.userId !== userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
     }
 
@@ -119,6 +103,6 @@ export async function DELETE(_request: Request, { params }: RouteParams) {
     return NextResponse.json({ message: 'Tag deleted successfully' });
   } catch (error) {
     console.error('Delete tag error:', error);
-    return NextResponse.json({ error: 'Failed to delete tag' }, { status: 500 });
+    return routeErrorResponse(error, 'Failed to delete tag');
   }
 }

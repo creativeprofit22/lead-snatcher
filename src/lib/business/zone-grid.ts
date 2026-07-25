@@ -21,72 +21,73 @@ const OVERPASS_MIRRORS = [
   'https://overpass.kumi.systems/api/interpreter',
 ] as const;
 
-// Amenity tags we keep querying for UI display (ring icons on area meter)
-// + the ones that still feed the scoring as secondary signals.
-const AMENITY_TAGS = [
-  'bank',
-  'atm',
-  'hotel',
-  'hospital',
-  'pharmacy',
-  'supermarket',
-  'fuel',
-  'car_rental',
-  'gym',
-  'spa',
-  'cinema',
-  'theatre',
-  'casino',
-  // Negative signals — poverty / distress indicators
-  'pawnshop',
-  'money_lender',
-  'social_facility',
-] as const;
+type AmenityKey = keyof Omit<ZoneAmenities, 'total'>;
 
-// HIGH-signal wealth tags (shop=*) — luxury specialty retail. Strongest
-// single wealth signal per the 2026 research brief.
-const LUXURY_SHOP_TAGS = [
-  'jewelry',
-  'watches',
-  'boutique',
-  'art',
-  'antiques',
-  'wine',
-  'gallery',
-] as const;
+type TagToAmenityKey = Readonly<Record<string, AmenityKey>>;
 
-// Negative-signal shop tags — poverty / distress-economy indicators.
-const NEGATIVE_SHOP_TAGS = ['pawnbroker', 'charity', 'second_hand'] as const;
+// These mappings are the single source of truth for both Overpass queries and
+// element classification. A queried tag therefore cannot silently go unclassified.
+export const ZONE_TAG_TO_AMENITY_KEY = {
+  amenity: {
+    bank: 'banks',
+    atm: 'banks',
+    hotel: 'hotels',
+    hospital: 'hospitals',
+    pharmacy: 'pharmacies',
+    supermarket: 'supermarkets',
+    fuel: 'fuelStations',
+    car_rental: 'fuelStations',
+    gym: 'affluenceSpots',
+    spa: 'affluenceSpots',
+    cinema: 'affluenceSpots',
+    theatre: 'affluenceSpots',
+    casino: 'casinos',
+    pawnshop: 'pawnshops',
+    money_lender: 'moneyLenders',
+    social_facility: 'socialFacilities',
+  } satisfies TagToAmenityKey,
+  shop: {
+    jewelry: 'luxuryRetail',
+    watches: 'luxuryRetail',
+    boutique: 'luxuryRetail',
+    art: 'luxuryRetail',
+    antiques: 'luxuryRetail',
+    wine: 'luxuryRetail',
+    gallery: 'luxuryRetail',
+    pawnbroker: 'pawnshops',
+    charity: 'charityShops',
+    second_hand: 'charityShops',
+  } satisfies TagToAmenityKey,
+  office: {
+    financial: 'professionalServices',
+    financial_advisor: 'professionalServices',
+    lawyer: 'professionalServices',
+    accountant: 'professionalServices',
+    insurance: 'professionalServices',
+    notary: 'professionalServices',
+    tax_advisor: 'professionalServices',
+    company: 'corporateOffices',
+    consulting: 'corporateOffices',
+    it: 'corporateOffices',
+    advertising_agency: 'corporateOffices',
+    coworking: 'corporateOffices',
+    research: 'corporateOffices',
+    estate_agent: 'corporateOffices',
+    government: 'corporateOffices',
+  } satisfies TagToAmenityKey,
+} as const;
 
-// HIGH-signal professional services. Financial + legal clustering sits
-// in the highest-rent zones almost by definition. Feeds both the wealth
-// score (rich clientele proxy) and the business score (B2B density).
-const PROFESSIONAL_OFFICE_TAGS = [
-  'financial',
-  'financial_advisor',
-  'lawyer',
-  'accountant',
-  'insurance',
-  'notary',
-  'tax_advisor',
-] as const;
+const TAG_CLASSIFIER_LOOKUPS = {
+  amenity: new Map(Object.entries(ZONE_TAG_TO_AMENITY_KEY.amenity)),
+  shop: new Map(Object.entries(ZONE_TAG_TO_AMENITY_KEY.shop)),
+  office: new Map(Object.entries(ZONE_TAG_TO_AMENITY_KEY.office)),
+} as const;
 
-// Corporate offices — the "business district" signal. Captures the
-// Canary Wharf / Shoreditch / King's Cross / Silicon Valley pattern
-// where money flows through corporate HQs + tech + consulting rather
-// than through consumer-facing luxury retail. Fed only into the
-// business score axis so Mayfair-style pure-consumer zones aren't
-// inflated by a handful of real-estate agents.
-const CORPORATE_OFFICE_TAGS = [
-  'company',
-  'consulting',
-  'it',
-  'advertising_agency',
-  'coworking',
-  'research',
-  'estate_agent',
-  'government',
-] as const;
+const QUERY_TAG_SETS = {
+  amenity: Object.keys(ZONE_TAG_TO_AMENITY_KEY.amenity),
+  shop: Object.keys(ZONE_TAG_TO_AMENITY_KEY.shop),
+  office: Object.keys(ZONE_TAG_TO_AMENITY_KEY.office),
+} as const;
 
 const ZONE_RADIUS_METERS = 1500;
 const GRID_SIZE = 3; // 3x3
@@ -480,11 +481,9 @@ async function fetchOverpassForBbox(
 ): Promise<OverpassElement[]> {
   const [south, north, west, east] = bbox;
   const bboxClause = `${south},${west},${north},${east}`;
-  const amenityRegex = AMENITY_TAGS.join('|');
-  const luxuryShopRegex = LUXURY_SHOP_TAGS.join('|');
-  const negativeShopRegex = NEGATIVE_SHOP_TAGS.join('|');
-  const officeRegex = PROFESSIONAL_OFFICE_TAGS.join('|');
-  const corporateOfficeRegex = CORPORATE_OFFICE_TAGS.join('|');
+  const amenityRegex = QUERY_TAG_SETS.amenity.join('|');
+  const shopRegex = QUERY_TAG_SETS.shop.join('|');
+  const officeRegex = QUERY_TAG_SETS.office.join('|');
 
   // v2-wealth query: original amenity set + shop=jewelry/watches/etc.
   // + office=financial/lawyer/etc. + shop=pawnbroker/charity (negatives).
@@ -497,14 +496,10 @@ async function fetchOverpassForBbox(
       way["amenity"~"^(${amenityRegex})$"](${bboxClause});
       node["tourism"="hotel"](${bboxClause});
       way["tourism"="hotel"](${bboxClause});
-      node["shop"~"^(${luxuryShopRegex})$"](${bboxClause});
-      way["shop"~"^(${luxuryShopRegex})$"](${bboxClause});
-      node["shop"~"^(${negativeShopRegex})$"](${bboxClause});
-      way["shop"~"^(${negativeShopRegex})$"](${bboxClause});
+      node["shop"~"^(${shopRegex})$"](${bboxClause});
+      way["shop"~"^(${shopRegex})$"](${bboxClause});
       node["office"~"^(${officeRegex})$"](${bboxClause});
       way["office"~"^(${officeRegex})$"](${bboxClause});
-      node["office"~"^(${corporateOfficeRegex})$"](${bboxClause});
-      way["office"~"^(${corporateOfficeRegex})$"](${bboxClause});
       way["building"="office"]["name"](${bboxClause});
       way["building"="office"]["operator"](${bboxClause});
       node["place"~"^(suburb|neighbourhood|quarter|city_district|borough|locality)$"](${bboxClause});
@@ -657,8 +652,6 @@ function formatUserSearchLabel(raw: string): string | null {
     .join(' ');
 }
 
-type AmenityKey = keyof Omit<ZoneAmenities, 'total'>;
-
 /**
  * Parse the `stars` tag (OSM values range from "0" / "0S" to "5S"). A 4+
  * rating promotes the hotel from the generic bucket to the premium bucket
@@ -671,6 +664,15 @@ function isPremiumHotel(tags: Record<string, string>): boolean {
   if (!first) return false;
   const n = parseInt(first, 10);
   return Number.isFinite(n) && n >= 4;
+}
+
+/** Classify one queried OSM tag using the same lookups that build the query. */
+export function classifyZoneTags(tags: Record<string, string>): AmenityKey | undefined {
+  return (
+    TAG_CLASSIFIER_LOOKUPS.shop.get(tags.shop ?? '') ??
+    TAG_CLASSIFIER_LOOKUPS.office.get(tags.office ?? '') ??
+    TAG_CLASSIFIER_LOOKUPS.amenity.get(tags.amenity ?? '')
+  );
 }
 
 function splitElements(elements: OverpassElement[]): {
@@ -730,75 +732,9 @@ function splitElements(elements: OverpassElement[]): {
 
     const amenity = tags.amenity ?? '';
     const tourism = tags.tourism ?? '';
-    const shop = tags.shop ?? '';
-    const office = tags.office ?? '';
 
-    // Luxury retail — strongest single wealth signal
-    if (
-      shop === 'jewelry' ||
-      shop === 'watches' ||
-      shop === 'boutique' ||
-      shop === 'art' ||
-      shop === 'antiques' ||
-      shop === 'wine' ||
-      shop === 'gallery'
-    ) {
-      amenities.push({ lat, lon, key: 'luxuryRetail' });
-      continue;
-    }
-
-    // Professional services offices — finance + legal. Feed both axes
-    // (wealth as "rich clientele" proxy, business as pure B2B density).
-    if (
-      office === 'financial' ||
-      office === 'financial_advisor' ||
-      office === 'lawyer' ||
-      office === 'accountant' ||
-      office === 'insurance' ||
-      office === 'notary' ||
-      office === 'tax_advisor'
-    ) {
-      amenities.push({ lat, lon, key: 'professionalServices' });
-      continue;
-    }
-
-    // Corporate offices — business-axis signal. Captures CW / Shoreditch
-    // / Silicon Valley patterns where money flows through HQs + tech +
-    // consulting rather than consumer retail.
-    if (
-      office === 'company' ||
-      office === 'consulting' ||
-      office === 'it' ||
-      office === 'advertising_agency' ||
-      office === 'coworking' ||
-      office === 'research' ||
-      office === 'estate_agent' ||
-      office === 'government'
-    ) {
-      amenities.push({ lat, lon, key: 'corporateOffices' });
-      continue;
-    }
-
-    // Named corporate office buildings. OSM often tags a whole tower with
-    // `building=office + name/operator` (HSBC Tower, Barclays HQ, Citi
-    // Tower at Canary Wharf) rather than per-floor `office=*` nodes.
-    // Requiring name OR operator keeps out generic 2-story office shells.
-    if (tags.building === 'office' && (Boolean(tags.name) || Boolean(tags.operator))) {
-      amenities.push({ lat, lon, key: 'corporateOffices' });
-      continue;
-    }
-
-    // Negative shop signals
-    if (shop === 'pawnbroker') {
-      amenities.push({ lat, lon, key: 'pawnshops' });
-      continue;
-    }
-    if (shop === 'charity' || shop === 'second_hand') {
-      amenities.push({ lat, lon, key: 'charityShops' });
-      continue;
-    }
-
-    // Hotels — split into premium vs generic based on stars
+    // Hotels are explicit because tourism=hotel is queried separately and
+    // premium stars add a second classification in addition to generic hotel.
     if (amenity === 'hotel' || tourism === 'hotel') {
       amenities.push({ lat, lon, key: 'hotels' });
       if (isPremiumHotel(tags)) {
@@ -807,32 +743,16 @@ function splitElements(elements: OverpassElement[]): {
       continue;
     }
 
-    // Amenity bucketing
-    if (amenity === 'bank' || amenity === 'atm') {
-      amenities.push({ lat, lon, key: 'banks' });
-    } else if (amenity === 'hospital') {
-      amenities.push({ lat, lon, key: 'hospitals' });
-    } else if (amenity === 'pharmacy') {
-      amenities.push({ lat, lon, key: 'pharmacies' });
-    } else if (amenity === 'supermarket') {
-      amenities.push({ lat, lon, key: 'supermarkets' });
-    } else if (amenity === 'fuel' || amenity === 'car_rental') {
-      amenities.push({ lat, lon, key: 'fuelStations' });
-    } else if (amenity === 'casino') {
-      amenities.push({ lat, lon, key: 'casinos' });
-    } else if (amenity === 'pawnshop') {
-      amenities.push({ lat, lon, key: 'pawnshops' });
-    } else if (amenity === 'money_lender') {
-      amenities.push({ lat, lon, key: 'moneyLenders' });
-    } else if (amenity === 'social_facility') {
-      amenities.push({ lat, lon, key: 'socialFacilities' });
-    } else if (
-      amenity === 'gym' ||
-      amenity === 'spa' ||
-      amenity === 'cinema' ||
-      amenity === 'theatre'
-    ) {
-      amenities.push({ lat, lon, key: 'affluenceSpots' });
+    const classifiedKey = classifyZoneTags(tags);
+    if (classifiedKey) {
+      amenities.push({ lat, lon, key: classifiedKey });
+      continue;
+    }
+
+    // Named corporate office buildings remain an explicit rule because they
+    // have no office=* value to include in the typed query mapping.
+    if (tags.building === 'office' && (Boolean(tags.name) || Boolean(tags.operator))) {
+      amenities.push({ lat, lon, key: 'corporateOffices' });
     }
   }
 

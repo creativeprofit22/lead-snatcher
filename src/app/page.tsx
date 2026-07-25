@@ -52,45 +52,14 @@ import {
   updateLastSearchEnrichment,
   type CachedSearch,
 } from '@/lib/search-cache';
-import { INDUSTRY_TYPES } from '@/lib/constants';
+import { BusinessSearchError, runBusinessSearch } from '@/lib/business/run-business-search';
+import { DEFAULT_COUNTRY_CODE, INDUSTRY_TYPES } from '@/lib/constants';
 import type { IndustryType, BusinessSearchResult } from '@/types';
 import type { Zone } from '@/lib/business/zone-grid';
 
 type ViewMode = 'search' | 'results';
 type SortOption = 'fit' | 'score' | 'contactPoints' | 'reviews' | 'rating';
 type RadarPhase = 'off' | 'scanning' | 'revealing';
-
-const MIN_SCAN_DURATION_MS = 900;
-
-/**
- * Client-side mirror of `formatUserSearchLabel` in zone-grid.ts — used to find
- * the zone that got the user's label override on the server so we can focus it
- * by default (instead of blindly focusing the top-density zone, which can land
- * the user on an adjacent neighborhood they didn't search for).
- *
- * Keep this in sync with the server helper if either ever changes.
- */
-function formatUserSearchLabel(raw: string): string | null {
-  const firstSegment = raw.split(',')[0]?.trim();
-  if (!firstSegment) return null;
-  const cleaned = firstSegment.replace(/\s+[A-Za-z]{2}$/, '').trim();
-  const source = cleaned || firstSegment;
-  return source
-    .split(/\s+/)
-    .map((w) => (w.length > 0 ? `${w.charAt(0).toUpperCase()}${w.slice(1).toLowerCase()}` : w))
-    .join(' ');
-}
-
-/** Pick the zone the user actually asked about; fall back to top-density. */
-function pickFocusedZoneId(zones: Zone[], rawCity: string): string | null {
-  if (zones.length === 0) return null;
-  const label = formatUserSearchLabel(rawCity);
-  if (label) {
-    const match = zones.find((z) => z.label === label);
-    if (match) return match.id;
-  }
-  return zones[0]?.id ?? null;
-}
 
 export default function Home() {
   return (
@@ -109,7 +78,7 @@ function HomeInner() {
   const [selectedIndustry, setSelectedIndustry] = useState<IndustryType | null>(null);
   const [customIndustry, setCustomIndustry] = useState('');
   const [city, setCity] = useState('');
-  const [country, setCountry] = useState('us');
+  const [country, setCountry] = useState(DEFAULT_COUNTRY_CODE);
   const [isSearching, setIsSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<BusinessSearchResult[]>([]);
   const [radarPhase, setRadarPhase] = useState<RadarPhase>('off');
@@ -345,138 +314,71 @@ function HomeInner() {
     businessName: '',
   });
 
+  const persistSearch = (payload: Omit<CachedSearch, 'timestamp'>) => {
+    saveLastSearch(payload);
+    void fetch('/api/business/last-search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).catch(() => {});
+  };
+
+  const applySearchResult = (result: Awaited<ReturnType<typeof runBusinessSearch>>) => {
+    setSearchResults(result.results);
+    setMarketDensity(result.marketDensity);
+    setZones(result.zones);
+    setZoneBbox(result.zoneBbox);
+    setSingleZone(result.singleZone);
+    setFocusedZoneId(result.focusedZoneId);
+    if (result.shouldPersist) persistSearch(result.cachePayload);
+
+    const { type, message, duration } = result.notification;
+    toast[type](message, duration ? { duration } : undefined);
+  };
+
   // Search businesses
   const handleSearch = async () => {
     const effectiveIndustry = customIndustry.trim() || selectedIndustry;
-    if (!effectiveIndustry || !city.trim() || isSearching) return;
+    const trimmedCity = city.trim();
+    if (!effectiveIndustry || !trimmedCity || isSearching) return;
 
-    const scanStart = Date.now();
     setIsSearching(true);
     setRadarPhase('scanning');
-    setSearchBannerError(null); // clear any lingering banner from a prior attempt
-    // Tiered timeout: a standard sweep should finish in ~30-90s; past
-    // 2 min the server has almost certainly died (OOM, hang, whatever).
-    // Deep Analysis runs PageSpeed on all 50 sites serially and
-    // legitimately needs the full 5 min window.
-    const SEARCH_HARD_TIMEOUT_MS = deepAnalysis ? 5 * 60_000 : 2 * 60_000;
-    const abortController = new AbortController();
-    const abortTimer = setTimeout(() => abortController.abort(), SEARCH_HARD_TIMEOUT_MS);
+    setSearchBannerError(null);
     try {
-      const response = await fetch('/api/business/search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          businessType: effectiveIndustry,
-          city: city.trim(),
-          country,
-          limit: 50,
-          deepAnalysis,
-        }),
-        signal: abortController.signal,
+      const result = await runBusinessSearch({
+        businessType: effectiveIndustry,
+        cacheIndustry: selectedIndustry ?? 'other',
+        city: trimmedCity,
+        country,
+        deepAnalysis,
+        mode: { kind: 'initial' },
       });
-
-      const data = await response.json();
-
-      if (!response.ok) {
-        const msg = data.error || `Search failed (${response.status})`;
-        toast.error(msg);
+      applySearchResult(result);
+      setRadarPhase(result.shouldReveal ? 'revealing' : 'off');
+      if (result.notification.type === 'error') {
         setSearchBannerError({
-          message: msg,
-          severity: response.status === 401 ? 'error' : 'error',
-          isAuthError: response.status === 401,
-        });
-        setRadarPhase('off');
-        return;
-      }
-
-      const elapsed = Date.now() - scanStart;
-      if (elapsed < MIN_SCAN_DURATION_MS) {
-        await new Promise((r) => setTimeout(r, MIN_SCAN_DURATION_MS - elapsed));
-      }
-
-      setSearchResults(data.results || []);
-      setMarketDensity(data.marketDensity || null);
-      const nextZones: Zone[] = data.zones || [];
-      setZones(nextZones);
-      setZoneBbox(Array.isArray(data.zoneBbox) ? data.zoneBbox : null);
-      setSingleZone(Boolean(data.singleZone));
-      // Focus the zone matching the user's typed target (e.g. "Shepherds Bush")
-      // over the raw top-density winner (which could be an adjacent neighborhood).
-      // Falls back to nextZones[0] if the user didn't refine or their label
-      // didn't survive to the zones list.
-      setFocusedZoneId(pickFocusedZoneId(nextZones, city.trim()));
-      setRadarPhase('revealing');
-
-      if (data.results?.length > 0) {
-        const cachePayload = {
-          results: data.results,
-          industry: (selectedIndustry ?? 'other') as IndustryType,
-          city: city.trim(),
-          country,
-          zones: nextZones,
-          zoneBbox: Array.isArray(data.zoneBbox) ? data.zoneBbox : null,
-          singleZone: Boolean(data.singleZone),
-          focusedZoneId: pickFocusedZoneId(nextZones, city.trim()),
-          marketDensity: data.marketDensity || null,
-        };
-        saveLastSearch(cachePayload);
-        // Fire-and-forget DB persist — enables the resume card on a
-        // fresh browser. Errors are silent; localStorage is still the
-        // primary fast path.
-        void fetch('/api/business/last-search', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(cachePayload),
-        }).catch(() => {});
-      }
-
-      if (data.results?.length === 0) {
-        // Distinguish "Maps provider glitched" from "genuinely zero hits in a
-        // tiny area". The provider glitch is the common case for micro-zones
-        // (e.g. a single street) and for repeat queries that worked a moment
-        // earlier — surface that possibility so the user doesn't assume the
-        // city/industry combination is a dead end.
-        const msg =
-          'No businesses returned. The Maps provider sometimes blanks out for micro-zones or repeat queries — hit Search again, or widen to a bigger city name.';
-        toast.error(msg, { duration: 8000 });
-        setSearchBannerError({
-          message: msg,
+          message: result.notification.message,
           severity: 'error',
           isAuthError: false,
         });
-        setRadarPhase('off');
-      } else {
-        toast.success(`Found ${data.results.length} businesses`);
       }
     } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') {
-        // AbortController fired either because the user navigated away
-        // or because our wall-clock timeout tripped. Distinguish the
-        // two with the elapsed time vs the configured cap.
-        const timeoutMsg = deepAnalysis
-          ? 'Deep Analysis sweep took longer than 5 minutes — the server likely died mid-request. Try again, or disable Deep Analysis.'
-          : 'Sweep took longer than 2 minutes — the server likely died mid-request (usually a memory spike). Try again with a less dense city.';
-        toast.error(timeoutMsg, { duration: 10_000 });
-        setSearchBannerError({
-          message: timeoutMsg,
-          severity: 'error',
-          isAuthError: false,
-        });
-      } else {
-        const msg =
-          error instanceof TypeError
-            ? 'Lost connection to the server mid-sweep. Check the server is still running and try again.'
-            : 'Search failed unexpectedly. Try again; if it keeps happening, check the server logs.';
-        toast.error(msg);
-        setSearchBannerError({
-          message: msg,
-          severity: 'error',
-          isAuthError: false,
-        });
-      }
+      const searchError =
+        error instanceof BusinessSearchError
+          ? error
+          : new BusinessSearchError('Search failed unexpectedly. Try again.', null, 'network');
+      toast.error(
+        searchError.message,
+        searchError.kind === 'timeout' ? { duration: 10_000 } : undefined
+      );
+      setSearchBannerError({
+        message: searchError.message,
+        severity: 'error',
+        isAuthError: searchError.status === 401,
+      });
       setRadarPhase('off');
     } finally {
-      clearTimeout(abortTimer);
       setIsSearching(false);
     }
   };
@@ -610,63 +512,29 @@ function HomeInner() {
   };
 
   // Tap-to-rescan a different zone without leaving the results page.
-  // Reuses zones from the initial scan; only the Maps search + density update.
   const handleZoneSwitch = async (zone: Zone) => {
     const effectiveIndustry = customIndustry.trim() || selectedIndustry;
-    if (!effectiveIndustry || rescanningZoneId) return;
-    if (focusedZoneId === zone.id) return;
+    if (!effectiveIndustry || rescanningZoneId || focusedZoneId === zone.id) return;
 
     setRescanningZoneId(zone.id);
     try {
-      const response = await fetch('/api/business/search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          businessType: effectiveIndustry,
-          city: city.trim(),
-          country,
-          limit: 50,
-          deepAnalysis,
-          searchLat: zone.latitude,
-          searchLng: zone.longitude,
-          zoneLabel: zone.label,
-        }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        toast.error(data.error || 'Zone rescan failed');
-        return;
-      }
-      setSearchResults(data.results || []);
-      setMarketDensity(data.marketDensity || null);
-      if (Array.isArray(data.zones) && data.zones.length > 0) {
-        setZones(data.zones);
-      }
-      setFocusedZoneId(zone.id);
-      if (data.results?.length === 0) {
-        toast.info(`No businesses in ${zone.label}`);
-      } else {
-        toast.success(`Scanning ${zone.label} — ${data.results.length} found`);
-      }
-      const zoneCachePayload = {
-        results: data.results || [],
-        industry: (selectedIndustry ?? 'other') as IndustryType,
+      const result = await runBusinessSearch({
+        businessType: effectiveIndustry,
+        cacheIndustry: selectedIndustry ?? 'other',
         city: city.trim(),
         country,
-        zones: Array.isArray(data.zones) && data.zones.length > 0 ? data.zones : zones,
-        zoneBbox: Array.isArray(data.zoneBbox) ? data.zoneBbox : zoneBbox,
-        singleZone,
-        focusedZoneId: zone.id,
-        marketDensity: data.marketDensity || null,
-      };
-      saveLastSearch(zoneCachePayload);
-      void fetch('/api/business/last-search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(zoneCachePayload),
-      }).catch(() => {});
-    } catch {
-      toast.error('Zone rescan failed');
+        deepAnalysis,
+        mode: {
+          kind: 'zone',
+          zone,
+          currentZones: zones,
+          currentZoneBbox: zoneBbox,
+          currentSingleZone: singleZone,
+        },
+      });
+      applySearchResult(result);
+    } catch (error) {
+      toast.error(error instanceof BusinessSearchError ? error.message : 'Zone rescan failed');
     } finally {
       setRescanningZoneId(null);
     }

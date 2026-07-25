@@ -4,6 +4,7 @@ import { runBatch } from './enrichment';
 import { geocodeCity } from './geocode';
 import { scrapePopularTimes } from './popular-times';
 import { scrapeWebsite } from './scraper';
+import { classifyZoneTags, ZONE_TAG_TO_AMENITY_KEY } from './zone-grid';
 
 function mockFetchResponse(body: unknown, ok = true, status = 200): void {
   vi.stubGlobal(
@@ -95,7 +96,18 @@ describe('business strict indexed-access and null safety', () => {
 
   test('ignores out-of-range hours and preserves valid boundary hours', async () => {
     mockFetchResponse(
-      popularTimesResponse([[1, [[-1, 10], [0, 20], [23, 80], [24, 90], ['bad', 50]]]])
+      popularTimesResponse([
+        [
+          1,
+          [
+            [-1, 10],
+            [0, 20],
+            [23, 80],
+            [24, 90],
+            ['bad', 50],
+          ],
+        ],
+      ])
     );
 
     const result = await scrapePopularTimes('Valid Place');
@@ -126,5 +138,16 @@ describe('business strict indexed-access and null safety', () => {
     expect(emptyCaptures.isReachable).toBe(true);
     expect(emptyCaptures.title).toBeUndefined();
     expect(emptyCaptures.copyrightYear).toBeUndefined();
+  });
+
+  test('classifies every queried zone tag into its declared amenity bucket', () => {
+    for (const [tagName, fixtures] of Object.entries(ZONE_TAG_TO_AMENITY_KEY)) {
+      for (const [tagValue, expectedKey] of Object.entries(fixtures)) {
+        expect(
+          classifyZoneTags({ [tagName]: tagValue }),
+          `${tagName}=${tagValue} should map to ${expectedKey}`
+        ).toBe(expectedKey);
+      }
+    }
   });
 });

@@ -1,17 +1,14 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
+import { TASK_PRIORITY_RANK } from '@/lib/constants';
 import { prisma } from '@/lib/db';
 import { createTaskSchema } from '@/lib/validations';
+import { parseRouteBody, requireRouteUserId, routeErrorResponse } from '@/lib/route-utils';
 import type { TaskType, TaskPriority } from '@/types';
 
 // GET - Fetch user's tasks with optional filters
 export async function GET(request: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
+    const userId = await requireRouteUserId();
     const { searchParams } = new URL(request.url);
 
     // Status filter: pending, completed, all
@@ -25,7 +22,7 @@ export async function GET(request: Request) {
 
     // Build where clause
     const where: Record<string, unknown> = {
-      userId: session.user.id,
+      userId,
     };
 
     // Status filter
@@ -65,7 +62,7 @@ export async function GET(request: Request) {
 
     const tasks = await prisma.task.findMany({
       where,
-      orderBy: [{ dueAt: 'asc' }, { priority: 'desc' }],
+      orderBy: { dueAt: 'asc' },
       include: {
         lead: {
           select: {
@@ -76,9 +73,18 @@ export async function GET(request: Request) {
       },
     });
 
+    tasks.sort((left, right) => {
+      const dueAtDifference = left.dueAt.getTime() - right.dueAt.getTime();
+      if (dueAtDifference !== 0) return dueAtDifference;
+
+      const leftRank = TASK_PRIORITY_RANK[left.priority as TaskPriority] ?? -1;
+      const rightRank = TASK_PRIORITY_RANK[right.priority as TaskPriority] ?? -1;
+      return rightRank - leftRank;
+    });
+
     // Calculate stats
     const allTasks = await prisma.task.findMany({
-      where: { userId: session.user.id },
+      where: { userId },
       select: { completedAt: true, dueAt: true },
     });
 
@@ -109,39 +115,25 @@ export async function GET(request: Request) {
     return NextResponse.json({ tasks: transformedTasks, stats });
   } catch (error) {
     console.error('Get tasks error:', error);
-    return NextResponse.json({ error: 'Failed to fetch tasks' }, { status: 500 });
+    return routeErrorResponse(error, 'Failed to fetch tasks');
   }
 }
 
 // POST - Create a new task
 export async function POST(request: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    let rawBody;
-    try {
-      rawBody = await request.json();
-    } catch {
-      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
-    }
-    const parsed = createTaskSchema.safeParse(rawBody);
-    if (!parsed.success) {
-      return NextResponse.json(
-        { error: parsed.error.issues[0]?.message ?? 'Invalid request body' },
-        { status: 400 }
-      );
-    }
-    const { title, description, type, dueAt, priority, leadId } = parsed.data;
+    const userId = await requireRouteUserId();
+    const { title, description, type, dueAt, priority, leadId } = await parseRouteBody(
+      request,
+      createTaskSchema
+    );
 
     // Verify lead belongs to user if provided
     if (leadId) {
       const lead = await prisma.lead.findFirst({
         where: {
           id: leadId,
-          userId: session.user.id,
+          userId,
         },
       });
       if (!lead) {
@@ -151,7 +143,7 @@ export async function POST(request: Request) {
 
     const task = await prisma.task.create({
       data: {
-        userId: session.user.id,
+        userId,
         title,
         description,
         type: type || 'other',
@@ -186,6 +178,6 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     console.error('Create task error:', error);
-    return NextResponse.json({ error: 'Failed to create task' }, { status: 500 });
+    return routeErrorResponse(error, 'Failed to create task');
   }
 }

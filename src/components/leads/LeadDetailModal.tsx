@@ -82,6 +82,10 @@ function parseFollowUpDate(value: string | null | undefined): FollowUpDate | nul
   };
 }
 
+function followUpDateToIsoTimestamp(value: string): string | null {
+  return value ? `${value}T12:00:00.000Z` : null;
+}
+
 export function LeadDetailModal({ lead, isOpen, onClose, onUpdate }: LeadDetailModalProps) {
   const [activeTab, setActiveTab] = useState<'details' | 'activity' | 'tasks' | 'notes'>('details');
   const [contactLogs, setContactLogs] = useState<ContactLogEntry[]>([]);
@@ -203,14 +207,15 @@ export function LeadDetailModal({ lead, isOpen, onClose, onUpdate }: LeadDetailM
   // Save follow-up date
   const handleSaveFollowUp = async () => {
     setIsSavingFollowUp(true);
+    const nextFollowUpAt = followUpDateToIsoTimestamp(followUpDate);
     try {
       const response = await fetch(`/api/leads/${lead.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nextFollowUpAt: followUpDate || null }),
+        body: JSON.stringify({ nextFollowUpAt }),
       });
       if (response.ok) {
-        onUpdate({ ...lead, nextFollowUpAt: followUpDate || undefined });
+        onUpdate({ ...lead, nextFollowUpAt });
         toast.success(followUpDate ? 'Follow-up set' : 'Follow-up cleared');
       }
     } catch {
