@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { updateTaskSchema } from '@/lib/validations';
 import { parseRouteBody, requireRouteUserId, routeErrorResponse } from '@/lib/route-utils';
-import type { TaskType, TaskPriority } from '@/types';
+import { toTaskDto } from '@/lib/task-dto';
+import type { TaskResponse } from '@/types';
 
 // PATCH - Update a task
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -66,20 +67,8 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
       },
     });
 
-    return NextResponse.json({
-      task: {
-        id: task.id,
-        title: task.title,
-        description: task.description,
-        type: task.type as TaskType,
-        dueAt: task.dueAt.toISOString(),
-        priority: task.priority as TaskPriority,
-        completedAt: task.completedAt?.toISOString(),
-        leadId: task.leadId,
-        lead: task.lead,
-        createdAt: task.createdAt.toISOString(),
-      },
-    });
+    const response = { task: toTaskDto(task) } satisfies TaskResponse;
+    return NextResponse.json(response);
   } catch (error) {
     console.error('Update task error:', error);
     return routeErrorResponse(error, 'Failed to update task');

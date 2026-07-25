@@ -21,9 +21,13 @@ const contactLog: ContactLogEntry = {
 const task: Task = {
   id: 'task-1',
   title: 'Call Acme',
+  description: null,
   type: 'call',
   dueAt: '2026-07-26T10:00:00.000Z',
   priority: 'high',
+  completedAt: null,
+  leadId: null,
+  lead: null,
   createdAt: '2026-07-25T10:00:00.000Z',
 };
 
@@ -132,10 +136,7 @@ describe('LeadDetailModal client request contracts', () => {
   ] as const)('patches the exact task body to %s a task', async (_label, completedAt) => {
     const { fetchMock, jsonMock } = stubResponse({ task });
 
-    await expect(setLeadTaskCompletion('task-1', completedAt)).resolves.toEqual({
-      successful: true,
-      data: null,
-    });
+    await expect(setLeadTaskCompletion('task-1', completedAt)).resolves.toBeUndefined();
     expect(fetchMock).toHaveBeenCalledWith('/api/tasks/task-1', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -173,7 +174,6 @@ describe('LeadDetailModal client failure contracts', () => {
           outcome: 'neutral',
         }),
     ],
-    ['set task completion', () => setLeadTaskCompletion('task-1', null)],
     ['delete a task', () => deleteLeadTask('task-1')],
   ] as const;
 
@@ -187,7 +187,19 @@ describe('LeadDetailModal client failure contracts', () => {
     }
   );
 
-  test.each(operations)('rejects when %s has a network failure', async (_name, run) => {
+  test('rejects task completion when the response is non-OK', async () => {
+    const { jsonMock } = stubResponse({ error: 'Request failed' }, false);
+
+    await expect(setLeadTaskCompletion('task-1', null)).rejects.toThrow(
+      'Task completion request failed'
+    );
+    expect(jsonMock).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ...operations,
+    ['set task completion', () => setLeadTaskCompletion('task-1', null)] as const,
+  ])('rejects when %s has a network failure', async (_name, run) => {
     const networkError = new Error('Network unavailable');
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(networkError));
 
@@ -210,12 +222,10 @@ describe('LeadDetailModal client failure contracts', () => {
     const jsonError = new SyntaxError('Invalid JSON');
     vi.stubGlobal(
       'fetch',
-      vi
-        .fn()
-        .mockResolvedValue({
-          ok: true,
-          json: vi.fn().mockRejectedValue(jsonError),
-        } as unknown as Response)
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: vi.fn().mockRejectedValue(jsonError),
+      } as unknown as Response)
     );
 
     await expect(run()).rejects.toBe(jsonError);

@@ -6,6 +6,7 @@ import {
   createTagSchema,
   createTaskSchema,
   updateTagSchema,
+  updateTaskSchema,
 } from '@/lib/validations';
 
 describe('country defaults', () => {
@@ -39,6 +40,33 @@ describe('task validation', () => {
     });
 
     expect(task.leadId).toBeNull();
+  });
+
+  test('trims task titles and rejects visually blank titles', () => {
+    expect(
+      createTaskSchema.parse({ title: '  Follow up  ', dueAt: '2026-07-25T09:00:00Z' }).title
+    ).toBe('Follow up');
+    expect(
+      createTaskSchema.safeParse({ title: '   ', dueAt: '2026-07-25T09:00:00Z' }).success
+    ).toBe(false);
+    expect(updateTaskSchema.safeParse({ title: '\t\n' }).success).toBe(false);
+  });
+
+  test.each(['not-a-date', '2026-02-30T09:00:00Z'])(`rejects invalid due date %s`, (dueAt) => {
+    expect(createTaskSchema.safeParse({ title: 'Follow up', dueAt }).success).toBe(false);
+    expect(updateTaskSchema.safeParse({ dueAt }).success).toBe(false);
+  });
+
+  test('accepts UTC-offset ISO due dates', () => {
+    const dueAt = '2026-07-25T09:00:00+05:30';
+
+    expect(createTaskSchema.parse({ title: 'Follow up', dueAt }).dueAt).toBe(dueAt);
+    expect(updateTaskSchema.parse({ dueAt }).dueAt).toBe(dueAt);
+  });
+
+  test('allows PATCH fields to be omitted and completedAt to be null', () => {
+    expect(updateTaskSchema.parse({})).toEqual({});
+    expect(updateTaskSchema.parse({ completedAt: null })).toEqual({ completedAt: null });
   });
 });
 

@@ -185,23 +185,35 @@ export const updateTagSchema = z.object({
   color: tagColorSchema.optional(),
 });
 
+const taskTitleSchema = z.string().trim().min(1, 'Title is required').max(500);
+const taskDueAtSchema = z.iso.datetime({ offset: true });
+
+const taskFieldSchemas = {
+  title: taskTitleSchema,
+  description: z.string().max(5000).nullable(),
+  type: taskTypeSchema,
+  dueAt: taskDueAtSchema,
+  priority: taskPrioritySchema,
+  leadId: z.string().nullable(),
+};
+
 // POST /api/tasks
 export const createTaskSchema = z.object({
-  title: z.string().min(1, 'Title is required').max(500),
-  description: z.string().max(5000).nullish(),
-  type: taskTypeSchema.default('other'),
-  dueAt: z.string().min(1, 'Due date is required'),
-  priority: taskPrioritySchema.default('medium'),
-  leadId: z.string().nullish(),
+  title: taskFieldSchemas.title,
+  description: taskFieldSchemas.description.optional(),
+  type: taskFieldSchemas.type.default('other'),
+  dueAt: taskFieldSchemas.dueAt,
+  priority: taskFieldSchemas.priority.default('medium'),
+  leadId: taskFieldSchemas.leadId.optional(),
 });
 
 // PATCH /api/tasks/[id]
 export const updateTaskSchema = z.object({
-  title: z.string().min(1).max(500).optional(),
-  description: z.string().max(5000).nullish(),
-  type: taskTypeSchema.optional(),
-  dueAt: z.string().optional(),
-  priority: taskPrioritySchema.optional(),
+  title: taskFieldSchemas.title.optional(),
+  description: taskFieldSchemas.description.optional(),
+  type: taskFieldSchemas.type.optional(),
+  dueAt: taskFieldSchemas.dueAt.optional(),
+  priority: taskFieldSchemas.priority.optional(),
   completedAt: z.string().datetime().nullish(),
-  leadId: z.string().nullable().optional(),
+  leadId: taskFieldSchemas.leadId.optional(),
 });

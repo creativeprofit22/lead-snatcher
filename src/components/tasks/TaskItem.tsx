@@ -1,7 +1,18 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Check, Trash2, Pencil, Phone, Mail, Calendar, Clock, CheckCircle } from 'lucide-react';
+import {
+  AlertTriangle,
+  Calendar,
+  Check,
+  CheckCircle,
+  Clock,
+  Mail,
+  Pencil,
+  Phone,
+  Trash2,
+} from 'lucide-react';
+import { getTaskDayStatus } from '@/lib/business/task-day';
 import type { Task, TaskType } from '@/types';
 import { TaskPriorityBadge } from './TaskPriorityBadge';
 
@@ -36,8 +47,9 @@ export function TaskItem({ task, onComplete, onEdit, onDelete, compact = false }
 
   const dueDate = new Date(task.dueAt);
   const now = new Date();
-  const isOverdue = !isCompleted && dueDate < now;
-  const isToday = dueDate.toDateString() === now.toDateString() && !isCompleted;
+  const dayStatus = getTaskDayStatus(dueDate, isCompleted, now);
+  const isOverdue = dayStatus === 'overdue';
+  const isToday = dayStatus === 'today';
 
   const handleComplete = async () => {
     const nextIsCompleted = !isCompleted;
@@ -55,9 +67,8 @@ export function TaskItem({ task, onComplete, onEdit, onDelete, compact = false }
   };
 
   const formatDueDate = () => {
-    const today = new Date();
-    const tomorrow = new Date(today);
-    tomorrow.setDate(tomorrow.getDate() + 1);
+    const today = now;
+    const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
 
     if (dueDate.toDateString() === today.toDateString()) {
       return `Today, ${dueDate.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
@@ -150,9 +161,11 @@ export function TaskItem({ task, onComplete, onEdit, onDelete, compact = false }
 
         <div className="mt-2 flex items-center gap-3 text-xs">
           <span
-            className={isOverdue ? 'text-red-400' : isToday ? 'text-orange-400' : 'text-gray-500'}
+            className={`inline-flex items-center gap-1 ${
+              isOverdue ? 'text-red-400' : isToday ? 'text-orange-400' : 'text-gray-500'
+            }`}
           >
-            {isOverdue && '⚠ '}
+            {isOverdue && <AlertTriangle className="w-3 h-3" aria-hidden="true" />}
             {formatDueDate()}
           </span>
           {task.lead && <span className="text-gray-500">→ {task.lead.name}</span>}
@@ -162,12 +175,16 @@ export function TaskItem({ task, onComplete, onEdit, onDelete, compact = false }
       {/* Actions */}
       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
         <button
+          type="button"
+          aria-label={`Edit ${task.title}`}
           onClick={() => onEdit(task)}
           className="p-1.5 rounded hover:bg-white/10 text-gray-500 hover:text-gray-300"
         >
           <Pencil className="w-4 h-4" />
         </button>
         <button
+          type="button"
+          aria-label={`Delete ${task.title}`}
           onClick={() => onDelete(task.id)}
           className="p-1.5 rounded hover:bg-red-500/10 text-gray-500 hover:text-red-400"
         >

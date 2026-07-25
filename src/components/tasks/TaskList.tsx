@@ -1,7 +1,8 @@
 'use client';
 
 import { useMemo } from 'react';
-import { ListTodo } from 'lucide-react';
+import { AlertTriangle, ListTodo } from 'lucide-react';
+import { getTaskDayStatus } from '@/lib/business/task-day';
 import type { Task } from '@/types';
 import { TaskItem } from './TaskItem';
 
@@ -24,24 +25,19 @@ export function TaskList({
 }: TaskListProps) {
   const groupedTasks = useMemo(() => {
     const now = new Date();
-    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const endOfDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000 - 1);
-
     const overdue: Task[] = [];
     const today: Task[] = [];
     const upcoming: Task[] = [];
     const completed: Task[] = [];
 
     tasks.forEach((task) => {
-      if (task.completedAt) {
-        if (showCompleted) completed.push(task);
-        return;
-      }
+      const status = getTaskDayStatus(task.dueAt, Boolean(task.completedAt), now);
 
-      const dueAt = new Date(task.dueAt);
-      if (dueAt < startOfDay) {
+      if (status === 'completed') {
+        if (showCompleted) completed.push(task);
+      } else if (status === 'overdue') {
         overdue.push(task);
-      } else if (dueAt <= endOfDay) {
+      } else if (status === 'today') {
         today.push(task);
       } else {
         upcoming.push(task);
@@ -85,7 +81,7 @@ export function TaskList({
       {groupedTasks.overdue.length > 0 && (
         <div>
           <h3 className="text-sm font-medium text-red-400 mb-2 flex items-center gap-2">
-            <span>⚠</span>
+            <AlertTriangle className="w-4 h-4" aria-hidden="true" />
             Overdue ({groupedTasks.overdue.length})
           </h3>
           <div className="space-y-2">

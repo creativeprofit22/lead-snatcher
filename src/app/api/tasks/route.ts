@@ -1,9 +1,17 @@
 import { NextResponse } from 'next/server';
+import { getTaskDayBoundaries } from '@/lib/business/task-day';
 import { TASK_PRIORITY_RANK } from '@/lib/constants';
 import { prisma } from '@/lib/db';
 import { createTaskSchema } from '@/lib/validations';
 import { parseRouteBody, requireRouteUserId, routeErrorResponse } from '@/lib/route-utils';
-import type { TaskType, TaskPriority } from '@/types';
+import { toTaskDto } from '@/lib/task-dto';
+import type {
+  CreateTaskResponse,
+  TaskPriority,
+  TasksResponse,
+  TasksWithStatsResponse,
+  TaskStats,
+} from '@/types';
 
 // GET - Fetch user's tasks with optional filters
 export async function GET(request: Request) {
@@ -19,6 +27,9 @@ export async function GET(request: Request) {
 
     // Lead filter
     const leadId = searchParams.get('leadId');
+
+    // Summary counts are opt-in so list-only consumers only pay for the filtered task query.
+    const includeStats = searchParams.get('include') === 'stats';
 
     // Build where clause
     const where: Record<string, unknown> = {
@@ -39,24 +50,22 @@ export async function GET(request: Request) {
 
     // Due date filter
     const now = new Date();
-    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const endOfDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000 - 1);
-    const endOfWeek = new Date(startOfDay.getTime() + 7 * 24 * 60 * 60 * 1000 - 1);
+    const { startOfToday, startOfTomorrow, startOfNextWeek } = getTaskDayBoundaries(now);
 
     if (due === 'today') {
       where.dueAt = {
-        gte: startOfDay,
-        lte: endOfDay,
+        gte: startOfToday,
+        lt: startOfTomorrow,
       };
     } else if (due === 'overdue') {
       where.dueAt = {
-        lt: startOfDay,
+        lt: startOfToday,
       };
       where.completedAt = null; // Only show overdue if not completed
     } else if (due === 'week') {
       where.dueAt = {
-        gte: startOfDay,
-        lte: endOfWeek,
+        gte: startOfToday,
+        lt: startOfNextWeek,
       };
     }
 
@@ -82,37 +91,34 @@ export async function GET(request: Request) {
       return rightRank - leftRank;
     });
 
-    // Calculate stats
-    const allTasks = await prisma.task.findMany({
-      where: { userId },
-      select: { completedAt: true, dueAt: true },
-    });
+    const response = { tasks: tasks.map(toTaskDto) } satisfies TasksResponse;
+    if (!includeStats) {
+      return NextResponse.json(response);
+    }
 
-    const stats = {
-      total: allTasks.length,
-      pending: allTasks.filter((t) => !t.completedAt).length,
-      completed: allTasks.filter((t) => t.completedAt).length,
-      overdue: allTasks.filter((t) => !t.completedAt && t.dueAt < startOfDay).length,
-      dueToday: allTasks.filter(
-        (t) => !t.completedAt && t.dueAt >= startOfDay && t.dueAt <= endOfDay
-      ).length,
+    const [pending, completed, overdue, dueToday] = await Promise.all([
+      prisma.task.count({ where: { userId, completedAt: null } }),
+      prisma.task.count({ where: { userId, completedAt: { not: null } } }),
+      prisma.task.count({
+        where: { userId, completedAt: null, dueAt: { lt: startOfToday } },
+      }),
+      prisma.task.count({
+        where: {
+          userId,
+          completedAt: null,
+          dueAt: { gte: startOfToday, lt: startOfTomorrow },
+        },
+      }),
+    ]);
+    const stats: TaskStats = {
+      total: pending + completed,
+      pending,
+      completed,
+      overdue,
+      dueToday,
     };
-
-    // Transform to our type format
-    const transformedTasks = tasks.map((task) => ({
-      id: task.id,
-      title: task.title,
-      description: task.description,
-      type: task.type as TaskType,
-      dueAt: task.dueAt.toISOString(),
-      priority: task.priority as TaskPriority,
-      completedAt: task.completedAt?.toISOString(),
-      leadId: task.leadId,
-      lead: task.lead,
-      createdAt: task.createdAt.toISOString(),
-    }));
-
-    return NextResponse.json({ tasks: transformedTasks, stats });
+    const responseWithStats = { ...response, stats } satisfies TasksWithStatsResponse;
+    return NextResponse.json(responseWithStats);
   } catch (error) {
     console.error('Get tasks error:', error);
     return routeErrorResponse(error, 'Failed to fetch tasks');
@@ -161,21 +167,11 @@ export async function POST(request: Request) {
       },
     });
 
-    return NextResponse.json({
-      task: {
-        id: task.id,
-        title: task.title,
-        description: task.description,
-        type: task.type as TaskType,
-        dueAt: task.dueAt.toISOString(),
-        priority: task.priority as TaskPriority,
-        completedAt: task.completedAt?.toISOString(),
-        leadId: task.leadId,
-        lead: task.lead,
-        createdAt: task.createdAt.toISOString(),
-      },
+    const response = {
+      task: toTaskDto(task),
       message: 'Task created successfully',
-    });
+    } satisfies CreateTaskResponse;
+    return NextResponse.json(response);
   } catch (error) {
     console.error('Create task error:', error);
     return routeErrorResponse(error, 'Failed to create task');

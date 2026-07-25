@@ -359,7 +359,7 @@ interface LeadTasksTabViewProps {
   onTaskEdit: (task: Task) => void;
   onTaskDelete: (taskId: string) => void;
   onTaskModalClose: () => void;
-  onTaskSave: (task: Task) => void;
+  onTaskSave: (task: Task) => void | Promise<void>;
 }
 
 export function LeadTasksTabView({

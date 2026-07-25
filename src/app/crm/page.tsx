@@ -22,12 +22,21 @@ import type { TagMutationResult } from '@/components/crm/TagManager';
 import { LeadDetailModal } from '@/components/leads';
 import { TaskSlideOver } from '@/components/tasks';
 import { useCrmTags } from '@/lib/hooks/useCrmTags';
+import { CrmTasksProvider } from '@/lib/hooks/useCrmTasks';
 import type { Lead, PipelineStats, LeadStatus } from '@/types';
 
 // LocalStorage key for view preference
 const VIEW_MODE_KEY = 'crm-view-mode';
 
 export default function CRMPage() {
+  return (
+    <CrmTasksProvider>
+      <CRMPageContent />
+    </CrmTasksProvider>
+  );
+}
+
+function CRMPageContent() {
   // Tab state
   const [activeTab, setActiveTab] = useState<TabValue>('all');
   const [searchQuery, setSearchQuery] = useState('');

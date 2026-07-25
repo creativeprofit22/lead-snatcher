@@ -4,76 +4,79 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import type { ContactLogEntry, Lead, LeadStatus, Task } from '@/types';
 import { LeadDetailModal } from './LeadDetailModal';
 
-const { toastError, toastSuccess } = vi.hoisted(() => ({
+const { invalidateCrmTasks, toastError, toastSuccess } = vi.hoisted(() => ({
+  invalidateCrmTasks: vi.fn(async () => undefined),
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
 }));
 
 vi.mock('sonner', () => ({ toast: { error: toastError, success: toastSuccess } }));
-vi.mock('@/components/crm', () => ({ StatusBadge: () => null }));
-vi.mock('@/components/tasks', () => ({
-  TaskList: ({
-    tasks,
-    isLoading,
-    onComplete,
-    onEdit,
-    onDelete,
-    showCompleted,
-  }: {
-    tasks: Task[];
-    isLoading?: boolean;
-    onComplete: (taskId: string, completed: boolean) => Promise<void>;
-    onEdit: (task: Task) => void;
-    onDelete: (taskId: string) => void;
-    showCompleted?: boolean;
-  }) => (
-    <section aria-label="Task list">
-      <p>Task loading: {isLoading ? 'yes' : 'no'}</p>
-      <p>Show completed: {showCompleted ? 'yes' : 'no'}</p>
-      {tasks.map((task) => (
-        <div key={task.id}>
-          <span>{task.title}</span>
-          <button onClick={() => void onComplete(task.id, !task.completedAt)}>
-            {task.completedAt ? `Reopen ${task.title}` : `Complete ${task.title}`}
-          </button>
-          <button onClick={() => onEdit(task)}>Edit {task.title}</button>
-          <button onClick={() => onDelete(task.id)}>Delete {task.title}</button>
-        </div>
-      ))}
-    </section>
-  ),
-  TaskModal: ({
-    isOpen,
-    onClose,
-    onSave,
-    task,
-    leadId,
-    leadName,
-  }: {
-    isOpen: boolean;
-    onClose: () => void;
-    onSave: (task: Task) => void;
-    task?: Task | null;
-    leadId?: string;
-    leadName?: string;
-  }) =>
-    isOpen ? (
-      <div role="dialog" aria-label={task ? `Task modal: ${task.title}` : 'Task modal: new task'}>
-        <p>
-          Assigned lead: {leadName} ({leadId})
-        </p>
-        <button
-          onClick={() => {
-            onSave(task ?? ({} as Task));
-            onClose();
-          }}
-        >
-          Save task
-        </button>
-        <button onClick={onClose}>Close task modal</button>
-      </div>
-    ) : null,
+vi.mock('@/lib/hooks/useCrmTasks', () => ({
+  useCrmTasks: () => ({ invalidate: invalidateCrmTasks }),
 }));
+vi.mock('@/components/crm', () => ({ StatusBadge: () => null }));
+vi.mock('@/components/tasks', async () => {
+  const { TaskItem } = await import('@/components/tasks/TaskItem');
+
+  return {
+    TaskList: ({
+      tasks,
+      isLoading,
+      onComplete,
+      onEdit,
+      onDelete,
+      showCompleted,
+    }: {
+      tasks: Task[];
+      isLoading?: boolean;
+      onComplete: (taskId: string, completed: boolean) => Promise<void>;
+      onEdit: (task: Task) => void;
+      onDelete: (taskId: string) => void;
+      showCompleted?: boolean;
+    }) => (
+      <section aria-label="Task list">
+        <p>Task loading: {isLoading ? 'yes' : 'no'}</p>
+        <p>Show completed: {showCompleted ? 'yes' : 'no'}</p>
+        {tasks.map((task) => (
+          <div key={task.id}>
+            <TaskItem task={task} onComplete={onComplete} onEdit={onEdit} onDelete={onDelete} />
+          </div>
+        ))}
+      </section>
+    ),
+    TaskModal: ({
+      isOpen,
+      onClose,
+      onSave,
+      task,
+      leadId,
+      leadName,
+    }: {
+      isOpen: boolean;
+      onClose: () => void;
+      onSave: (task: Task) => void | Promise<void>;
+      task?: Task | null;
+      leadId?: string;
+      leadName?: string;
+    }) =>
+      isOpen ? (
+        <div role="dialog" aria-label={task ? `Task modal: ${task.title}` : 'Task modal: new task'}>
+          <p>
+            Assigned lead: {leadName} ({leadId})
+          </p>
+          <button
+            onClick={() => {
+              onSave(task ?? ({} as Task));
+              onClose();
+            }}
+          >
+            Save task
+          </button>
+          <button onClick={onClose}>Close task modal</button>
+        </div>
+      ) : null,
+  };
+});
 vi.mock('./LeadScoreBadge', () => ({ LeadScoreBadge: () => null }));
 vi.mock('./OpportunitiesList', () => ({ OpportunitiesList: () => null }));
 vi.mock('./StatusSelector', () => ({
@@ -131,19 +134,26 @@ const contactLog: ContactLogEntry = {
 const pendingTask: Task = {
   id: 'task-pending',
   title: 'Call Acme',
+  description: null,
   type: 'call',
   dueAt: '2026-08-01T09:00:00.000Z',
   priority: 'high',
+  completedAt: null,
+  leadId: null,
+  lead: null,
   createdAt: '2026-07-20T09:00:00.000Z',
 };
 
 const completedTask: Task = {
   id: 'task-completed',
   title: 'Send proposal',
+  description: null,
   type: 'email',
   dueAt: '2026-07-21T09:00:00.000Z',
   priority: 'medium',
   completedAt: '2026-07-21T10:00:00.000Z',
+  leadId: null,
+  lead: null,
   createdAt: '2026-07-20T09:00:00.000Z',
 };
 
@@ -446,7 +456,59 @@ describe('LeadDetailModal characterization', () => {
             input === '/api/tasks?leadId=lead-1&status=all' && (init?.method ?? 'GET') === 'GET'
         )
       ).toHaveLength(3);
+      expect(invalidateCrmTasks).toHaveBeenCalledTimes(2);
     });
+  });
+
+  test.each([
+    ['non-OK response', () => mockResponse({}, false)],
+    ['rejected fetch', () => Promise.reject(new Error('Network unavailable'))],
+  ] as const)('rolls completion back after a %s and allows retrying', async (_case, failOnce) => {
+    let completionAttempts = 0;
+    const fetchMock = stubApi({
+      tasks: [pendingTask],
+      mutation: (url, init) => {
+        if (url === '/api/tasks/task-pending' && init.method === 'PATCH') {
+          completionAttempts += 1;
+          if (completionAttempts === 1) return failOnce();
+        }
+        return mockResponse();
+      },
+    });
+    renderModal();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Tasks (1)' })).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: 'Tasks (1)' }));
+
+    const completeButton = screen.getByRole('button', { name: 'Complete Call Acme' });
+    fireEvent.click(completeButton);
+
+    expect(completeButton.getAttribute('aria-pressed')).toBe('true');
+    expect(completeButton.hasAttribute('disabled')).toBe(true);
+
+    await waitFor(() => {
+      expect(completeButton.getAttribute('aria-pressed')).toBe('false');
+      expect(completeButton.hasAttribute('disabled')).toBe(false);
+    });
+    expect(toastError).toHaveBeenCalledTimes(1);
+    expect(toastError).toHaveBeenCalledWith('Failed to complete task');
+    expect(invalidateCrmTasks).not.toHaveBeenCalled();
+
+    fireEvent.click(completeButton);
+
+    await waitFor(() => {
+      expect(completionAttempts).toBe(2);
+      expect(completeButton.getAttribute('aria-pressed')).toBe('true');
+      expect(completeButton.hasAttribute('disabled')).toBe(false);
+    });
+    expect(toastError).toHaveBeenCalledTimes(1);
+    expect(toastSuccess).toHaveBeenCalledWith('Task completed');
+    expect(invalidateCrmTasks).toHaveBeenCalledTimes(1);
+    expect(
+      fetchMock.mock.calls.filter(
+        ([input, init]) =>
+          input === '/api/tasks?leadId=lead-1&status=all' && (init?.method ?? 'GET') === 'GET'
+      )
+    ).toHaveLength(2);
   });
 
   test('cancels or confirms deletion and refreshes only after a successful confirmed delete', async () => {
@@ -470,6 +532,7 @@ describe('LeadDetailModal characterization', () => {
             input === '/api/tasks?leadId=lead-1&status=all' && (init?.method ?? 'GET') === 'GET'
         )
       ).toHaveLength(2);
+      expect(invalidateCrmTasks).toHaveBeenCalledTimes(1);
     });
     const deleteRequest = fetchMock.mock.calls.find(([, init]) => init?.method === 'DELETE')?.[1];
     expect(deleteRequest?.body).toBeUndefined();
@@ -501,11 +564,12 @@ describe('LeadDetailModal characterization', () => {
             input === '/api/tasks?leadId=lead-1&status=all' && (init?.method ?? 'GET') === 'GET'
         )
       ).toHaveLength(2);
+      expect(invalidateCrmTasks).toHaveBeenCalledTimes(1);
     });
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
-  test('keeps non-OK mutation responses silent without updates or task refreshes', async () => {
+  test('reports a non-OK completion without applying updates or refreshing tasks', async () => {
     const fetchMock = stubApi({
       tasks: [pendingTask],
       mutation: () => mockResponse({}, false),
@@ -548,7 +612,9 @@ describe('LeadDetailModal characterization', () => {
         fetchMock.mock.calls.filter(([, init]) => init?.method && init.method !== 'GET')
       ).toHaveLength(6);
     });
-    expect(toastError).not.toHaveBeenCalled();
+    expect(toastError).toHaveBeenCalledTimes(2);
+    expect(toastError).toHaveBeenCalledWith('Failed to complete task');
+    expect(toastError).toHaveBeenCalledWith('Failed to delete task');
     expect(toastSuccess).not.toHaveBeenCalled();
     expect(onUpdate).not.toHaveBeenCalled();
     expect(
@@ -557,6 +623,7 @@ describe('LeadDetailModal characterization', () => {
           input === '/api/tasks?leadId=lead-1&status=all' && (init?.method ?? 'GET') === 'GET'
       )
     ).toHaveLength(1);
+    expect(invalidateCrmTasks).not.toHaveBeenCalled();
   });
 
   test('reports rejected mutations with the current operation-specific errors', async () => {
@@ -601,7 +668,7 @@ describe('LeadDetailModal characterization', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Tasks (1)' }));
     fireEvent.click(screen.getByRole('button', { name: 'Complete Call Acme' }));
-    await waitFor(() => expect(toastError).toHaveBeenCalledWith('Failed to update task'));
+    await waitFor(() => expect(toastError).toHaveBeenCalledWith('Failed to complete task'));
     fireEvent.click(screen.getByRole('button', { name: 'Delete Call Acme' }));
     await waitFor(() => expect(toastError).toHaveBeenCalledWith('Failed to delete task'));
 
@@ -610,12 +677,52 @@ describe('LeadDetailModal characterization', () => {
       'Failed to save follow-up',
       'Failed to save notes',
       'Failed to add contact log',
-      'Failed to update task',
+      'Failed to complete task',
       'Failed to delete task',
     ]);
     expect(
       fetchMock.mock.calls.filter(([, init]) => init?.method && init.method !== 'GET')
     ).toHaveLength(6);
+    expect(invalidateCrmTasks).not.toHaveBeenCalled();
+  });
+
+  test('ignores an older lead-task response after a modal save refresh', async () => {
+    let resolveInitialTasks!: (response: Response) => void;
+    const initialTasksResponse = new Promise<Response>((resolve) => {
+      resolveInitialTasks = resolve;
+    });
+    let taskRequests = 0;
+    const newerTask = { ...pendingTask, id: 'task-newer', title: 'Newer lead task' };
+    const olderTask = { ...pendingTask, id: 'task-older', title: 'Older lead task' };
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url === '/api/leads/lead-1/contact') {
+        return mockResponse({ contactLogs: [] });
+      }
+      if (url === '/api/tasks?leadId=lead-1&status=all') {
+        taskRequests += 1;
+        if (taskRequests === 1) return initialTasksResponse;
+        return mockResponse({ tasks: [newerTask] });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderModal();
+    fireEvent.click(screen.getByRole('button', { name: 'Tasks (0)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add Task for Acme Dental' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save task' }));
+
+    expect(await screen.findByText(newerTask.title)).toBeTruthy();
+    await act(async () => {
+      resolveInitialTasks(mockResponse({ tasks: [olderTask] }));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(newerTask.title)).toBeTruthy();
+      expect(screen.queryByText(olderTask.title)).toBeNull();
+    });
   });
 });
 

@@ -264,19 +264,21 @@ export interface GeocodeResult {
 export type TaskType = 'call' | 'email' | 'meeting' | 'follow_up' | 'other';
 export type TaskPriority = 'low' | 'medium' | 'high' | 'urgent';
 
-// Task interface
-export interface Task {
+// Serialized task returned by the API
+export interface TaskDto {
   id: string;
   title: string;
-  description?: string;
+  description: string | null;
   type: TaskType;
   dueAt: string;
   priority: TaskPriority;
-  completedAt?: string;
-  leadId?: string;
-  lead?: { id: string; name: string };
+  completedAt: string | null;
+  leadId: string | null;
+  lead: { id: string; name: string } | null;
   createdAt: string;
 }
+
+export type Task = TaskDto;
 
 // Task statistics
 export interface TaskStats {
@@ -285,6 +287,22 @@ export interface TaskStats {
   completed: number;
   overdue: number;
   dueToday: number;
+}
+
+export interface TasksResponse {
+  tasks: TaskDto[];
+}
+
+export interface TasksWithStatsResponse extends TasksResponse {
+  stats: TaskStats;
+}
+
+export interface TaskResponse {
+  task: TaskDto;
+}
+
+export interface CreateTaskResponse extends TaskResponse {
+  message: string;
 }
 
 // Task type configuration

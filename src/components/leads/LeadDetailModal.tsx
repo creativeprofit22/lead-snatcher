@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { X, Phone, Globe, MapPin, ExternalLink } from 'lucide-react';
 import { toast } from 'sonner';
 import { LeadScoreBadge } from './LeadScoreBadge';
@@ -22,6 +22,7 @@ import {
   LeadTasksTabView,
   type LeadDetailTabId,
 } from './LeadDetailModal.tabs';
+import { useCrmTasks } from '@/lib/hooks/useCrmTasks';
 import type { Lead, LeadStatus, ContactLogEntry, Task } from '@/types';
 
 interface LeadDetailModalProps {
@@ -52,6 +53,8 @@ export function LeadDetailModal({ lead, isOpen, onClose, onUpdate }: LeadDetailM
   const [isLoadingTasks, setIsLoadingTasks] = useState(false);
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const tasksRequestVersion = useRef(0);
+  const { invalidate: invalidateCrmTasks } = useCrmTasks();
 
   // Load contact logs
   const fetchContactLogs = useCallback(async () => {
@@ -72,16 +75,22 @@ export function LeadDetailModal({ lead, isOpen, onClose, onUpdate }: LeadDetailM
   // Load tasks for this lead
   const fetchTasks = useCallback(async () => {
     if (!lead) return;
+
+    const requestVersion = ++tasksRequestVersion.current;
     setIsLoadingTasks(true);
     try {
       const result = await fetchAllLeadTasks(lead.id);
-      if (result.successful) {
+      if (result.successful && requestVersion === tasksRequestVersion.current) {
         setTasks(result.data);
       }
     } catch {
-      console.error('Failed to fetch tasks');
+      if (requestVersion === tasksRequestVersion.current) {
+        console.error('Failed to fetch tasks');
+      }
     } finally {
-      setIsLoadingTasks(false);
+      if (requestVersion === tasksRequestVersion.current) {
+        setIsLoadingTasks(false);
+      }
     }
   }, [lead]);
 
@@ -90,9 +99,13 @@ export function LeadDetailModal({ lead, isOpen, onClose, onUpdate }: LeadDetailM
     if (lead && isOpen) {
       setNotes(lead.notes || '');
       setFollowUpDate(parseFollowUpDate(lead.nextFollowUpAt)?.inputValue ?? '');
-      fetchContactLogs();
-      fetchTasks();
+      void fetchContactLogs();
+      void fetchTasks();
     }
+
+    return () => {
+      tasksRequestVersion.current += 1;
+    };
   }, [lead, isOpen, fetchContactLogs, fetchTasks]);
 
   // Close on escape
@@ -187,13 +200,12 @@ export function LeadDetailModal({ lead, isOpen, onClose, onUpdate }: LeadDetailM
   const handleTaskComplete = async (taskId: string, completed: boolean) => {
     try {
       const completedAt = completed ? new Date().toISOString() : null;
-      const result = await setLeadTaskCompletion(taskId, completedAt);
-      if (result.successful) {
-        fetchTasks();
-        toast.success(completed ? 'Task completed' : 'Task reopened');
-      }
-    } catch {
-      toast.error('Failed to update task');
+      await setLeadTaskCompletion(taskId, completedAt);
+      await Promise.all([fetchTasks(), invalidateCrmTasks()]);
+      toast.success(completed ? 'Task completed' : 'Task reopened');
+    } catch (error) {
+      toast.error(completed ? 'Failed to complete task' : 'Failed to reopen task');
+      throw error;
     }
   };
 
@@ -206,17 +218,19 @@ export function LeadDetailModal({ lead, isOpen, onClose, onUpdate }: LeadDetailM
     if (!confirm('Delete this task?')) return;
     try {
       const result = await deleteLeadTask(taskId);
-      if (result.successful) {
-        fetchTasks();
-        toast.success('Task deleted');
+      if (!result.successful) {
+        throw new Error('Task deletion request failed');
       }
+
+      await Promise.all([fetchTasks(), invalidateCrmTasks()]);
+      toast.success('Task deleted');
     } catch {
       toast.error('Failed to delete task');
     }
   };
 
-  const handleTaskSave = () => {
-    fetchTasks();
+  const handleTaskSave = async () => {
+    await Promise.all([fetchTasks(), invalidateCrmTasks()]);
     setEditingTask(null);
   };
 

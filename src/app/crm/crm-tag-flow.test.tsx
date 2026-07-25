@@ -197,6 +197,13 @@ describe('CRM tag catalog flow', () => {
         });
       }
 
+      if (url === '/api/tasks?status=pending&include=stats' && method === 'GET') {
+        return jsonResponse({
+          tasks: [],
+          stats: { total: 0, pending: 0, completed: 0, overdue: 0, dueToday: 0 },
+        });
+      }
+
       throw new Error(`Unexpected request: ${method} ${url}`);
     });
     vi.stubGlobal('fetch', fetchMock);
@@ -328,6 +335,13 @@ describe('CRM tag catalog flow', () => {
       if (url === '/api/leads/lead-1' && method === 'DELETE') {
         leadExists = false;
         return jsonResponse({ message: 'Lead deleted successfully' });
+      }
+
+      if (url === '/api/tasks?status=pending&include=stats' && method === 'GET') {
+        return jsonResponse({
+          tasks: [],
+          stats: { total: 0, pending: 0, completed: 0, overdue: 0, dueToday: 0 },
+        });
       }
 
       throw new Error(`Unexpected request: ${method} ${url}`);

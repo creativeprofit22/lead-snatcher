@@ -1,4 +1,4 @@
-import type { ContactLogEntry, Lead, LeadStatus, Task } from '@/types';
+import type { ContactLogEntry, Lead, LeadStatus, Task, TasksResponse } from '@/types';
 
 export type LeadDetailModalClientResult<T> =
   | { successful: true; data: T }
@@ -15,10 +15,6 @@ export type TaskCompletionTime = NonNullable<Task['completedAt']> | null;
 
 interface ContactLogsEnvelope {
   contactLogs?: ContactLogEntry[];
-}
-
-interface TasksEnvelope {
-  tasks?: Task[];
 }
 
 interface ContactLogEnvelope {
@@ -44,8 +40,8 @@ export async function fetchAllLeadTasks(
   const response = await fetch(`/api/tasks?leadId=${leadId}&status=all`);
   if (!response.ok) return unsuccessfulResult;
 
-  const data = (await response.json()) as TasksEnvelope;
-  return { successful: true, data: data.tasks || [] };
+  const data = (await response.json()) as TasksResponse;
+  return { successful: true, data: data.tasks ?? [] };
 }
 
 export async function patchLeadEditableFields(
@@ -79,14 +75,16 @@ export async function createLeadContactLog(
 export async function setLeadTaskCompletion(
   taskId: Task['id'],
   completedAt: TaskCompletionTime
-): Promise<LeadDetailModalClientResult<null>> {
+): Promise<void> {
   const response = await fetch(`/api/tasks/${taskId}`, {
     method: 'PATCH',
     headers: JSON_HEADERS,
     body: JSON.stringify({ completedAt }),
   });
 
-  return response.ok ? { successful: true, data: null } : unsuccessfulResult;
+  if (!response.ok) {
+    throw new Error('Task completion request failed');
+  }
 }
 
 export async function deleteLeadTask(

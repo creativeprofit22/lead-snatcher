@@ -82,6 +82,29 @@ describe('PATCH /api/tasks/[id] lead assignment', () => {
     );
   });
 
+  test('clears the description when description is null', async () => {
+    const response = await patch({ description: null });
+
+    expect(response.status).toBe(200);
+    expect(updateTask).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { description: null } })
+    );
+  });
+
+  test('returns a completed timestamp as ISO JSON', async () => {
+    const completedAt = new Date('2026-07-25T11:30:00.000Z');
+    updateTask.mockResolvedValue({ ...storedTask, completedAt });
+
+    const response = await patch({ completedAt: completedAt.toISOString() });
+
+    expect(updateTask).toHaveBeenCalledWith(expect.objectContaining({ data: { completedAt } }));
+    await expect(response.json()).resolves.toEqual(
+      expect.objectContaining({
+        task: expect.objectContaining({ completedAt: completedAt.toISOString() }),
+      })
+    );
+  });
+
   test('rejects a lead that does not belong to the authenticated user', async () => {
     findLead.mockResolvedValue(null);
 
@@ -90,5 +113,39 @@ describe('PATCH /api/tasks/[id] lead assignment', () => {
     expect(response.status).toBe(404);
     await expect(response.json()).resolves.toEqual({ error: 'Lead not found' });
     expect(updateTask).not.toHaveBeenCalled();
+  });
+});
+
+describe('PATCH /api/tasks/[id] validation', () => {
+  test.each([{ title: '   ' }, { dueAt: 'not-a-date' }, { dueAt: '2026-02-30T09:00:00Z' }])(
+    'returns 400 before querying Prisma for invalid input %#',
+    async (body) => {
+      const response = await patch(body);
+
+      expect(response.status).toBe(400);
+      expect(findTask).not.toHaveBeenCalled();
+      expect(findLead).not.toHaveBeenCalled();
+      expect(updateTask).not.toHaveBeenCalled();
+    }
+  );
+
+  test('accepts a UTC-offset ISO due date', async () => {
+    const dueAt = '2026-07-25T09:00:00-04:00';
+
+    const response = await patch({ dueAt });
+
+    expect(response.status).toBe(200);
+    expect(updateTask).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { dueAt: new Date(dueAt) } })
+    );
+  });
+
+  test('does not add omitted fields to PATCH data', async () => {
+    const response = await patch({ priority: 'high' });
+
+    expect(response.status).toBe(200);
+    expect(updateTask).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { priority: 'high' } })
+    );
   });
 });
