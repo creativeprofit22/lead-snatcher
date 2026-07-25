@@ -36,9 +36,11 @@ vi.mock('@/components/crm', async (importOriginal) => {
     LeadsTable: ({
       leads,
       onToggleSelect,
+      onDelete,
     }: {
       leads: Lead[];
       onToggleSelect?: (leadId: string) => void;
+      onDelete?: (leadId: string) => void;
     }) => (
       <div>
         {leads.map((lead) => (
@@ -48,6 +50,7 @@ vi.mock('@/components/crm', async (importOriginal) => {
               {lead.tags.map((tag) => tag.name).join(', ')}
             </span>
             <button onClick={() => onToggleSelect?.(lead.id)}>Select {lead.name}</button>
+            <button onClick={() => onDelete?.(lead.id)}>Delete {lead.name}</button>
           </div>
         ))}
       </div>
@@ -272,5 +275,83 @@ describe('CRM tag catalog flow', () => {
     expect(successToast).toHaveBeenCalledWith('Tag created');
     expect(successToast).toHaveBeenCalledWith('Tag updated');
     expect(successToast).toHaveBeenCalledWith('Tag deleted');
-  }, 15_000);
+  }, 30_000);
+
+  test('refetches tag usage counts after deleting a single lead', async () => {
+    const catalogTag: TagWithCount = {
+      id: 'tag-1',
+      name: 'Priority',
+      color: '#3b82f6',
+      createdAt: '2026-07-25T10:00:00.000Z',
+      leadCount: 1,
+    };
+    let leadExists = true;
+    let tagRequestCount = 0;
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = requestUrl(input);
+      const method = init?.method ?? 'GET';
+
+      if (url === '/api/tags' && method === 'GET') {
+        tagRequestCount += 1;
+        return jsonResponse({
+          tags: [{ ...catalogTag, leadCount: leadExists ? 1 : 0 }],
+        });
+      }
+
+      if (url.startsWith('/api/leads?') && method === 'GET') {
+        return jsonResponse({ leads: leadExists ? [lead([catalogTag])] : [] });
+      }
+
+      if (url === '/api/leads/stats' && method === 'GET') {
+        const total = leadExists ? 1 : 0;
+        return jsonResponse({
+          stats: {
+            total,
+            byStatus: {
+              new: total,
+              contacted: 0,
+              called: 0,
+              proposal_sent: 0,
+              negotiating: 0,
+              won: 0,
+              lost: 0,
+            },
+            conversionRate: 0,
+            avgLeadScore: total ? 75 : 0,
+            hotLeads: total,
+            coldLeads: 0,
+          },
+        });
+      }
+
+      if (url === '/api/leads/lead-1' && method === 'DELETE') {
+        leadExists = false;
+        return jsonResponse({ message: 'Lead deleted successfully' });
+      }
+
+      throw new Error(`Unexpected request: ${method} ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<CRMPage />);
+
+    await screen.findByText('Acme Dental');
+    fireEvent.click(screen.getByRole('button', { name: 'Tags' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Manage Tags' }));
+    expect(await screen.findByText('1 leads')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close tag manager' }));
+    const tagRequestsBeforeDelete = tagRequestCount;
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Acme Dental' }));
+
+    await waitFor(() => expect(screen.queryByText('Acme Dental')).toBeNull());
+    await waitFor(() => expect(tagRequestCount).toBeGreaterThan(tagRequestsBeforeDelete));
+    expect(fetchMock).toHaveBeenCalledWith('/api/leads/lead-1', { method: 'DELETE' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Manage Tags' }));
+    expect(await screen.findByText('0 leads')).toBeTruthy();
+    expect(successToast).toHaveBeenCalledWith('Lead deleted');
+    expect(errorToast).not.toHaveBeenCalled();
+  });
 });
