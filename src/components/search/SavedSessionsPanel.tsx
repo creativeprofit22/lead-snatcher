@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { BookmarkCheck, Loader2, MapPin, Play, Trash2, X, Library } from 'lucide-react';
 import { toast } from 'sonner';
 import { INDUSTRY_TYPES } from '@/lib/constants';
-import type { CachedSearch } from '@/lib/search-cache';
+import type { PersistedSearchPayload } from '@/lib/business/search-snapshot';
 
 interface SavedSessionSummary {
   id: string;
@@ -18,10 +18,8 @@ interface SavedSessionSummary {
 }
 
 interface Props {
-  /** Called with the full CachedSearch payload once a session is loaded. */
-  onLoad: (
-    payload: Omit<CachedSearch, 'enrichStatusMap' | 'enrichResultMap' | 'selectedForEnrich'>
-  ) => void;
+  /** Called with the durable search payload once a session is loaded. */
+  onLoad: (payload: PersistedSearchPayload) => void;
 }
 
 /**
@@ -69,7 +67,7 @@ export function SavedSessionsPanel({ onLoad }: Props) {
       }
       const data = (await res.json()) as {
         session?: {
-          payload: Omit<CachedSearch, 'enrichStatusMap' | 'enrichResultMap' | 'selectedForEnrich'>;
+          payload: PersistedSearchPayload;
         };
       };
       if (!data.session?.payload) {

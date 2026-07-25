@@ -1,5 +1,8 @@
 import { prisma } from '@/lib/db';
-import type { CachedSearch } from '@/lib/search-cache';
+import {
+  parsePersistedSearchPayload,
+  type PersistedSearchPayload,
+} from '@/lib/business/search-snapshot';
 
 /**
  * Cross-session "resume last search" store. One row per user — a new
@@ -7,13 +10,10 @@ import type { CachedSearch } from '@/lib/search-cache';
  * here (it's cheap to re-derive since `BusinessEnrichmentCache` already
  * caches results for 7d); keeping the payload small.
  */
-
-type PersistablePayload = Omit<
-  CachedSearch,
-  'enrichStatusMap' | 'enrichResultMap' | 'selectedForEnrich'
->;
-
-export async function putLastSearch(userId: string, payload: PersistablePayload): Promise<void> {
+export async function putLastSearch(
+  userId: string,
+  payload: PersistedSearchPayload
+): Promise<void> {
   const serialized = JSON.stringify(payload);
   await prisma.lastSearchSession.upsert({
     where: { userId },
@@ -23,7 +23,7 @@ export async function putLastSearch(userId: string, payload: PersistablePayload)
 }
 
 export interface LastSearchRecord {
-  payload: PersistablePayload;
+  payload: PersistedSearchPayload;
   updatedAt: Date;
 }
 
@@ -32,13 +32,9 @@ export async function getLastSearch(userId: string): Promise<LastSearchRecord | 
     where: { userId },
   });
   if (!row) return null;
-  try {
-    const payload = JSON.parse(row.payload) as PersistablePayload;
-    return { payload, updatedAt: row.updatedAt };
-  } catch {
-    // Corrupt JSON — treat as missing so the user gets a clean state.
-    return null;
-  }
+  const payload = parsePersistedSearchPayload(row.payload);
+  if (!payload) return null;
+  return { payload, updatedAt: row.updatedAt };
 }
 
 export async function clearLastSearch(userId: string): Promise<void> {

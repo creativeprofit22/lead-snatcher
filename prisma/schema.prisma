@@ -49,14 +49,13 @@ model UrlAnalysisCache {
 
 // Per-user "resume your last search" snapshot. One row per user — a
 // new search overwrites the existing row. Cleared when the user
-// dismisses the resume card. Payload holds the full CachedSearch blob
-// (results, zones, density, etc.) as serialized JSON so we don't need
-// to split it across tables.
+// dismisses the resume card. Payload holds the durable SearchSnapshot
+// (results, zones, density, etc.) as serialized JSON.
 model LastSearchSession {
   id        String   @id @default(cuid())
   userId    String   @unique
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  payload   String // JSON: serialized CachedSearch minus enrichment state
+  payload   String // JSON: serialized PersistedSearchPayload
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -73,7 +72,7 @@ model SavedSearchSession {
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   name      String // user-chosen label, e.g. "HVAC Tucson Demo"
-  payload   String // JSON: serialized CachedSearch minus enrichment state
+  payload   String // JSON: serialized PersistedSearchPayload
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

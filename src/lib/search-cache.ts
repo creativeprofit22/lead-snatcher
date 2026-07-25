@@ -1,53 +1,24 @@
-import type { BusinessSearchResult, IndustryType } from '@/types';
-import type { Zone } from '@/lib/business/zone-grid';
 import type { EnrichmentStatus } from '@/components/leads/EnrichButton';
+import type { PersistedSearchPayload, SearchSnapshot } from '@/lib/business/search-snapshot';
 import type { EnrichmentResult } from '@/lib/hooks/useEnrichmentStream';
 
 const LAST_SEARCH_KEY = 'lead-snatcher-last-search';
 /** Within-session restore window — keeps results alive across tab navigation. */
 const CACHE_TTL_MS = 2 * 60 * 60 * 1000;
 
-export interface CachedMarketDensity {
-  count: number;
-  level: string;
-  label: string;
-  description: string;
-  areaScore?: number;
-  competition?: string;
-  amenities?: {
-    banks: number;
-    hotels: number;
-    hospitals: number;
-    pharmacies: number;
-    supermarkets: number;
-    fuelStations: number;
-    affluenceSpots: number;
-    total: number;
-  };
-}
-
-export interface CachedSearch {
-  results: BusinessSearchResult[];
-  industry: IndustryType;
-  city: string;
-  country: string;
-  timestamp: number;
-  // Extra state so a hop to /crm and back keeps the zone strip + density
-  // meter intact. All optional for backward-compat with older cache blobs.
-  zones?: Zone[];
-  zoneBbox?: [number, number, number, number] | null;
-  singleZone?: boolean;
-  focusedZoneId?: string | null;
-  marketDensity?: CachedMarketDensity | null;
-  // Per-card enrichment state. Persisted so a user who has already
-  // enriched a few leads doesn't lose the ⚡→✓ progress when they
-  // navigate away and return.
+/** Browser-only state stored alongside the durable search snapshot in localStorage. */
+export interface SearchCacheBrowserState {
   enrichStatusMap?: Record<string, EnrichmentStatus>;
   enrichResultMap?: Record<string, EnrichmentResult>;
   selectedForEnrich?: string[];
 }
 
-export function saveLastSearch(data: Omit<CachedSearch, 'timestamp'>): void {
+/** Local cache envelope; server persistence stores only PersistedSearchPayload. */
+export type CachedSearch = PersistedSearchPayload & SearchCacheBrowserState;
+
+type SearchCacheWritePayload = SearchSnapshot & SearchCacheBrowserState;
+
+export function saveLastSearch(data: SearchCacheWritePayload): void {
   const cached: CachedSearch = {
     ...data,
     timestamp: Date.now(),
@@ -89,11 +60,7 @@ export function clearLastSearch(): void {
  *
  * No-op if there is no cached search — nothing to patch.
  */
-export function updateLastSearchEnrichment(patch: {
-  enrichStatusMap?: Record<string, EnrichmentStatus>;
-  enrichResultMap?: Record<string, EnrichmentResult>;
-  selectedForEnrich?: string[];
-}): void {
+export function updateLastSearchEnrichment(patch: SearchCacheBrowserState): void {
   const current = getLastSearch();
   if (!current) return;
   const merged: CachedSearch = {

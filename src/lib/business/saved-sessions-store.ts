@@ -1,5 +1,8 @@
 import { prisma } from '@/lib/db';
-import type { CachedSearch } from '@/lib/search-cache';
+import {
+  parsePersistedSearchPayload,
+  type PersistedSearchPayload,
+} from '@/lib/business/search-snapshot';
 
 /**
  * Explicit, named, permanent saved search sessions. User names and pins
@@ -9,12 +12,6 @@ import type { CachedSearch } from '@/lib/search-cache';
  * state is dropped from the payload — cheap to re-derive via the
  * BusinessEnrichmentCache on reload, and keeps each saved row lean.
  */
-
-type PersistablePayload = Omit<
-  CachedSearch,
-  'enrichStatusMap' | 'enrichResultMap' | 'selectedForEnrich'
->;
-
 export interface SavedSessionSummary {
   id: string;
   name: string;
@@ -27,13 +24,13 @@ export interface SavedSessionSummary {
 }
 
 export interface SavedSessionRecord extends SavedSessionSummary {
-  payload: PersistablePayload;
+  payload: PersistedSearchPayload;
 }
 
 export async function createSavedSession(
   userId: string,
   name: string,
-  payload: PersistablePayload
+  payload: PersistedSearchPayload
 ): Promise<SavedSessionRecord> {
   const row = await prisma.savedSearchSession.create({
     data: {
@@ -51,7 +48,7 @@ export async function listSavedSessions(userId: string): Promise<SavedSessionSum
     orderBy: { updatedAt: 'desc' },
   });
   return rows.map((row) => {
-    const payload = parsePayload(row.payload);
+    const payload = parsePersistedSearchPayload(row.payload);
     return toSummary(row, payload);
   });
 }
@@ -64,7 +61,7 @@ export async function getSavedSession(
     where: { id, userId },
   });
   if (!row) return null;
-  const payload = parsePayload(row.payload);
+  const payload = parsePersistedSearchPayload(row.payload);
   if (!payload) return null;
   return toRecord(row, payload);
 }
@@ -82,14 +79,6 @@ export async function deleteSavedSession(userId: string, id: string): Promise<bo
 
 // ---- helpers ----
 
-function parsePayload(raw: string): PersistablePayload | null {
-  try {
-    return JSON.parse(raw) as PersistablePayload;
-  } catch {
-    return null;
-  }
-}
-
 type Row = {
   id: string;
   name: string;
@@ -97,7 +86,7 @@ type Row = {
   updatedAt: Date;
 };
 
-function toSummary(row: Row, payload: PersistablePayload | null): SavedSessionSummary {
+function toSummary(row: Row, payload: PersistedSearchPayload | null): SavedSessionSummary {
   return {
     id: row.id,
     name: row.name,
@@ -110,7 +99,7 @@ function toSummary(row: Row, payload: PersistablePayload | null): SavedSessionSu
   };
 }
 
-function toRecord(row: Row, payload: PersistablePayload): SavedSessionRecord {
+function toRecord(row: Row, payload: PersistedSearchPayload): SavedSessionRecord {
   return {
     ...toSummary(row, payload),
     payload,

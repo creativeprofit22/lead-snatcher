@@ -1,13 +1,13 @@
 import { NextRequest } from 'next/server';
 import { auth } from '@/lib/auth';
 import { putLastSearch, getLastSearch, clearLastSearch } from '@/lib/business/last-search-store';
-import type { CachedSearch } from '@/lib/search-cache';
+import type { PersistedSearchPayload } from '@/lib/business/search-snapshot';
 
 /**
  * /api/business/last-search — the cross-session "resume last search" store.
  *
  *  GET    → returns the user's last persisted search (or null)
- *  POST   → upserts the user's last search (body = CachedSearch-ish blob)
+ *  POST   → upserts the user's durable search snapshot
  *  DELETE → clears the user's last search (fired when the resume card is
  *           dismissed or the user explicitly wants a fresh home screen)
  *
@@ -58,11 +58,10 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  // Minimal shape check — we trust the client to send a CachedSearch-
-  // shaped object because the endpoint is user-scoped and the payload
-  // is only rendered back to the same user. Strip any unexpected fields
-  // to keep the blob lean.
-  const incoming = body as Partial<CachedSearch>;
+  // Minimal shape check — the endpoint remains intentionally permissive
+  // about nested search results. Strip browser-only and unexpected fields
+  // before writing the canonical durable payload.
+  const incoming = body as Partial<PersistedSearchPayload>;
   if (
     !incoming ||
     !Array.isArray(incoming.results) ||

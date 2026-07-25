@@ -1,27 +1,10 @@
 'use client';
 
-import { useState, useEffect, Suspense } from 'react';
+import { useCallback, useEffect, useState, Suspense } from 'react';
 import Link from 'next/link';
-import {
-  Settings,
-  ArrowLeft,
-  Plus,
-  ExternalLink,
-  Phone,
-  Globe,
-  Star,
-  MessageSquare,
-  MapPin,
-  Mail,
-  Users,
-  Wallet,
-  ChevronDown,
-  ChevronUp,
-  Flame,
-  Gauge,
-} from 'lucide-react';
+import { Settings, ArrowLeft, Gauge } from 'lucide-react';
 import { toast } from 'sonner';
-import { AnimatePresence, motion } from 'motion/react';
+import { AnimatePresence } from 'motion/react';
 import {
   WelcomeHeader,
   BusinessTypeSelector,
@@ -36,30 +19,28 @@ import {
 } from '@/components/search';
 import { PreLoader } from '@/components/preloader';
 import { SlidingNumber } from '@/components/motion-primitives/sliding-number';
-import { GlowEffect } from '@/components/motion-primitives/glow-effect';
-import { HoloCard } from '@/components/ui/HoloCard';
-import { LeadScoreBadge, OpportunitiesList, SaveLeadModal } from '@/components/leads';
-import { EnrichButton } from '@/components/leads/EnrichButton';
+import { SaveLeadModal } from '@/components/leads';
+import { LeadResultCard } from '@/components/leads/LeadResultCard';
 import { BatchEnrichBar } from '@/components/leads/BatchEnrichBar';
 import { ErrorBanner } from '@/components/leads/ErrorBanner';
 import { EnrichmentExplainer, shouldShowExplainer } from '@/components/leads/EnrichmentExplainer';
 import { useEnrichmentStream } from '@/lib/hooks/useEnrichmentStream';
+import { useBusinessSearchController } from '@/lib/hooks/useBusinessSearchController';
 import { SettingsModal } from '@/components/settings';
 import { UserMenu } from '@/components/auth';
 import {
-  saveLastSearch,
-  getLastSearch,
-  updateLastSearchEnrichment,
-  type CachedSearch,
-} from '@/lib/search-cache';
-import { BusinessSearchError, runBusinessSearch } from '@/lib/business/run-business-search';
+  useSearchSessionPersistence,
+  type SearchSessionPayload,
+} from '@/lib/business/search-session-client';
+import {
+  filterAndSortResults,
+  mergeEnrichmentResults,
+  selectResultsById,
+  type SearchResultSort,
+} from '@/lib/business/derive-search-results';
 import { DEFAULT_COUNTRY_CODE, INDUSTRY_TYPES } from '@/lib/constants';
 import type { IndustryType, BusinessSearchResult } from '@/types';
 import type { Zone } from '@/lib/business/zone-grid';
-
-type ViewMode = 'search' | 'results';
-type SortOption = 'fit' | 'score' | 'contactPoints' | 'reviews' | 'rating';
-type RadarPhase = 'off' | 'scanning' | 'revealing';
 
 export default function Home() {
   return (
@@ -71,190 +52,50 @@ export default function Home() {
 
 function HomeInner() {
   const [showPreLoader, setShowPreLoader] = useState(true);
-  const [viewMode, setViewMode] = useState<ViewMode>('search');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
-  // Search state
+  // Search form state stays local; the controller owns result and lifecycle state.
   const [selectedIndustry, setSelectedIndustry] = useState<IndustryType | null>(null);
   const [customIndustry, setCustomIndustry] = useState('');
   const [city, setCity] = useState('');
   const [country, setCountry] = useState(DEFAULT_COUNTRY_CODE);
-  const [isSearching, setIsSearching] = useState(false);
-  const [searchResults, setSearchResults] = useState<BusinessSearchResult[]>([]);
-  const [radarPhase, setRadarPhase] = useState<RadarPhase>('off');
   const [deepAnalysis, setDeepAnalysis] = useState(false);
-  const [marketDensity, setMarketDensity] = useState<{
-    count: number;
-    level: string;
-    label: string;
-    description: string;
-    areaScore?: number;
-    competition?: string;
-    amenities?: {
-      banks: number;
-      hotels: number;
-      hospitals: number;
-      pharmacies: number;
-      supermarkets: number;
-      fuelStations: number;
-      affluenceSpots: number;
-      total: number;
-    };
-  } | null>(null);
-  const [zones, setZones] = useState<Zone[]>([]);
-  const [zoneBbox, setZoneBbox] = useState<[number, number, number, number] | null>(null);
-  const [singleZone, setSingleZone] = useState(false);
-  const [focusedZoneId, setFocusedZoneId] = useState<string | null>(null);
-  const [rescanningZoneId, setRescanningZoneId] = useState<string | null>(null);
+  const effectiveIndustry = customIndustry.trim() || selectedIndustry;
+  const {
+    viewMode,
+    isSearching,
+    searchResults,
+    radarPhase,
+    marketDensity,
+    zones,
+    zoneBbox,
+    singleZone,
+    focusedZoneId,
+    rescanningZoneId,
+    searchBannerError,
+    hydrateSnapshot,
+    runInitialSearch,
+    rescanZone,
+    completeRadar,
+    resetSearch,
+    dismissSearchBanner,
+  } = useBusinessSearchController({
+    query: {
+      businessType: effectiveIndustry,
+      cacheIndustry: selectedIndustry ?? 'other',
+      city,
+      country,
+      deepAnalysis,
+    },
+  });
 
   // Filter & sort state
-  const [sortBy, setSortBy] = useState<SortOption>('fit');
+  const [sortBy, setSortBy] = useState<SearchResultSort>('fit');
   const [filterHasEmail, setFilterHasEmail] = useState(false);
   const [filterHasPhone, setFilterHasPhone] = useState(false);
   const [filterHasSocial, setFilterHasSocial] = useState(false);
   const [filterHasAds, setFilterHasAds] = useState(false);
   const [filterMinBudget, setFilterMinBudget] = useState(0);
-
-  // On mount, surface any localStorage-cached search as a dismissible
-  // resume card on the home screen — NO longer auto-redirects to the
-  // results view. The user always lands on a clean home and opts in via
-  // the card. Dismissing the card hides it for the current browser tab
-  // via sessionStorage (survives refresh, clears on tab close) but does
-  // NOT destroy the cache, so closing for a recording take and coming
-  // back later keeps the session intact.
-  useEffect(() => {
-    const cached = getLastSearch();
-    if (!cached) return;
-    // Returning users (those who have cache) skip the preloader cinematic —
-    // preserves the original "don't make me watch this twice" behavior.
-    setShowPreLoader(false);
-    setResumeCard({
-      industry: cached.industry,
-      city: cached.city,
-      country: cached.country,
-      resultCount: cached.results.length,
-      updatedAt: new Date(cached.timestamp).toISOString(),
-      payload: cached,
-    });
-  }, []);
-
-  // Cross-session "resume your last search" — only fetched when the
-  // user lands on a fresh home screen (no localStorage cache). If the
-  // server has a persisted session, surface a small banner above the
-  // search form. `dismissed` is a tab-scoped hide; clicking the X also
-  // deletes the server-side record.
-  const [resumeCard, setResumeCard] = useState<{
-    industry: IndustryType;
-    city: string;
-    country: string;
-    resultCount: number;
-    updatedAt: string;
-    payload: Parameters<typeof saveLastSearch>[0];
-  } | null>(null);
-  const [resumeDismissed, setResumeDismissed] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    return sessionStorage.getItem('lead-snatcher-resume-dismissed') === '1';
-  });
-
-  // Persistent search error — shown above the results list when a sweep
-  // fails or times out. Companion to the transient toast; this stays
-  // visible until the user starts a new search or dismisses it. Kept
-  // separate from the enrichment banner so one failure doesn't stomp
-  // on the other.
-  const [searchBannerError, setSearchBannerError] = useState<{
-    message: string;
-    severity: 'error' | 'warning';
-    isAuthError: boolean;
-  } | null>(null);
-
-  useEffect(() => {
-    // Only fetch when we're on the home view with no local cache —
-    // otherwise the banner would either duplicate auto-restored
-    // results or appear after the user already started searching.
-    if (viewMode !== 'search') return;
-    if (getLastSearch()) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch('/api/business/last-search');
-        if (!res.ok) return;
-        const { data } = (await res.json()) as {
-          data: (typeof resumeCard extends infer T ? T : never) & {
-            results: BusinessSearchResult[];
-            industry: IndustryType;
-            city: string;
-            country: string;
-            updatedAt: string;
-          };
-        };
-        if (!data || cancelled) return;
-        setResumeCard({
-          industry: data.industry,
-          city: data.city,
-          country: data.country,
-          resultCount: data.results.length,
-          updatedAt: data.updatedAt,
-          payload: data,
-        });
-      } catch {
-        // Network blip — stay silent, home screen works fine without it.
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [viewMode]);
-
-  const hydrateResultsFromPayload = (
-    p: Partial<CachedSearch> & Pick<CachedSearch, 'results' | 'industry' | 'city' | 'country'>
-  ) => {
-    setSearchResults(p.results);
-    setSelectedIndustry(p.industry);
-    setCity(p.city);
-    setCountry(p.country);
-    if (p.zones) setZones(p.zones);
-    if (p.zoneBbox !== undefined) setZoneBbox(p.zoneBbox);
-    if (typeof p.singleZone === 'boolean') setSingleZone(p.singleZone);
-    if (p.focusedZoneId !== undefined) setFocusedZoneId(p.focusedZoneId);
-    if (p.marketDensity !== undefined) setMarketDensity(p.marketDensity);
-    if (p.enrichStatusMap || p.enrichResultMap) {
-      hydrateEnrichment(p.enrichStatusMap, p.enrichResultMap);
-    }
-    if (p.selectedForEnrich?.length) {
-      setSelectedForEnrich(new Set(p.selectedForEnrich));
-    }
-  };
-
-  const handleResumeLastSearch = () => {
-    if (!resumeCard) return;
-    const p = resumeCard.payload;
-    saveLastSearch(p); // mirror into localStorage for instant future restores
-    hydrateResultsFromPayload(p);
-    setViewMode('results');
-    setResumeCard(null);
-  };
-
-  const handleLoadSavedSession = (
-    p: Omit<CachedSearch, 'enrichStatusMap' | 'enrichResultMap' | 'selectedForEnrich'>
-  ) => {
-    // Mirror into localStorage so CRM-and-back / refreshes hold the
-    // loaded session in place the same way a fresh sweep would.
-    saveLastSearch(p);
-    hydrateResultsFromPayload(p);
-    setViewMode('results');
-    setResumeCard(null);
-  };
-
-  const handleDismissResume = () => {
-    // Hide for the current browser tab (persists across refresh, clears on
-    // tab close) WITHOUT destroying the cache. Matt can dismiss for a
-    // recording take and the next work session still finds the card.
-    if (typeof window !== 'undefined') {
-      sessionStorage.setItem('lead-snatcher-resume-dismissed', '1');
-    }
-    setResumeDismissed(true);
-    setResumeCard(null);
-  };
 
   // Count-up for "N businesses found"
   const [resultsCount, setResultsCount] = useState(0);
@@ -274,7 +115,6 @@ function HomeInner() {
     statusMap: enrichStatusMap,
     resultMap: enrichResultMap,
     enrichLeads,
-    clearStatus: clearEnrichStatus,
     hydrate: hydrateEnrichment,
     bannerError: enrichBannerError,
     clearBannerError: clearEnrichBannerError,
@@ -283,29 +123,52 @@ function HomeInner() {
   const [explainerOpen, setExplainerOpen] = useState(false);
   const [pendingEnrichAction, setPendingEnrichAction] = useState<(() => void) | null>(null);
 
-  // Auto-clear the 'enriched' success state 3s after completion so the
-  // button flips back to idle and the found-data diff banner fades.
-  useEffect(() => {
-    const timers: number[] = [];
-    for (const [id, status] of Object.entries(enrichStatusMap)) {
-      if (status === 'enriched') {
-        timers.push(window.setTimeout(() => clearEnrichStatus(id), 3000));
+  // The controller hydrates result data atomically; this adapter keeps form and
+  // enrichment persistence concerns in the page.
+  const hydrateSearchSession = useCallback(
+    (payload: SearchSessionPayload) => {
+      hydrateSnapshot(payload);
+      setSelectedIndustry(payload.industry);
+      setCity(payload.city);
+      setCountry(payload.country);
+      if (payload.enrichStatusMap || payload.enrichResultMap) {
+        hydrateEnrichment(payload.enrichStatusMap, payload.enrichResultMap);
       }
-    }
-    return () => {
-      timers.forEach((t) => window.clearTimeout(t));
-    };
-  }, [enrichStatusMap, clearEnrichStatus]);
+      if (payload.selectedForEnrich?.length) {
+        setSelectedForEnrich(new Set(payload.selectedForEnrich));
+      }
+    },
+    [hydrateEnrichment, hydrateSnapshot]
+  );
+
+  const handleLocalResumeFound = useCallback(() => setShowPreLoader(false), []);
+  const {
+    resumeCard,
+    resumeDismissed,
+    resumeLastSearch: handleResumeLastSearch,
+    loadSavedSession: handleLoadSavedSession,
+    dismissResume: handleDismissResume,
+    persistSearch,
+    persistEnrichment,
+  } = useSearchSessionPersistence({
+    isSearchView: viewMode === 'search',
+    onHydrate: hydrateSearchSession,
+    onLocalResumeFound: handleLocalResumeFound,
+  });
+
+  const handleSearch = () => {
+    void runInitialSearch(persistSearch);
+  };
 
   // Persist enrichment state to the search cache whenever it changes so
   // navigating away and back preserves which leads have been enriched.
   useEffect(() => {
-    updateLastSearchEnrichment({
+    persistEnrichment({
       enrichStatusMap,
       enrichResultMap,
       selectedForEnrich: Array.from(selectedForEnrich),
     });
-  }, [enrichStatusMap, enrichResultMap, selectedForEnrich]);
+  }, [enrichStatusMap, enrichResultMap, persistEnrichment, selectedForEnrich]);
 
   // Saving leads
   const [savingLeadIds, setSavingLeadIds] = useState<Set<string>>(new Set());
@@ -313,80 +176,6 @@ function HomeInner() {
     isOpen: false,
     businessName: '',
   });
-
-  const persistSearch = (payload: Omit<CachedSearch, 'timestamp'>) => {
-    saveLastSearch(payload);
-    void fetch('/api/business/last-search', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    }).catch(() => {});
-  };
-
-  const applySearchResult = (result: Awaited<ReturnType<typeof runBusinessSearch>>) => {
-    setSearchResults(result.results);
-    setMarketDensity(result.marketDensity);
-    setZones(result.zones);
-    setZoneBbox(result.zoneBbox);
-    setSingleZone(result.singleZone);
-    setFocusedZoneId(result.focusedZoneId);
-    if (result.shouldPersist) persistSearch(result.cachePayload);
-
-    const { type, message, duration } = result.notification;
-    toast[type](message, duration ? { duration } : undefined);
-  };
-
-  // Search businesses
-  const handleSearch = async () => {
-    const effectiveIndustry = customIndustry.trim() || selectedIndustry;
-    const trimmedCity = city.trim();
-    if (!effectiveIndustry || !trimmedCity || isSearching) return;
-
-    setIsSearching(true);
-    setRadarPhase('scanning');
-    setSearchBannerError(null);
-    try {
-      const result = await runBusinessSearch({
-        businessType: effectiveIndustry,
-        cacheIndustry: selectedIndustry ?? 'other',
-        city: trimmedCity,
-        country,
-        deepAnalysis,
-        mode: { kind: 'initial' },
-      });
-      applySearchResult(result);
-      setRadarPhase(result.shouldReveal ? 'revealing' : 'off');
-      if (result.notification.type === 'error') {
-        setSearchBannerError({
-          message: result.notification.message,
-          severity: 'error',
-          isAuthError: false,
-        });
-      }
-    } catch (error) {
-      const searchError =
-        error instanceof BusinessSearchError
-          ? error
-          : new BusinessSearchError('Search failed unexpectedly. Try again.', null, 'network');
-      toast.error(
-        searchError.message,
-        searchError.kind === 'timeout' ? { duration: 10_000 } : undefined
-      );
-      setSearchBannerError({
-        message: searchError.message,
-        severity: 'error',
-        isAuthError: searchError.status === 401,
-      });
-      setRadarPhase('off');
-    } finally {
-      setIsSearching(false);
-    }
-  };
-
-  const handleRadarComplete = () => {
-    setRadarPhase('off');
-    setViewMode('results');
-  };
 
   // Save lead
   const handleSaveLead = async (business: BusinessSearchResult) => {
@@ -423,19 +212,12 @@ function HomeInner() {
   // Merge any post-sweep enrichment results (website + socials) into
   // each lead so rendering, filtering, and sorting all see the live
   // data — not the stale pre-enrichment snapshot.
-  const enrichedResults = searchResults.map((lead) => {
-    const found = enrichResultMap[lead.placeId];
-    if (!found) return lead;
-    const mergedSocials: BusinessSearchResult['socialLinks'] = {
-      ...(lead.socialLinks ?? {}),
-      ...(found.socials ?? {}),
-    };
-    return {
-      ...lead,
-      website: lead.website ?? found.website,
-      socialLinks: mergedSocials,
-    } satisfies BusinessSearchResult;
-  });
+  const enrichedResults = mergeEnrichmentResults(searchResults, enrichResultMap);
+  const selectedEnrichedResults = selectResultsById(enrichedResults, selectedForEnrich);
+  const cachedSelectedCount = selectedEnrichedResults.filter(
+    (lead) => enrichResultMap[lead.placeId]?.cached
+  ).length;
+  const isEnrichmentBusy = Object.values(enrichStatusMap).some((status) => status === 'enriching');
 
   // Fire the enrichment, gating on the first-time explainer. If the
   // user hasn't seen it yet, we open the modal and defer `action`
@@ -454,9 +236,8 @@ function HomeInner() {
   };
 
   const handleBatchEnrich = () => {
-    const leads = enrichedResults.filter((l) => selectedForEnrich.has(l.placeId));
-    if (leads.length === 0) return;
-    void enrichLeads(leads, city.trim(), country).then(() => {
+    if (selectedEnrichedResults.length === 0) return;
+    void enrichLeads(selectedEnrichedResults, city.trim(), country).then(() => {
       // Clear selection after the stream closes — keep selection
       // while rows are still coming in so the bar reflects progress.
       setSelectedForEnrich(new Set());
@@ -473,71 +254,23 @@ function HomeInner() {
   };
 
   // Filter and sort results
-  const filteredResults = enrichedResults
-    .filter((b) => {
-      if (filterHasEmail && !(b.email && isRealEmail(b.email))) return false;
-      if (filterHasPhone && !b.phone) return false;
-      if (filterHasSocial && Object.keys(b.socialLinks || {}).length === 0) return false;
-      if (filterHasAds && !b.scoreBreakdown.hasMarketingBudget) return false;
-      if (filterMinBudget > 0 && (!b.budgetEstimate || b.budgetEstimate.min < filterMinBudget))
-        return false;
-      return true;
-    })
-    .sort((a, b) => {
-      switch (sortBy) {
-        case 'fit':
-          return (b.fitScore ?? 0) - (a.fitScore ?? 0) || b.leadScore - a.leadScore;
-        case 'contactPoints':
-          return b.contactPoints - a.contactPoints || b.leadScore - a.leadScore;
-        case 'reviews':
-          return (b.reviewCount || 0) - (a.reviewCount || 0);
-        case 'rating':
-          return (b.rating || 0) - (a.rating || 0);
-        case 'score':
-          return b.leadScore - a.leadScore || b.contactPoints - a.contactPoints;
-        default:
-          return b.leadScore - a.leadScore || b.contactPoints - a.contactPoints;
-      }
-    });
+  const filteredResults = filterAndSortResults(
+    enrichedResults,
+    {
+      hasEmail: filterHasEmail,
+      hasPhone: filterHasPhone,
+      hasSocial: filterHasSocial,
+      hasAds: filterHasAds,
+      minBudget: filterMinBudget,
+    },
+    sortBy
+  );
 
-  const handleBackToSearch = () => {
-    setViewMode('search');
-    setSearchResults([]);
-    setMarketDensity(null);
-    setZones([]);
-    setZoneBbox(null);
-    setSingleZone(false);
-    setFocusedZoneId(null);
-    setRescanningZoneId(null);
-  };
+  const handleBackToSearch = resetSearch;
 
   // Tap-to-rescan a different zone without leaving the results page.
-  const handleZoneSwitch = async (zone: Zone) => {
-    const effectiveIndustry = customIndustry.trim() || selectedIndustry;
-    if (!effectiveIndustry || rescanningZoneId || focusedZoneId === zone.id) return;
-
-    setRescanningZoneId(zone.id);
-    try {
-      const result = await runBusinessSearch({
-        businessType: effectiveIndustry,
-        cacheIndustry: selectedIndustry ?? 'other',
-        city: city.trim(),
-        country,
-        deepAnalysis,
-        mode: {
-          kind: 'zone',
-          zone,
-          currentZones: zones,
-          currentZoneBbox: zoneBbox,
-          currentSingleZone: singleZone,
-        },
-      });
-      applySearchResult(result);
-    } catch (error) {
-      toast.error(error instanceof BusinessSearchError ? error.message : 'Zone rescan failed');
-    } finally {
-      setRescanningZoneId(null);
-    }
+  const handleZoneSwitch = (zone: Zone) => {
+    void rescanZone(zone, persistSearch);
   };
 
   // Floating UI shared by both results view and home view: the batch
@@ -548,18 +281,14 @@ function HomeInner() {
   const enrichmentFloatingUI = (
     <>
       <BatchEnrichBar
-        selectedLeads={enrichedResults.filter((l) => selectedForEnrich.has(l.placeId))}
-        cachedCount={
-          enrichedResults.filter(
-            (l) => selectedForEnrich.has(l.placeId) && enrichResultMap[l.placeId]?.cached
-          ).length
-        }
+        selectedLeads={selectedEnrichedResults}
+        cachedCount={cachedSelectedCount}
         onEnrich={() => {
           const fire = () => handleBatchEnrich();
           if (!gateEnrichment(fire)) fire();
         }}
         onClear={() => setSelectedForEnrich(new Set())}
-        isBusy={Object.values(enrichStatusMap).some((s) => s === 'enriching')}
+        isBusy={isEnrichmentBusy}
       />
       <EnrichmentExplainer
         isOpen={explainerOpen}
@@ -665,7 +394,7 @@ function HomeInner() {
                 </span>
                 <select
                   value={sortBy}
-                  onChange={(e) => setSortBy(e.target.value as SortOption)}
+                  onChange={(e) => setSortBy(e.target.value as SearchResultSort)}
                   className="cursor-pointer rounded-lg border border-border-bright/60 bg-surface-elevated/80 px-2.5 py-1.5 text-xs text-white/85 outline-none transition-colors hover:bg-surface-hover/80 focus:border-sky-400/60"
                 >
                   <option value="fit">Best Fit</option>
@@ -727,7 +456,7 @@ function HomeInner() {
                 action={
                   searchBannerError.isAuthError ? { label: 'Log in', href: '/login' } : undefined
                 }
-                onDismiss={() => setSearchBannerError(null)}
+                onDismiss={dismissSearchBanner}
               />
             )}
 
@@ -755,364 +484,23 @@ function HomeInner() {
                     business.leadScore >= 55 ? 'hot' : business.leadScore >= 35 ? 'mid' : 'cold';
                   const rank = index + 1;
                   return (
-                    <motion.div
+                    <LeadResultCard
                       key={business.placeId}
-                      layout
-                      initial={{ opacity: 0, y: 12 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, scale: 0.96 }}
-                      transition={{
-                        type: 'spring',
-                        stiffness: 320,
-                        damping: 32,
-                        mass: 0.6,
-                        delay: Math.min(index, 16) * 0.04,
-                      }}
-                      data-heat={tier}
-                      data-rank={rank}
-                      style={{ ['--i' as string]: index }}
-                      className="relative"
-                    >
-                      {rank <= 3 && (
-                        <span className={`lead-rank-pip lead-rank-${rank}`}>
-                          {rank === 1 && <Flame className="w-3 h-3" />}#{rank}
-                          {rank === 1 && ' HOT LEAD'}
-                        </span>
-                      )}
-                      <HoloCard
-                        className={`lead-card lead-tier-${tier} bg-surface-elevated/60 border border-border-bright/60 rounded-xl p-4 sm:p-5 backdrop-blur-sm`}
-                        spotlightColor={
-                          tier === 'hot'
-                            ? 'rgba(253, 186, 116, 0.32)'
-                            : tier === 'mid'
-                              ? 'rgba(125, 211, 252, 0.28)'
-                              : 'rgba(148, 163, 184, 0.22)'
-                        }
-                        glareColor={
-                          tier === 'hot' ? '#fdba74' : tier === 'mid' ? '#9be8ff' : '#cbd5e1'
-                        }
-                        glareOpacity={tier === 'hot' ? 0.4 : 0.3}
-                      >
-                        <div className="flex flex-col lg:flex-row gap-4">
-                          {/* Main info */}
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-start justify-between gap-3 mb-3">
-                              <div className="flex items-start gap-2 min-w-0">
-                                <label
-                                  className="flex-shrink-0 mt-1 cursor-pointer select-none"
-                                  title={`Select ${business.name} for batch enrichment`}
-                                >
-                                  <input
-                                    type="checkbox"
-                                    checked={selectedForEnrich.has(business.placeId)}
-                                    onChange={() => toggleSelectForEnrich(business.placeId)}
-                                    aria-label={`Select ${business.name} for batch enrichment`}
-                                    className="w-4 h-4 rounded border-gray-600 bg-transparent text-sky-500 focus:ring-sky-500 focus:ring-offset-0 cursor-pointer"
-                                  />
-                                </label>
-                                <div className="min-w-0">
-                                  <h3 className="lead-card-name text-lg font-semibold truncate">
-                                    {business.name}
-                                  </h3>
-                                  {business.address && (
-                                    <p className="text-sm text-gray-400 flex items-center gap-1.5 mt-1">
-                                      <MapPin className="w-3.5 h-3.5 flex-shrink-0" />
-                                      <span className="truncate">{business.address}</span>
-                                    </p>
-                                  )}
-                                </div>
-                              </div>
-                              <LeadScoreBadge
-                                score={business.leadScore}
-                                breakdown={business.scoreBreakdown}
-                                websiteAnalysis={business.websiteAnalysis}
-                              />
-                            </div>
-
-                            {/* Contact & Links */}
-                            <div className="flex flex-wrap gap-2 mb-3">
-                              {business.phone && (
-                                <a
-                                  href={`tel:${business.phone}`}
-                                  className="lead-chip inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-sm"
-                                >
-                                  <Phone className="w-3.5 h-3.5" />
-                                  {business.phone}
-                                </a>
-                              )}
-                              {business.email && isRealEmail(business.email) && (
-                                <a
-                                  href={`mailto:${business.email}`}
-                                  className="lead-chip inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-sm"
-                                >
-                                  <Mail className="w-3.5 h-3.5" />
-                                  {business.email}
-                                </a>
-                              )}
-                              {business.website && (
-                                <a
-                                  href={business.website}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="lead-chip inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-sm"
-                                >
-                                  <Globe className="w-3.5 h-3.5" />
-                                  Website
-                                  <ExternalLink className="w-3 h-3" />
-                                </a>
-                              )}
-                              <EnrichButton
-                                lead={business}
-                                status={enrichStatusMap[business.placeId] ?? 'idle'}
-                                onClick={() => handleEnrichOne(business)}
-                                onRequestExplainer={() =>
-                                  gateEnrichment(() => handleEnrichOne(business))
-                                }
-                              />
-                              {enrichStatusMap[business.placeId] === 'enriched' &&
-                                (() => {
-                                  const found = enrichResultMap[business.placeId];
-                                  if (!found) return null;
-                                  const deltas: string[] = [];
-                                  if (found.website) deltas.push('website');
-                                  const socialKeys = Object.keys(found.socials ?? {});
-                                  if (socialKeys.length > 0) {
-                                    deltas.push(
-                                      socialKeys.length === 1
-                                        ? (socialKeys[0] ?? 'social')
-                                        : `${socialKeys.length} socials`
-                                    );
-                                  }
-                                  if (deltas.length === 0) {
-                                    return (
-                                      <span
-                                        role="status"
-                                        className="lead-chip inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-sm bg-gray-500/15 text-gray-300"
-                                        title="Small businesses often run on phone + word-of-mouth — still a valid lead"
-                                      >
-                                        No public contact data found
-                                      </span>
-                                    );
-                                  }
-                                  return (
-                                    <span
-                                      role="status"
-                                      className="lead-chip inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-sm bg-emerald-500/15 text-emerald-300"
-                                    >
-                                      + {deltas.join(', ')}
-                                    </span>
-                                  );
-                                })()}
-                              {business.mapsUrl && (
-                                <a
-                                  href={business.mapsUrl}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="lead-chip inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-sm"
-                                >
-                                  <MapPin className="w-3.5 h-3.5" />
-                                  Maps
-                                  <ExternalLink className="w-3 h-3" />
-                                </a>
-                              )}
-                            </div>
-
-                            {/* Website Quality chips — top triggered Layer 5 signals.
-                        Every chip is a concrete, non-subjective fact usable in a sales email. */}
-                            {business.scoreBreakdown.qualityChips.length > 0 && (
-                              <div className="flex flex-wrap gap-2 mb-3">
-                                {business.scoreBreakdown.qualityChips.map((chip) => (
-                                  <span
-                                    key={chip}
-                                    className="lead-chip inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-sm bg-amber-500/15 text-amber-300"
-                                    title="Website-quality signal — deterministic, no subjective calls"
-                                  >
-                                    {chip}
-                                  </span>
-                                ))}
-                              </div>
-                            )}
-
-                            {/* Social Media Links */}
-                            {business.socialLinks &&
-                              Object.keys(business.socialLinks).length > 0 && (
-                                <div className="flex items-center gap-2 mb-3">
-                                  <Users className="w-3.5 h-3.5 text-gray-500" />
-                                  {business.socialLinks.facebook && (
-                                    <a
-                                      href={business.socialLinks.facebook}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="text-gray-500 hover:text-blue-400 transition-colors"
-                                      title="Facebook"
-                                    >
-                                      <svg
-                                        className="w-4 h-4"
-                                        fill="currentColor"
-                                        viewBox="0 0 24 24"
-                                      >
-                                        <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z" />
-                                      </svg>
-                                    </a>
-                                  )}
-                                  {business.socialLinks.instagram && (
-                                    <a
-                                      href={business.socialLinks.instagram}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="text-gray-500 hover:text-pink-400 transition-colors"
-                                      title="Instagram"
-                                    >
-                                      <svg
-                                        className="w-4 h-4"
-                                        fill="currentColor"
-                                        viewBox="0 0 24 24"
-                                      >
-                                        <path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zM12 0C8.741 0 8.333.014 7.053.072 2.695.272.273 2.69.073 7.052.014 8.333 0 8.741 0 12c0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98C8.333 23.986 8.741 24 12 24c3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98C15.668.014 15.259 0 12 0zm0 5.838a6.162 6.162 0 100 12.324 6.162 6.162 0 000-12.324zM12 16a4 4 0 110-8 4 4 0 010 8zm6.406-11.845a1.44 1.44 0 100 2.881 1.44 1.44 0 000-2.881z" />
-                                      </svg>
-                                    </a>
-                                  )}
-                                  {business.socialLinks.twitter && (
-                                    <a
-                                      href={business.socialLinks.twitter}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="text-gray-500 hover:text-white transition-colors"
-                                      title="X / Twitter"
-                                    >
-                                      <svg
-                                        className="w-4 h-4"
-                                        fill="currentColor"
-                                        viewBox="0 0 24 24"
-                                      >
-                                        <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
-                                      </svg>
-                                    </a>
-                                  )}
-                                  {business.socialLinks.linkedin && (
-                                    <a
-                                      href={business.socialLinks.linkedin}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="text-gray-500 hover:text-blue-300 transition-colors"
-                                      title="LinkedIn"
-                                    >
-                                      <svg
-                                        className="w-4 h-4"
-                                        fill="currentColor"
-                                        viewBox="0 0 24 24"
-                                      >
-                                        <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 01-2.063-2.065 2.064 2.064 0 112.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z" />
-                                      </svg>
-                                    </a>
-                                  )}
-                                  {business.socialLinks.youtube && (
-                                    <a
-                                      href={business.socialLinks.youtube}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="text-gray-500 hover:text-red-400 transition-colors"
-                                      title="YouTube"
-                                    >
-                                      <svg
-                                        className="w-4 h-4"
-                                        fill="currentColor"
-                                        viewBox="0 0 24 24"
-                                      >
-                                        <path d="M23.498 6.186a3.016 3.016 0 00-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 00.502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 002.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 002.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z" />
-                                      </svg>
-                                    </a>
-                                  )}
-                                  {business.socialLinks.tiktok && (
-                                    <a
-                                      href={business.socialLinks.tiktok}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="text-gray-500 hover:text-white transition-colors"
-                                      title="TikTok"
-                                    >
-                                      <svg
-                                        className="w-4 h-4"
-                                        fill="currentColor"
-                                        viewBox="0 0 24 24"
-                                      >
-                                        <path d="M12.525.02c1.31-.02 2.61-.01 3.91-.02.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.05-2.89-.35-4.2-.97-.57-.26-1.1-.59-1.62-.93-.01 2.92.01 5.84-.02 8.75-.08 1.4-.54 2.79-1.35 3.94-1.31 1.92-3.58 3.17-5.91 3.21-1.43.08-2.86-.31-4.08-1.03-2.02-1.19-3.44-3.37-3.65-5.71-.02-.5-.03-1-.01-1.49.18-1.9 1.12-3.72 2.58-4.96 1.66-1.44 3.98-2.13 6.15-1.72.02 1.48-.04 2.96-.04 4.44-.99-.32-2.15-.23-3.02.37-.63.41-1.11 1.04-1.36 1.75-.21.51-.15 1.07-.14 1.61.24 1.64 1.82 3.02 3.5 2.87 1.12-.01 2.19-.66 2.77-1.61.19-.33.4-.67.41-1.06.1-1.79.06-3.57.07-5.36.01-4.03-.01-8.05.02-12.07z" />
-                                      </svg>
-                                    </a>
-                                  )}
-                                </div>
-                              )}
-
-                            {/* Stats */}
-                            <div className="lead-stats flex items-center gap-3 text-sm text-gray-400">
-                              {business.rating && (
-                                <span className="lead-stat flex items-center gap-1.5">
-                                  <Star className="w-4 h-4 text-yellow-400 drop-shadow-[0_0_6px_rgba(250,204,21,0.55)]" />
-                                  <span className="tabular-nums font-medium text-white/85">
-                                    {business.rating.toFixed(1)}
-                                  </span>
-                                </span>
-                              )}
-                              {typeof business.priceLevel === 'number' &&
-                                business.priceLevel > 0 && (
-                                  <PriceTier level={business.priceLevel} />
-                                )}
-                              {business.reviewCount !== undefined && (
-                                <span className="lead-stat flex items-center gap-1.5">
-                                  <MessageSquare className="w-4 h-4 text-white/40" />
-                                  <span className="tabular-nums font-medium text-white/75">
-                                    {business.reviewCount}
-                                  </span>
-                                  <span className="text-white/40">reviews</span>
-                                </span>
-                              )}
-                              <span
-                                className="lead-stat flex items-center gap-1.5"
-                                title="Contact channels available"
-                              >
-                                <Users className="w-4 h-4 text-white/40" />
-                                <span className="tabular-nums font-medium text-white/75">
-                                  {business.contactPoints}
-                                </span>
-                                <span className="text-white/40">
-                                  contact {business.contactPoints === 1 ? 'point' : 'points'}
-                                </span>
-                              </span>
-                            </div>
-                          </div>
-
-                          {/* Budget & Opportunities */}
-                          <div className="lg:w-80 flex flex-col gap-3">
-                            {/* Budget Estimate */}
-                            {business.budgetEstimate && (
-                              <BudgetCard estimate={business.budgetEstimate} />
-                            )}
-
-                            <OpportunitiesList
-                              opportunities={business.opportunities}
-                              maxVisible={2}
-                            />
-                            <div className="group relative">
-                              <GlowEffect
-                                colors={['#10b981', '#14b8a6', '#06b6d4', '#10b981']}
-                                mode="colorShift"
-                                blur="soft"
-                                duration={3.5}
-                                className="rounded-lg opacity-0 transition-opacity duration-300 group-hover:opacity-65"
-                              />
-                              <button
-                                onClick={() => handleSaveLead(business)}
-                                disabled={savingLeadIds.has(business.placeId)}
-                                className="relative flex w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 px-4 py-2.5 text-sm font-medium text-white shadow-[0_4px_16px_rgba(16,185,129,0.25)] transition-all hover:from-emerald-400 hover:to-teal-500 hover:shadow-[0_6px_24px_rgba(16,185,129,0.4)] disabled:cursor-not-allowed disabled:opacity-50"
-                              >
-                                <Plus className="h-4 w-4" />
-                                {savingLeadIds.has(business.placeId) ? 'Saving...' : 'Save Lead'}
-                              </button>
-                            </div>
-                          </div>
-                        </div>
-                      </HoloCard>
-                    </motion.div>
+                      lead={business}
+                      index={index}
+                      rank={rank}
+                      tier={tier}
+                      selected={selectedForEnrich.has(business.placeId)}
+                      onToggleSelection={() => toggleSelectForEnrich(business.placeId)}
+                      enrichmentStatus={enrichStatusMap[business.placeId] ?? 'idle'}
+                      enrichmentResult={enrichResultMap[business.placeId]}
+                      onEnrich={() => handleEnrichOne(business)}
+                      onRequestEnrichmentExplainer={() =>
+                        gateEnrichment(() => handleEnrichOne(business))
+                      }
+                      saveBusy={savingLeadIds.has(business.placeId)}
+                      onSave={() => handleSaveLead(business)}
+                    />
                   );
                 })}
               </AnimatePresence>
@@ -1296,133 +684,11 @@ function HomeInner() {
             zones={radarPhase === 'revealing' ? zones : null}
             zoneBbox={radarPhase === 'revealing' ? zoneBbox : null}
             singleZone={singleZone}
-            onComplete={handleRadarComplete}
+            onComplete={completeRadar}
           />
         )}
       </AnimatePresence>
     </>
-  );
-}
-
-function BudgetCard({
-  estimate,
-}: {
-  estimate: {
-    min: number;
-    max: number;
-    label: string;
-    confidence: 'high' | 'medium' | 'low';
-    reasons: string[];
-  };
-}) {
-  const [expanded, setExpanded] = useState(false);
-
-  const confidenceColor =
-    estimate.confidence === 'high'
-      ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
-      : estimate.confidence === 'medium'
-        ? 'text-amber-400 bg-amber-500/10 border-amber-500/20'
-        : 'text-gray-400 bg-white/5 border-white/10';
-
-  return (
-    <div
-      className={`budget-card relative overflow-hidden rounded-lg border p-3 ${confidenceColor}`}
-    >
-      <div className="budget-card-shine" aria-hidden />
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="relative w-full flex items-center justify-between"
-      >
-        <div className="flex items-center gap-2">
-          <Wallet className="w-4 h-4 drop-shadow-[0_0_6px_currentColor]" />
-          <span className="text-sm font-semibold tracking-wide">{estimate.label}</span>
-          <span className="font-mono text-[9px] uppercase tracking-[0.18em] opacity-55">
-            {estimate.confidence} conf.
-          </span>
-        </div>
-        {expanded ? (
-          <ChevronUp className="w-3.5 h-3.5 opacity-50" />
-        ) : (
-          <ChevronDown className="w-3.5 h-3.5 opacity-50" />
-        )}
-      </button>
-      {expanded && (
-        <div className="relative mt-2 pt-2 border-t border-current/10 space-y-1">
-          {estimate.reasons.map((reason, i) => (
-            <div key={i} className="flex items-start gap-1.5 text-[11px] opacity-80">
-              <span className="mt-0.5 w-1 h-1 rounded-full bg-current flex-shrink-0" />
-              <span>{reason}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function isRealEmail(email: string): boolean {
-  const junk = [
-    /user@/i,
-    /name@/i,
-    /someone@/i,
-    /test@/i,
-    /your/i,
-    /example\.com/i,
-    /domain\.com/i,
-    /email\.com$/i,
-    /noreply/i,
-    /no-reply/i,
-    /placeholder/i,
-    /sample/i,
-    /changeme/i,
-    /wix\.com/i,
-    /sentry/i,
-    /wordpress/i,
-  ];
-  return !junk.some((p) => p.test(email));
-}
-
-function PriceTier({ level }: { level: number }) {
-  const capped = Math.max(1, Math.min(4, Math.round(level)));
-  const tierConfig: Record<number, { label: string; color: string; glow: string; tip: string }> = {
-    1: {
-      label: '$',
-      color: 'text-slate-400',
-      glow: '',
-      tip: 'Budget pricing — tight margins',
-    },
-    2: {
-      label: '$$',
-      color: 'text-emerald-300',
-      glow: 'drop-shadow-[0_0_4px_rgba(52,211,153,0.5)]',
-      tip: 'Mid-range pricing',
-    },
-    3: {
-      label: '$$$',
-      color: 'text-amber-300',
-      glow: 'drop-shadow-[0_0_6px_rgba(252,211,77,0.6)]',
-      tip: 'Upscale pricing — solid budget',
-    },
-    4: {
-      label: '$$$$',
-      color: 'text-yellow-200',
-      glow: 'drop-shadow-[0_0_8px_rgba(253,224,71,0.85)]',
-      tip: 'Premium pricing — deep pockets',
-    },
-  };
-  const cfg = tierConfig[capped] ?? {
-    label: '$',
-    color: 'text-slate-400',
-    glow: '',
-    tip: 'Budget pricing — tight margins',
-  };
-  return (
-    <span
-      className={`lead-stat flex items-center gap-1 font-mono font-semibold tabular-nums ${cfg.color} ${cfg.glow}`}
-      title={cfg.tip}
-    >
-      {cfg.label}
-    </span>
   );
 }
 

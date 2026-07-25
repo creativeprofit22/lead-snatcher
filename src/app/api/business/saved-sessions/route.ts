@@ -1,15 +1,15 @@
 import { NextRequest } from 'next/server';
 import { auth } from '@/lib/auth';
 import { createSavedSession, listSavedSessions } from '@/lib/business/saved-sessions-store';
-import type { CachedSearch } from '@/lib/search-cache';
+import type { PersistedSearchPayload } from '@/lib/business/search-snapshot';
 
 /**
  * /api/business/saved-sessions — list + create endpoints.
  *
  *  GET  → list all saved sessions for the current user (summary only,
  *         no payload — consumers fetch by id for the full data).
- *  POST → create a new named saved session from a CachedSearch-shaped
- *         payload plus a `name` field.
+ *  POST → create a new named session from a durable search payload plus a
+ *         `name` field.
  *
  * Delete + fetch-by-id live at /[id]/route.ts so the URL structure mirrors
  * typical REST collection + member semantics.
@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  const incoming = body as Partial<CachedSearch> & { name?: string };
+  const incoming = body as Partial<PersistedSearchPayload> & { name?: string };
   if (
     !incoming ||
     typeof incoming.name !== 'string' ||

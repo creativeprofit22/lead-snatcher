@@ -1,6 +1,6 @@
 import { z } from 'zod';
+import type { SearchMarketDensity, SearchSnapshot } from '@/lib/business/search-snapshot';
 import type { Zone } from '@/lib/business/zone-grid';
-import type { CachedMarketDensity, CachedSearch } from '@/lib/search-cache';
 import type { BusinessSearchResult, IndustryType } from '@/types';
 
 const businessResultSchema = z
@@ -89,12 +89,12 @@ export interface RunBusinessSearchInput {
 
 export interface AppliedBusinessSearch {
   results: BusinessSearchResult[];
-  marketDensity: CachedMarketDensity | null;
+  marketDensity: SearchMarketDensity | null;
   zones: Zone[];
   zoneBbox: [number, number, number, number] | null;
   singleZone: boolean;
   focusedZoneId: string | null;
-  cachePayload: Omit<CachedSearch, 'timestamp'>;
+  cachePayload: SearchSnapshot;
   notification: { type: 'success' | 'info' | 'error'; message: string; duration?: number };
   shouldReveal: boolean;
   shouldPersist: boolean;
@@ -157,7 +157,7 @@ export function applyBusinessSearchResponse(
   const focusedZoneId =
     mode.kind === 'initial' ? pickFocusedZoneId(zones, input.city) : mode.zone.id;
 
-  const cachePayload: Omit<CachedSearch, 'timestamp'> = {
+  const cachePayload: SearchSnapshot = {
     results,
     industry: input.cacheIndustry,
     city: input.city,

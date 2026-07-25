@@ -3,11 +3,11 @@
 import { useState } from 'react';
 import { Bookmark, Check, Loader2, X } from 'lucide-react';
 import { toast } from 'sonner';
-import type { CachedSearch } from '@/lib/search-cache';
+import type { PersistedSearchPayload } from '@/lib/business/search-snapshot';
 
 interface Props {
-  /** Full CachedSearch-shaped payload from the current results view. */
-  getPayload: () => Omit<CachedSearch, 'enrichStatusMap' | 'enrichResultMap' | 'selectedForEnrich'>;
+  /** Durable payload from the current results view. */
+  getPayload: () => PersistedSearchPayload;
   /** Default name suggestion — usually "Industry in City". */
   defaultName?: string;
   /** Optional compact variant for tight header rows. */
