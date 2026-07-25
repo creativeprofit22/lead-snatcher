@@ -1,40 +1,31 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Trash2, Tag, RefreshCw, Download, X, Check, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { LEAD_STATUSES } from '@/lib/constants';
-import type { Lead, LeadStatus, Tag as TagType } from '@/types';
+import type { CrmTagsResource } from '@/lib/hooks/useCrmTags';
+import type { Lead, LeadStatus } from '@/types';
 
 interface BulkActionsProps {
   selectedLeads: Lead[];
   onClearSelection: () => void;
-  onBulkUpdate: () => void;
+  onBulkUpdate: () => Promise<void>;
+  tagCatalog: CrmTagsResource;
 }
 
-export function BulkActions({ selectedLeads, onClearSelection, onBulkUpdate }: BulkActionsProps) {
+export function BulkActions({
+  selectedLeads,
+  onClearSelection,
+  onBulkUpdate,
+  tagCatalog,
+}: BulkActionsProps) {
   const [isStatusOpen, setIsStatusOpen] = useState(false);
   const [isTagsOpen, setIsTagsOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
-  const [availableTags, setAvailableTags] = useState<TagType[]>([]);
-
-  // Fetch available tags
-  useEffect(() => {
-    const fetchTags = async () => {
-      try {
-        const res = await fetch('/api/tags');
-        if (res.ok) {
-          const data = await res.json();
-          setAvailableTags(data.tags || []);
-        }
-      } catch (error) {
-        console.error('Failed to fetch tags:', error);
-      }
-    };
-    fetchTags();
-  }, []);
+  const { tags: availableTags, loading: tagsLoading, error: tagsError, refetch } = tagCatalog;
 
   const handleBulkStatusChange = async (status: LeadStatus) => {
     setIsUpdating(true);
@@ -53,8 +44,8 @@ export function BulkActions({ selectedLeads, onClearSelection, onBulkUpdate }: B
 
       toast.success(`Updated ${selectedLeads.length} leads to "${status}"`);
       setIsStatusOpen(false);
+      await onBulkUpdate();
       onClearSelection();
-      onBulkUpdate();
     } catch {
       toast.error('Failed to update status');
     } finally {
@@ -77,11 +68,12 @@ export function BulkActions({ selectedLeads, onClearSelection, onBulkUpdate }: B
 
       if (!res.ok) throw new Error('Failed to add tag');
 
-      const tag = availableTags.find((t) => t.id === tagId);
-      toast.success(`Added "${tag?.name}" to ${selectedLeads.length} leads`);
+      const { addedCount } = (await res.json()) as { addedCount: number };
+      const tag = availableTags.find((item) => item.id === tagId);
+      toast.success(`Added "${tag?.name}" to ${addedCount} lead${addedCount === 1 ? '' : 's'}`);
       setIsTagsOpen(false);
+      await onBulkUpdate();
       onClearSelection();
-      onBulkUpdate();
     } catch {
       toast.error('Failed to add tag');
     } finally {
@@ -111,8 +103,8 @@ export function BulkActions({ selectedLeads, onClearSelection, onBulkUpdate }: B
       if (!res.ok) throw new Error('Failed to delete leads');
 
       toast.success(`Deleted ${selectedLeads.length} leads`);
+      await onBulkUpdate();
       onClearSelection();
-      onBulkUpdate();
     } catch {
       toast.error('Failed to delete leads');
     } finally {
@@ -198,26 +190,49 @@ export function BulkActions({ selectedLeads, onClearSelection, onBulkUpdate }: B
             setIsTagsOpen(!isTagsOpen);
             setIsStatusOpen(false);
           }}
-          disabled={isUpdating || availableTags.length === 0}
+          disabled={isUpdating}
+          aria-expanded={isTagsOpen}
           className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-gray-200 text-sm transition-colors disabled:opacity-50"
         >
           <Tag className="w-4 h-4" />
           Add Tag
         </button>
 
-        {isTagsOpen && availableTags.length > 0 && (
-          <div className="absolute bottom-full mb-2 left-0 bg-gray-900 border border-white/20 rounded-lg shadow-xl p-2 min-w-[160px] max-h-64 overflow-y-auto">
-            {availableTags.map((tag) => (
-              <button
-                key={tag.id}
-                onClick={() => handleBulkAddTag(tag.id)}
-                disabled={isUpdating}
-                className="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-white/10 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
+        {isTagsOpen && (
+          <div className="absolute bottom-full mb-2 left-0 bg-gray-900 border border-white/20 rounded-lg shadow-xl p-2 min-w-[180px] max-h-64 overflow-y-auto">
+            {tagsLoading ? (
+              <div
+                role="status"
+                className="flex items-center gap-2 px-3 py-2 text-sm text-gray-400"
               >
-                <span className="w-3 h-3 rounded-full" style={{ backgroundColor: tag.color }} />
-                {tag.name}
-              </button>
-            ))}
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Loading tags...
+              </div>
+            ) : tagsError ? (
+              <div role="alert" className="px-3 py-2 text-sm text-gray-400">
+                <p>Failed to load tags</p>
+                <button
+                  onClick={() => void refetch()}
+                  className="mt-1 text-gray-200 hover:text-white underline underline-offset-2"
+                >
+                  Retry
+                </button>
+              </div>
+            ) : availableTags.length === 0 ? (
+              <p className="px-3 py-2 text-sm text-gray-500">No tags available</p>
+            ) : (
+              availableTags.map((tag) => (
+                <button
+                  key={tag.id}
+                  onClick={() => void handleBulkAddTag(tag.id)}
+                  disabled={isUpdating}
+                  className="w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-white/10 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
+                >
+                  <span className="w-3 h-3 rounded-full" style={{ backgroundColor: tag.color }} />
+                  {tag.name}
+                </button>
+              ))
+            )}
           </div>
         )}
       </div>

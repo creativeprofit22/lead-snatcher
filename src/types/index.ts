@@ -207,6 +207,15 @@ export interface Tag {
   createdAt: string;
 }
 
+// Tag catalog item with its current lead usage count
+export interface TagWithCount extends Tag {
+  leadCount: number;
+}
+
+export interface TagsResponse {
+  tags: TagWithCount[];
+}
+
 // Pipeline statistics
 export interface PipelineStats {
   total: number;

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import {
   Filter,
   X,
@@ -13,7 +13,8 @@ import {
   Settings,
 } from 'lucide-react';
 import { LEAD_STATUSES, INDUSTRY_TYPES } from '@/lib/constants';
-import type { LeadStatus, IndustryType, Tag } from '@/types';
+import type { CrmTagsResource } from '@/lib/hooks/useCrmTags';
+import type { LeadStatus, IndustryType } from '@/types';
 
 // Filter state type
 export interface FilterState {
@@ -44,6 +45,7 @@ interface FilterSidebarProps {
   onClose: () => void;
   leadCount: number;
   onOpenTagManager?: () => void;
+  tagCatalog: CrmTagsResource;
 }
 
 export function FilterSidebar({
@@ -53,6 +55,7 @@ export function FilterSidebar({
   onClose,
   leadCount,
   onOpenTagManager,
+  tagCatalog,
 }: FilterSidebarProps) {
   // Section collapse state - all closed by default
   const [sections, setSections] = useState({
@@ -63,32 +66,7 @@ export function FilterSidebar({
     followUp: false,
     sort: false,
   });
-
-  // Available tags
-  const [availableTags, setAvailableTags] = useState<Tag[]>([]);
-
-  // Fetch available tags on mount
-  useEffect(() => {
-    let isMounted = true;
-
-    async function fetchTags() {
-      try {
-        const response = await fetch('/api/tags');
-        if (response.ok && isMounted) {
-          const data = await response.json();
-          setAvailableTags(data.tags);
-        }
-      } catch {
-        // Silently fail
-      }
-    }
-
-    fetchTags();
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
+  const { tags: availableTags, loading: tagsLoading, error: tagsError, refetch } = tagCatalog;
 
   const toggleSection = (section: keyof typeof sections) => {
     setSections((prev) => ({ ...prev, [section]: !prev[section] }));
@@ -350,7 +328,21 @@ export function FilterSidebar({
             </button>
             {sections.tags && (
               <div className="mt-2">
-                {availableTags.length > 0 ? (
+                {tagsLoading ? (
+                  <p role="status" className="text-sm text-gray-500 px-2">
+                    Loading tags...
+                  </p>
+                ) : tagsError ? (
+                  <div role="alert" className="px-2 text-sm text-gray-500">
+                    <p>Failed to load tags</p>
+                    <button
+                      onClick={() => void refetch()}
+                      className="mt-1 text-gray-300 hover:text-white underline underline-offset-2"
+                    >
+                      Retry
+                    </button>
+                  </div>
+                ) : availableTags.length > 0 ? (
                   <div className="space-y-1 max-h-48 overflow-y-auto scrollbar-hidden">
                     {availableTags.map((tag) => (
                       <label

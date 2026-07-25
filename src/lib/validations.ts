@@ -128,25 +128,34 @@ export const createContactLogSchema = z.object({
 
 // POST /api/leads/[id]/tags
 export const addTagToLeadSchema = z.object({
-  tagId: z.string().min(1, 'Tag ID is required'),
+  tagId: z.preprocess(
+    (value) => (typeof value === 'string' ? value : ''),
+    z.string().trim().min(1, 'Tag ID is required')
+  ),
 });
 
 // PATCH /api/leads/bulk
-export const bulkUpdateLeadsSchema = z
-  .object({
-    leadIds: z.array(z.string()).min(1, 'At least one lead ID is required'),
-    action: z.enum(['status', 'add_tag']),
-    status: leadStatusSchema.optional(),
-    tagId: z.string().optional(),
-  })
-  .refine(
-    (data) => {
-      if (data.action === 'status') return !!data.status;
-      if (data.action === 'add_tag') return !!data.tagId;
-      return true;
-    },
-    { message: 'Status is required for status action, tagId for add_tag action' }
-  );
+const bulkLeadIdsSchema = z
+  .array(z.string().trim().min(1, 'Lead IDs cannot be empty'))
+  .min(1, 'At least one lead ID is required')
+  .refine((leadIds) => new Set(leadIds).size === leadIds.length, {
+    message: 'Lead IDs must be unique',
+  });
+
+export const bulkUpdateLeadsSchema = z.discriminatedUnion('action', [
+  z.object({
+    leadIds: bulkLeadIdsSchema,
+    action: z.literal('status'),
+    status: leadStatusSchema,
+    tagId: z.never().optional(),
+  }),
+  z.object({
+    leadIds: bulkLeadIdsSchema,
+    action: z.literal('add_tag'),
+    status: z.never().optional(),
+    tagId: z.string().trim().min(1, 'Tag ID is required'),
+  }),
+]);
 
 // DELETE /api/leads/bulk
 export const bulkDeleteLeadsSchema = z.object({
@@ -159,19 +168,21 @@ export const saveApiKeySchema = z.object({
   key: z.string().min(1, 'API key is required').max(500),
 });
 
+const tagNameSchema = z.string().trim().min(1, 'Name is required').max(100);
+const tagColorSchema = z
+  .string()
+  .regex(/^#[0-9A-Fa-f]{6}$/, 'Invalid color format. Use hex (e.g., #3b82f6)');
+
 // POST /api/tags
 export const createTagSchema = z.object({
-  name: z.string().min(1, 'Name is required').max(100),
-  color: z.string().regex(/^#[0-9A-Fa-f]{6}$/, 'Invalid color format. Use hex (e.g., #3b82f6)'),
+  name: tagNameSchema,
+  color: tagColorSchema,
 });
 
 // PATCH /api/tags/[id]
 export const updateTagSchema = z.object({
-  name: z.string().min(1).max(100).optional(),
-  color: z
-    .string()
-    .regex(/^#[0-9A-Fa-f]{6}$/, 'Invalid color format. Use hex (e.g., #3b82f6)')
-    .optional(),
+  name: tagNameSchema.optional(),
+  color: tagColorSchema.optional(),
 });
 
 // POST /api/tasks

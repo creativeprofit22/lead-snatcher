@@ -7,90 +7,88 @@ import { parseRouteBody, requireRouteUserId, routeErrorResponse } from '@/lib/ro
 export async function PATCH(request: Request) {
   try {
     const userId = await requireRouteUserId();
-    const { leadIds, action, status, tagId } = await parseRouteBody(request, bulkUpdateLeadsSchema);
+    const update = await parseRouteBody(request, bulkUpdateLeadsSchema);
 
-    // Verify all leads belong to user
+    // Verify all leads belong to user.
     const leads = await prisma.lead.findMany({
       where: {
-        id: { in: leadIds },
-        userId: userId,
+        id: { in: update.leadIds },
+        userId,
       },
+      select: { id: true },
     });
 
-    if (leads.length !== leadIds.length) {
+    if (leads.length !== update.leadIds.length) {
       return NextResponse.json({ error: 'Some leads not found' }, { status: 404 });
     }
 
-    if (action === 'status') {
-      // Zod refine guarantees status exists when action === 'status'
-      const newStatus = status!;
-
-      // Update all leads
+    if (update.action === 'status') {
       await prisma.lead.updateMany({
         where: {
-          id: { in: leadIds },
-          userId: userId,
+          id: { in: update.leadIds },
+          userId,
         },
         data: {
-          status: newStatus,
-          ...(['contacted', 'called'].includes(newStatus) && { lastContactedAt: new Date() }),
+          status: update.status,
+          ...(['contacted', 'called'].includes(update.status) && {
+            lastContactedAt: new Date(),
+          }),
         },
       });
 
       return NextResponse.json({
-        message: `Updated ${leads.length} leads to "${newStatus}"`,
+        message: `Updated ${leads.length} leads to "${update.status}"`,
         updatedCount: leads.length,
       });
     }
 
-    if (action === 'add_tag') {
-      if (!tagId) {
-        return NextResponse.json({ error: 'Tag ID is required' }, { status: 400 });
-      }
-
-      // Verify tag belongs to user
-      const tag = await prisma.tag.findFirst({
+    const result = await prisma.$transaction(async (transaction) => {
+      const tag = await transaction.tag.findFirst({
         where: {
-          id: tagId,
-          userId: userId,
+          id: update.tagId,
+          userId,
         },
+        select: { name: true },
       });
 
       if (!tag) {
-        return NextResponse.json({ error: 'Tag not found' }, { status: 404 });
+        return null;
       }
 
-      // Add tag to all leads (skip if already exists)
-      let addedCount = 0;
-      for (const lead of leads) {
-        const existing = await prisma.leadTag.findUnique({
-          where: {
-            leadId_tagId: {
-              leadId: lead.id,
-              tagId,
-            },
-          },
-        });
-
-        if (!existing) {
-          await prisma.leadTag.create({
-            data: {
-              leadId: lead.id,
-              tagId,
-            },
-          });
-
-          addedCount++;
-        }
-      }
-
-      return NextResponse.json({
-        message: `Added tag "${tag.name}" to ${addedCount} leads`,
-        addedCount,
+      const existingLinks = await transaction.leadTag.findMany({
+        where: {
+          leadId: { in: update.leadIds },
+          tagId: update.tagId,
+        },
+        select: { leadId: true },
       });
+      const existingLeadIds = new Set(existingLinks.map((link) => link.leadId));
+      const missingLeadIds = update.leadIds.filter((leadId) => !existingLeadIds.has(leadId));
+
+      const created = missingLeadIds.length
+        ? await transaction.leadTag.createMany({
+            data: missingLeadIds.map((leadId) => ({ leadId, tagId: update.tagId })),
+          })
+        : { count: 0 };
+
+      return {
+        tagName: tag.name,
+        requestedCount: update.leadIds.length,
+        alreadyPresentCount: existingLinks.length,
+        addedCount: created.count,
+      };
+    });
+
+    if (!result) {
+      return NextResponse.json({ error: 'Tag not found' }, { status: 404 });
     }
 
-    return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
+    return NextResponse.json({
+      message: `Added tag "${result.tagName}" to ${result.addedCount} leads`,
+      requestedCount: result.requestedCount,
+      alreadyPresentCount: result.alreadyPresentCount,
+      addedCount: result.addedCount,
+    });
   } catch (error) {
     console.error('Bulk update error:', error);
     return routeErrorResponse(error, 'Failed to update leads');

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Filter } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -18,8 +18,10 @@ import {
   BulkActions,
 } from '@/components/crm';
 import type { TabValue, FilterState, ViewMode } from '@/components/crm';
+import type { TagMutationResult } from '@/components/crm/TagManager';
 import { LeadDetailModal } from '@/components/leads';
 import { TaskSlideOver } from '@/components/tasks';
+import { useCrmTags } from '@/lib/hooks/useCrmTags';
 import type { Lead, PipelineStats, LeadStatus } from '@/types';
 
 // LocalStorage key for view preference
@@ -37,6 +39,8 @@ export default function CRMPage() {
   const [leads, setLeads] = useState<Lead[]>([]);
   const [stats, setStats] = useState<PipelineStats | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const leadsRequestVersion = useRef(0);
+  const tagCatalog = useCrmTags();
 
   // Filter state
   const [filters, setFilters] = useState<FilterState>(defaultFilters);
@@ -64,61 +68,71 @@ export default function CRMPage() {
     localStorage.setItem(VIEW_MODE_KEY, mode);
   }, []);
 
-  // Fetch leads with filters and tab
-  const fetchLeads = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      const params = new URLSearchParams();
+  // Fetch leads with an explicit filter snapshot so mutations cannot reuse a deleted tag ID.
+  const fetchLeadsForFilters = useCallback(
+    async (requestedFilters: FilterState) => {
+      const requestVersion = ++leadsRequestVersion.current;
+      setIsLoading(true);
+      try {
+        const params = new URLSearchParams();
 
-      // Tab-based status filtering
-      if (activeTab === 'won') {
-        params.set('statuses', 'won');
-      } else if (activeTab === 'lost') {
-        params.set('statuses', 'lost');
-      } else if (activeTab === 'pipeline') {
-        params.set('statuses', 'contacted,called,proposal_sent,negotiating');
-      } else if (filters.statuses.length > 0) {
-        params.set('statuses', filters.statuses.join(','));
-      }
+        // Tab-based status filtering
+        if (activeTab === 'won') {
+          params.set('statuses', 'won');
+        } else if (activeTab === 'lost') {
+          params.set('statuses', 'lost');
+        } else if (activeTab === 'pipeline') {
+          params.set('statuses', 'contacted,called,proposal_sent,negotiating');
+        } else if (requestedFilters.statuses.length > 0) {
+          params.set('statuses', requestedFilters.statuses.join(','));
+        }
 
-      // Score range
-      if (filters.scoreRange.min > 0) {
-        params.set('minScore', filters.scoreRange.min.toString());
-      }
-      if (filters.scoreRange.max < 100) {
-        params.set('maxScore', filters.scoreRange.max.toString());
-      }
+        if (requestedFilters.scoreRange.min > 0) {
+          params.set('minScore', requestedFilters.scoreRange.min.toString());
+        }
+        if (requestedFilters.scoreRange.max < 100) {
+          params.set('maxScore', requestedFilters.scoreRange.max.toString());
+        }
+        if (requestedFilters.industries.length > 0) {
+          params.set('industries', requestedFilters.industries.join(','));
+        }
+        if (requestedFilters.tags.length > 0) {
+          params.set('tags', requestedFilters.tags.join(','));
+        }
+        if (requestedFilters.followUp !== 'all') {
+          params.set('followUp', requestedFilters.followUp);
+        }
 
-      // Industries filter
-      if (filters.industries.length > 0) {
-        params.set('industries', filters.industries.join(','));
-      }
+        params.set('sortBy', requestedFilters.sortBy);
+        params.set('sortOrder', requestedFilters.sortOrder);
 
-      // Tags filter
-      if (filters.tags.length > 0) {
-        params.set('tags', filters.tags.join(','));
+        const response = await fetch(`/api/leads?${params}`);
+        if (response.ok && requestVersion === leadsRequestVersion.current) {
+          const data = await response.json();
+          const nextLeads = data.leads || [];
+          setLeads(nextLeads);
+          setSelectedLead((current) => {
+            if (!current) return null;
+            return nextLeads.find((lead: Lead) => lead.id === current.id) || current;
+          });
+        }
+      } catch {
+        if (requestVersion === leadsRequestVersion.current) {
+          toast.error('Failed to load leads');
+        }
+      } finally {
+        if (requestVersion === leadsRequestVersion.current) {
+          setIsLoading(false);
+        }
       }
+    },
+    [activeTab]
+  );
 
-      // Follow-up filter
-      if (filters.followUp !== 'all') {
-        params.set('followUp', filters.followUp);
-      }
-
-      // Sorting
-      params.set('sortBy', filters.sortBy);
-      params.set('sortOrder', filters.sortOrder);
-
-      const response = await fetch(`/api/leads?${params}`);
-      if (response.ok) {
-        const data = await response.json();
-        setLeads(data.leads || []);
-      }
-    } catch {
-      toast.error('Failed to load leads');
-    } finally {
-      setIsLoading(false);
-    }
-  }, [activeTab, filters]);
+  const fetchLeads = useCallback(
+    () => fetchLeadsForFilters(filters),
+    [fetchLeadsForFilters, filters]
+  );
 
   // Fetch stats
   const fetchStats = useCallback(async () => {
@@ -175,7 +189,7 @@ export default function CRMPage() {
 
       if (response.ok) {
         setLeads((prev) => prev.filter((lead) => lead.id !== leadId));
-        fetchStats();
+        await Promise.all([fetchStats(), tagCatalog.refetch()]);
         toast.success('Lead deleted');
       } else {
         toast.error('Failed to delete');
@@ -225,10 +239,26 @@ export default function CRMPage() {
     setSelectedLeadIds(new Set());
   }, []);
 
-  const handleBulkUpdate = useCallback(() => {
-    fetchLeads();
-    fetchStats();
-  }, [fetchLeads, fetchStats]);
+  const handleBulkUpdate = useCallback(async () => {
+    await Promise.all([fetchLeads(), fetchStats(), tagCatalog.refetch()]);
+  }, [fetchLeads, fetchStats, tagCatalog]);
+
+  const handleTagMutation = useCallback(
+    async (mutation: TagMutationResult) => {
+      const nextFilters =
+        mutation.type === 'deleted' && filters.tags.includes(mutation.tagId)
+          ? { ...filters, tags: filters.tags.filter((tagId) => tagId !== mutation.tagId) }
+          : filters;
+
+      // Commit filter cleanup before issuing the authoritative leads refresh.
+      if (nextFilters !== filters) {
+        setFilters(nextFilters);
+      }
+
+      await Promise.all([tagCatalog.refetch(), fetchLeadsForFilters(nextFilters)]);
+    },
+    [fetchLeadsForFilters, filters, tagCatalog]
+  );
 
   // Handle sort change from table header
   const handleSortChange = useCallback(
@@ -371,6 +401,7 @@ export default function CRMPage() {
                     onClose={() => setIsFilterSidebarOpen(false)}
                     leadCount={filteredLeads.length}
                     onOpenTagManager={() => setIsTagManagerOpen(true)}
+                    tagCatalog={tagCatalog}
                   />
                 </div>
               </div>
@@ -388,7 +419,12 @@ export default function CRMPage() {
       />
 
       {/* Tag Manager Modal */}
-      <TagManager isOpen={isTagManagerOpen} onClose={() => setIsTagManagerOpen(false)} />
+      <TagManager
+        isOpen={isTagManagerOpen}
+        onClose={() => setIsTagManagerOpen(false)}
+        tagCatalog={tagCatalog}
+        onMutation={handleTagMutation}
+      />
 
       {/* Task SlideOver */}
       <TaskSlideOver isOpen={isTaskSlideOverOpen} onClose={() => setIsTaskSlideOverOpen(false)} />
@@ -399,6 +435,7 @@ export default function CRMPage() {
           selectedLeads={selectedLeads}
           onClearSelection={handleClearSelection}
           onBulkUpdate={handleBulkUpdate}
+          tagCatalog={tagCatalog}
         />
       )}
     </CRMLayout>

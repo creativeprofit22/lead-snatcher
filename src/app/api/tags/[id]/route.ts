@@ -14,29 +14,23 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     const { id } = await params;
     const { name, color } = await parseRouteBody(request, updateTagSchema);
 
-    // Find the tag and verify ownership
-    const tag = await prisma.tag.findUnique({
-      where: { id },
+    const tag = await prisma.tag.findFirst({
+      where: { id, userId },
     });
 
     if (!tag) {
       return NextResponse.json({ error: 'Tag not found' }, { status: 404 });
     }
 
-    if (tag.userId !== userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
-    }
-
     // Build update data
     const updateData: { name?: string; color?: string } = {};
 
     if (name !== undefined) {
-      const trimmedName = name.trim();
       // Check if another tag has this name
       const existing = await prisma.tag.findFirst({
         where: {
-          userId: userId,
-          name: trimmedName,
+          userId,
+          name,
           id: { not: id },
         },
       });
@@ -45,7 +39,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
         return NextResponse.json({ error: 'A tag with this name already exists' }, { status: 409 });
       }
 
-      updateData.name = trimmedName;
+      updateData.name = name;
     }
 
     if (color !== undefined) {
@@ -83,17 +77,12 @@ export async function DELETE(_request: Request, { params }: RouteParams) {
     const userId = await requireRouteUserId();
     const { id } = await params;
 
-    // Find the tag and verify ownership
-    const tag = await prisma.tag.findUnique({
-      where: { id },
+    const tag = await prisma.tag.findFirst({
+      where: { id, userId },
     });
 
     if (!tag) {
       return NextResponse.json({ error: 'Tag not found' }, { status: 404 });
-    }
-
-    if (tag.userId !== userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
     }
 
     await prisma.tag.delete({

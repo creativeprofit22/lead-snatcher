@@ -1,9 +1,10 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState } from 'react';
 import { Plus, X, Pencil, Trash2, Check } from 'lucide-react';
 import { toast } from 'sonner';
-import type { Tag } from '@/types';
+import type { CrmTagsResource } from '@/lib/hooks/useCrmTags';
+import type { TagWithCount } from '@/types';
 
 // Predefined colors for quick selection
 const TAG_COLORS = [
@@ -18,19 +19,21 @@ const TAG_COLORS = [
   '#6b7280', // Gray
 ];
 
-interface TagWithCount extends Tag {
-  leadCount: number;
-}
+export type TagMutationResult =
+  | { type: 'created'; tag: TagWithCount }
+  | { type: 'updated'; tag: TagWithCount }
+  | { type: 'deleted'; tagId: string };
 
 interface TagManagerProps {
   isOpen: boolean;
   onClose: () => void;
-  onTagsChange?: () => void;
+  tagCatalog: CrmTagsResource;
+  onMutation: (mutation: TagMutationResult) => Promise<void>;
 }
 
-export function TagManager({ isOpen, onClose, onTagsChange }: TagManagerProps) {
-  const [tags, setTags] = useState<TagWithCount[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+export function TagManager({ isOpen, onClose, tagCatalog, onMutation }: TagManagerProps) {
+  const { tags, loading: isLoading, error, refetch } = tagCatalog;
+  const [isMutating, setIsMutating] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
 
@@ -40,27 +43,6 @@ export function TagManager({ isOpen, onClose, onTagsChange }: TagManagerProps) {
   const [editName, setEditName] = useState('');
   const [editColor, setEditColor] = useState('');
 
-  // Fetch tags
-  const fetchTags = useCallback(async () => {
-    try {
-      const response = await fetch('/api/tags');
-      if (response.ok) {
-        const data = await response.json();
-        setTags(data.tags);
-      }
-    } catch {
-      toast.error('Failed to load tags');
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (isOpen) {
-      fetchTags();
-    }
-  }, [isOpen, fetchTags]);
-
   // Create tag
   const handleCreate = async () => {
     if (!newName.trim()) {
@@ -68,6 +50,7 @@ export function TagManager({ isOpen, onClose, onTagsChange }: TagManagerProps) {
       return;
     }
 
+    setIsMutating(true);
     try {
       const response = await fetch('/api/tags', {
         method: 'POST',
@@ -76,19 +59,20 @@ export function TagManager({ isOpen, onClose, onTagsChange }: TagManagerProps) {
       });
 
       if (response.ok) {
-        const data = await response.json();
-        setTags((prev) => [...prev, data.tag].sort((a, b) => a.name.localeCompare(b.name)));
+        const data = (await response.json()) as { tag: TagWithCount };
         setNewName('');
         setNewColor(TAG_COLORS[0]);
         setIsCreating(false);
-        onTagsChange?.();
+        await onMutation({ type: 'created', tag: data.tag });
         toast.success('Tag created');
       } else {
-        const error = await response.json();
-        toast.error(error.error || 'Failed to create tag');
+        const mutationError = await response.json();
+        toast.error(mutationError.error || 'Failed to create tag');
       }
     } catch {
       toast.error('Failed to create tag');
+    } finally {
+      setIsMutating(false);
     }
   };
 
@@ -99,6 +83,7 @@ export function TagManager({ isOpen, onClose, onTagsChange }: TagManagerProps) {
       return;
     }
 
+    setIsMutating(true);
     try {
       const response = await fetch(`/api/tags/${id}`, {
         method: 'PATCH',
@@ -107,47 +92,46 @@ export function TagManager({ isOpen, onClose, onTagsChange }: TagManagerProps) {
       });
 
       if (response.ok) {
-        const data = await response.json();
-        setTags((prev) =>
-          prev
-            .map((tag) => (tag.id === id ? { ...tag, ...data.tag } : tag))
-            .sort((a, b) => a.name.localeCompare(b.name))
-        );
+        const data = (await response.json()) as { tag: TagWithCount };
         setEditingId(null);
-        onTagsChange?.();
+        await onMutation({ type: 'updated', tag: data.tag });
         toast.success('Tag updated');
       } else {
-        const error = await response.json();
-        toast.error(error.error || 'Failed to update tag');
+        const mutationError = await response.json();
+        toast.error(mutationError.error || 'Failed to update tag');
       }
     } catch {
       toast.error('Failed to update tag');
+    } finally {
+      setIsMutating(false);
     }
   };
 
   // Delete tag
   const handleDelete = async (id: string) => {
-    const tag = tags.find((t) => t.id === id);
+    const tag = tags.find((item) => item.id === id);
     if (tag && tag.leadCount > 0) {
       if (!confirm(`This tag is used on ${tag.leadCount} lead(s). Delete anyway?`)) {
         return;
       }
     }
 
+    setIsMutating(true);
     try {
       const response = await fetch(`/api/tags/${id}`, {
         method: 'DELETE',
       });
 
       if (response.ok) {
-        setTags((prev) => prev.filter((tag) => tag.id !== id));
-        onTagsChange?.();
+        await onMutation({ type: 'deleted', tagId: id });
         toast.success('Tag deleted');
       } else {
         toast.error('Failed to delete tag');
       }
     } catch {
       toast.error('Failed to delete tag');
+    } finally {
+      setIsMutating(false);
     }
   };
 
@@ -176,6 +160,7 @@ export function TagManager({ isOpen, onClose, onTagsChange }: TagManagerProps) {
             <h2 className="text-lg font-medium text-white">Manage Tags</h2>
             <button
               onClick={onClose}
+              aria-label="Close tag manager"
               className="p-1 rounded-lg text-gray-500 hover:text-white hover:bg-white/5"
             >
               <X className="w-5 h-5" />
@@ -189,6 +174,16 @@ export function TagManager({ isOpen, onClose, onTagsChange }: TagManagerProps) {
                 {[1, 2, 3].map((i) => (
                   <div key={i} className="h-12 bg-white/5 rounded-lg animate-pulse" />
                 ))}
+              </div>
+            ) : error ? (
+              <div role="alert" className="py-8 text-center">
+                <p className="text-sm text-gray-300">Failed to load tags</p>
+                <button
+                  onClick={() => void refetch()}
+                  className="mt-3 px-3 py-1.5 text-sm text-white border border-white/20 rounded-lg hover:bg-white/5 transition-colors"
+                >
+                  Retry
+                </button>
               </div>
             ) : (
               <div className="space-y-2">
@@ -204,7 +199,9 @@ export function TagManager({ isOpen, onClose, onTagsChange }: TagManagerProps) {
                             <button
                               key={color}
                               onClick={() => setEditColor(color)}
-                              className={`w-6 h-6 rounded-full transition-all flex-shrink-0 ${
+                              disabled={isMutating}
+                              aria-label={`Set tag color to ${color}`}
+                              className={`w-6 h-6 rounded-full transition-transform flex-shrink-0 disabled:opacity-50 ${
                                 editColor === color
                                   ? 'ring-2 ring-white ring-offset-2 ring-offset-zinc-900'
                                   : 'hover:scale-110'
@@ -217,24 +214,30 @@ export function TagManager({ isOpen, onClose, onTagsChange }: TagManagerProps) {
                         <div className="flex items-center gap-2">
                           <input
                             type="text"
+                            aria-label={`Rename ${tag.name}`}
                             value={editName}
                             onChange={(e) => setEditName(e.target.value)}
-                            className="flex-1 px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm text-white outline-none focus:border-white/20"
+                            disabled={isMutating}
+                            className="flex-1 px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm text-white outline-none focus:border-white/20 disabled:opacity-50"
                             autoFocus
                             onKeyDown={(e) => {
-                              if (e.key === 'Enter') handleUpdate(tag.id);
+                              if (e.key === 'Enter') void handleUpdate(tag.id);
                               if (e.key === 'Escape') setEditingId(null);
                             }}
                           />
                           <button
-                            onClick={() => handleUpdate(tag.id)}
-                            className="p-2 rounded-lg text-green-400 hover:bg-green-500/10"
+                            onClick={() => void handleUpdate(tag.id)}
+                            disabled={isMutating}
+                            aria-label={`Save ${tag.name}`}
+                            className="p-2 rounded-lg text-green-400 hover:bg-green-500/10 disabled:opacity-50"
                           >
                             <Check className="w-4 h-4" />
                           </button>
                           <button
                             onClick={() => setEditingId(null)}
-                            className="p-2 rounded-lg text-gray-500 hover:bg-white/5"
+                            disabled={isMutating}
+                            aria-label={`Cancel editing ${tag.name}`}
+                            className="p-2 rounded-lg text-gray-500 hover:bg-white/5 disabled:opacity-50"
                           >
                             <X className="w-4 h-4" />
                           </button>
@@ -251,13 +254,17 @@ export function TagManager({ isOpen, onClose, onTagsChange }: TagManagerProps) {
                         <span className="text-xs text-gray-500">{tag.leadCount} leads</span>
                         <button
                           onClick={() => startEditing(tag)}
-                          className="p-1.5 rounded text-gray-500 hover:text-white hover:bg-white/5"
+                          disabled={isMutating}
+                          aria-label={`Edit ${tag.name}`}
+                          className="p-1.5 rounded text-gray-500 hover:text-white hover:bg-white/5 disabled:opacity-50"
                         >
                           <Pencil className="w-4 h-4" />
                         </button>
                         <button
-                          onClick={() => handleDelete(tag.id)}
-                          className="p-1.5 rounded text-gray-500 hover:text-red-400 hover:bg-red-500/10"
+                          onClick={() => void handleDelete(tag.id)}
+                          disabled={isMutating}
+                          aria-label={`Delete ${tag.name}`}
+                          className="p-1.5 rounded text-gray-500 hover:text-red-400 hover:bg-red-500/10 disabled:opacity-50"
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
@@ -283,7 +290,9 @@ export function TagManager({ isOpen, onClose, onTagsChange }: TagManagerProps) {
                         <button
                           key={color}
                           onClick={() => setNewColor(color)}
-                          className={`w-6 h-6 rounded-full transition-all flex-shrink-0 ${
+                          disabled={isMutating}
+                          aria-label={`Set new tag color to ${color}`}
+                          className={`w-6 h-6 rounded-full transition-transform flex-shrink-0 disabled:opacity-50 ${
                             newColor === color
                               ? 'ring-2 ring-white ring-offset-2 ring-offset-zinc-900'
                               : 'hover:scale-110'
@@ -296,13 +305,15 @@ export function TagManager({ isOpen, onClose, onTagsChange }: TagManagerProps) {
                     <div className="flex items-center gap-2">
                       <input
                         type="text"
+                        aria-label="New tag name"
                         value={newName}
                         onChange={(e) => setNewName(e.target.value)}
                         placeholder="Tag name..."
-                        className="flex-1 px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm text-white placeholder-gray-500 outline-none focus:border-white/20"
+                        disabled={isMutating}
+                        className="flex-1 px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm text-white placeholder-gray-500 outline-none focus:border-white/20 disabled:opacity-50"
                         autoFocus
                         onKeyDown={(e) => {
-                          if (e.key === 'Enter') handleCreate();
+                          if (e.key === 'Enter') void handleCreate();
                           if (e.key === 'Escape') {
                             setIsCreating(false);
                             setNewName('');
@@ -310,8 +321,10 @@ export function TagManager({ isOpen, onClose, onTagsChange }: TagManagerProps) {
                         }}
                       />
                       <button
-                        onClick={handleCreate}
-                        className="p-2 rounded-lg text-green-400 hover:bg-green-500/10"
+                        onClick={() => void handleCreate()}
+                        disabled={isMutating}
+                        aria-label="Save new tag"
+                        className="p-2 rounded-lg text-green-400 hover:bg-green-500/10 disabled:opacity-50"
                       >
                         <Check className="w-4 h-4" />
                       </button>
@@ -320,7 +333,9 @@ export function TagManager({ isOpen, onClose, onTagsChange }: TagManagerProps) {
                           setIsCreating(false);
                           setNewName('');
                         }}
-                        className="p-2 rounded-lg text-gray-500 hover:bg-white/5"
+                        disabled={isMutating}
+                        aria-label="Cancel creating tag"
+                        className="p-2 rounded-lg text-gray-500 hover:bg-white/5 disabled:opacity-50"
                       >
                         <X className="w-4 h-4" />
                       </button>
@@ -336,7 +351,8 @@ export function TagManager({ isOpen, onClose, onTagsChange }: TagManagerProps) {
             {!isCreating && (
               <button
                 onClick={() => setIsCreating(true)}
-                className="flex items-center gap-2 w-full px-4 py-2 bg-white/5 border border-white/10 rounded-lg text-sm text-gray-300 hover:bg-white/10 hover:text-white transition-colors"
+                disabled={isLoading || !!error || isMutating}
+                className="flex items-center gap-2 w-full px-4 py-2 bg-white/5 border border-white/10 rounded-lg text-sm text-gray-300 hover:bg-white/10 hover:text-white transition-colors disabled:opacity-50"
               >
                 <Plus className="w-4 h-4" />
                 Create new tag

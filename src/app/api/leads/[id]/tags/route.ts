@@ -1,46 +1,47 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/db';
+import {
+  HttpError,
+  parseRouteBody,
+  requireRouteUserId,
+  routeErrorResponse,
+} from '@/lib/route-utils';
 import { addTagToLeadSchema } from '@/lib/validations';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
 }
 
+function requireTagIdQuery(request: Request): string {
+  const tagId = new URL(request.url).searchParams.get('tagId')?.trim();
+
+  if (!tagId) {
+    throw new HttpError('Tag ID is required', 400);
+  }
+
+  return tagId;
+}
+
 // POST - Add tag to lead
 export async function POST(request: Request, { params }: RouteParams) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
+    const userId = await requireRouteUserId();
     const { id: leadId } = await params;
-    const rawBody = await request.json();
-    const parsed = addTagToLeadSchema.safeParse(rawBody);
-    if (!parsed.success) {
-      return NextResponse.json(
-        { error: parsed.error.issues[0]?.message ?? 'Invalid request body' },
-        { status: 400 }
-      );
-    }
-    const { tagId } = parsed.data;
+    const { tagId } = await parseRouteBody(request, addTagToLeadSchema);
 
-    // Verify lead ownership
-    const lead = await prisma.lead.findUnique({
-      where: { id: leadId },
+    const lead = await prisma.lead.findFirst({
+      where: { id: leadId, userId },
     });
 
-    if (!lead || lead.userId !== session.user.id) {
+    if (!lead) {
       return NextResponse.json({ error: 'Lead not found' }, { status: 404 });
     }
 
-    // Verify tag ownership
-    const tag = await prisma.tag.findUnique({
-      where: { id: tagId },
+    const tag = await prisma.tag.findFirst({
+      where: { id: tagId, userId },
     });
 
-    if (!tag || tag.userId !== session.user.id) {
+    if (!tag) {
       return NextResponse.json({ error: 'Tag not found' }, { status: 404 });
     }
 
@@ -80,41 +81,30 @@ export async function POST(request: Request, { params }: RouteParams) {
     });
   } catch (error) {
     console.error('Add tag to lead error:', error);
-    return NextResponse.json({ error: 'Failed to add tag' }, { status: 500 });
+    return routeErrorResponse(error, 'Failed to add tag');
   }
 }
 
 // DELETE - Remove tag from lead
 export async function DELETE(request: Request, { params }: RouteParams) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
+    const userId = await requireRouteUserId();
     const { id: leadId } = await params;
-    const { searchParams } = new URL(request.url);
-    const tagId = searchParams.get('tagId');
+    const tagId = requireTagIdQuery(request);
 
-    if (!tagId) {
-      return NextResponse.json({ error: 'Tag ID is required' }, { status: 400 });
-    }
-
-    // Verify lead ownership
-    const lead = await prisma.lead.findUnique({
-      where: { id: leadId },
+    const lead = await prisma.lead.findFirst({
+      where: { id: leadId, userId },
     });
 
-    if (!lead || lead.userId !== session.user.id) {
+    if (!lead) {
       return NextResponse.json({ error: 'Lead not found' }, { status: 404 });
     }
 
-    // Verify tag ownership
-    const tag = await prisma.tag.findUnique({
-      where: { id: tagId },
+    const tag = await prisma.tag.findFirst({
+      where: { id: tagId, userId },
     });
 
-    if (!tag || tag.userId !== session.user.id) {
+    if (!tag) {
       return NextResponse.json({ error: 'Tag not found' }, { status: 404 });
     }
 
@@ -142,6 +132,6 @@ export async function DELETE(request: Request, { params }: RouteParams) {
     });
   } catch (error) {
     console.error('Remove tag from lead error:', error);
-    return NextResponse.json({ error: 'Failed to remove tag' }, { status: 500 });
+    return routeErrorResponse(error, 'Failed to remove tag');
   }
 }

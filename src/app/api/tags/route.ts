@@ -1,18 +1,16 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/db';
+import { parseRouteBody, requireRouteUserId, routeErrorResponse } from '@/lib/route-utils';
 import { createTagSchema } from '@/lib/validations';
+import type { TagsResponse } from '@/types';
 
 // GET - Fetch user's tags
 export async function GET() {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const userId = await requireRouteUserId();
 
     const tags = await prisma.tag.findMany({
-      where: { userId: session.user.id },
+      where: { userId },
       orderBy: { name: 'asc' },
       include: {
         _count: {
@@ -29,42 +27,26 @@ export async function GET() {
       createdAt: tag.createdAt.toISOString(),
     }));
 
-    return NextResponse.json({ tags: transformedTags });
+    const response: TagsResponse = { tags: transformedTags };
+    return NextResponse.json(response);
   } catch (error) {
     console.error('Get tags error:', error);
-    return NextResponse.json({ error: 'Failed to fetch tags' }, { status: 500 });
+    return routeErrorResponse(error, 'Failed to fetch tags');
   }
 }
 
 // POST - Create a new tag
 export async function POST(request: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    let rawBody;
-    try {
-      rawBody = await request.json();
-    } catch {
-      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
-    }
-    const parsed = createTagSchema.safeParse(rawBody);
-    if (!parsed.success) {
-      return NextResponse.json(
-        { error: parsed.error.issues[0]?.message ?? 'Invalid request body' },
-        { status: 400 }
-      );
-    }
-    const { name, color } = parsed.data;
+    const userId = await requireRouteUserId();
+    const { name, color } = await parseRouteBody(request, createTagSchema);
 
     // Check if tag with same name exists
     const existing = await prisma.tag.findUnique({
       where: {
         userId_name: {
-          userId: session.user.id,
-          name: name.trim(),
+          userId,
+          name,
         },
       },
     });
@@ -75,8 +57,8 @@ export async function POST(request: Request) {
 
     const tag = await prisma.tag.create({
       data: {
-        userId: session.user.id,
-        name: name.trim(),
+        userId,
+        name,
         color,
       },
     });
@@ -93,6 +75,6 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     console.error('Create tag error:', error);
-    return NextResponse.json({ error: 'Failed to create tag' }, { status: 500 });
+    return routeErrorResponse(error, 'Failed to create tag');
   }
 }
