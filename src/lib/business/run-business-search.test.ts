@@ -1,8 +1,8 @@
 import { describe, expect, test, vi } from 'vitest';
 import { applyBusinessSearchResponse, runBusinessSearch } from './run-business-search';
-import type { Zone } from './zone-grid';
+import type { Zone, ZoneAmenities } from './zone-contract';
 
-const amenities = {
+const legacyAmenities = {
   banks: 1,
   hotels: 2,
   hospitals: 0,
@@ -11,9 +11,22 @@ const amenities = {
   fuelStations: 1,
   affluenceSpots: 0,
   total: 7,
-};
+} satisfies ZoneAmenities;
 
-function zone(id: string, label: string): Zone {
+const amenities = {
+  ...legacyAmenities,
+  luxuryRetail: 3,
+  professionalServices: 4,
+  premiumHotels: 5,
+  casinos: 6,
+  corporateOffices: 7,
+  pawnshops: 8,
+  moneyLenders: 9,
+  socialFacilities: 10,
+  charityShops: 11,
+} satisfies ZoneAmenities;
+
+function zone(id: string, label: string, zoneAmenities: ZoneAmenities = amenities): Zone {
   return {
     id,
     label,
@@ -24,7 +37,7 @@ function zone(id: string, label: string): Zone {
     businessScore: 80,
     archetype: 'mixed',
     level: 'commercial',
-    amenities,
+    amenities: zoneAmenities,
     radiusMeters: 1500,
     distanceFromCenterMeters: 0,
   };
@@ -43,27 +56,35 @@ const result = {
   industryType: 'retail',
 };
 
-function response(zones: Zone[], results: unknown[] = [result]) {
+function response(
+  zones: Zone[],
+  focusedZoneId: string | null = zones[0]?.id ?? 'zone-fallback',
+  results: unknown[] = [result],
+  marketAmenities: ZoneAmenities = amenities
+) {
   return {
     results,
     marketDensity: {
+      status: 'ok',
       count: results.length,
       level: 'high',
       label: zones[0]?.label ?? 'Area',
       description: 'Active commercial area',
-      amenities,
+      amenities: marketAmenities,
     },
+    zoneScanStatus: 'ok',
     zones,
     zoneBbox: [51, -1, 52, 0],
     singleZone: false,
+    focusedZoneId,
   };
 }
 
 describe('runBusinessSearch', () => {
-  test('initial mode focuses the typed zone, waits for the scan floor, and builds its cache', async () => {
+  test('initial mode persists the server-focused second-ranked zone and builds its cache', async () => {
     const zones = [zone('top', 'Central'), zone('typed', 'Shepherds Bush')];
     const fetcher = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify(response(zones)), {
+      new Response(JSON.stringify(response(zones, 'typed')), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       })
@@ -86,17 +107,55 @@ describe('runBusinessSearch', () => {
     expect(applied.focusedZoneId).toBe('typed');
     expect(applied.shouldReveal).toBe(true);
     expect(applied.notification).toEqual({ type: 'success', message: 'Found 1 businesses' });
-    expect(applied.cachePayload).toMatchObject({ focusedZoneId: 'typed', zones });
+    expect(applied.cachePayload).toMatchObject({
+      focusedZoneId: 'typed',
+      zoneScanStatus: 'ok',
+      zones,
+    });
     const initialRequest = fetcher.mock.calls[0]?.[1] as RequestInit;
     expect(JSON.parse(initialRequest.body as string)).not.toHaveProperty('searchLat');
     expect(initialRequest.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  test('preserves every v2 and negative amenity field in state and cache payloads', () => {
+    const applied = applyBusinessSearchResponse(response([zone('central', 'Central')]), {
+      businessType: 'retail',
+      cacheIndustry: 'retail',
+      city: 'London',
+      country: 'gb',
+      deepAnalysis: false,
+      mode: { kind: 'initial' },
+    });
+
+    expect(applied.zones[0]?.amenities).toEqual(amenities);
+    expect(applied.marketDensity?.amenities).toEqual(amenities);
+    expect(applied.cachePayload.zones?.[0]?.amenities).toEqual(amenities);
+    expect(applied.cachePayload.marketDensity?.amenities).toEqual(amenities);
+  });
+
+  test('accepts responses created before optional v2 amenity fields existed', () => {
+    const legacyZone = zone('legacy', 'Legacy Area', legacyAmenities);
+    const applied = applyBusinessSearchResponse(
+      response([legacyZone], 'legacy', [result], legacyAmenities),
+      {
+        businessType: 'retail',
+        cacheIndustry: 'retail',
+        city: 'London',
+        country: 'gb',
+        deepAnalysis: false,
+        mode: { kind: 'initial' },
+      }
+    );
+
+    expect(applied.zones[0]?.amenities).toEqual(legacyAmenities);
+    expect(applied.marketDensity?.amenities).toEqual(legacyAmenities);
   });
 
   test('zone mode keeps initial single-zone state, targets coordinates, and uses zone notifications', async () => {
     const selectedZone = zone('west', 'West End');
     const originalZones = [selectedZone, zone('east', 'East End')];
     const fetcher = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify(response([], [])), {
+      new Response(JSON.stringify(response([], null, [])), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       })
@@ -133,6 +192,40 @@ describe('runBusinessSearch', () => {
     expect(zoneRequest.signal).toBeUndefined();
   });
 
+  test('accepts unavailable area scans without requiring a focused zone or numeric density', () => {
+    const rawResponse = {
+      ...response([], null),
+      zoneScanStatus: 'unavailable',
+      marketDensity: {
+        status: 'unavailable',
+        count: 1,
+        level: 'unavailable',
+        label: 'London',
+        description: 'Area scan unavailable. Retry the search.',
+      },
+    };
+
+    const applied = applyBusinessSearchResponse(rawResponse, {
+      businessType: 'retail',
+      cacheIndustry: 'retail',
+      city: 'London',
+      country: 'gb',
+      deepAnalysis: false,
+      mode: { kind: 'initial' },
+    });
+
+    expect(applied).toMatchObject({
+      zoneScanStatus: 'unavailable',
+      focusedZoneId: null,
+      zones: [],
+      marketDensity: {
+        status: 'unavailable',
+        level: 'unavailable',
+        description: expect.stringContaining('Retry'),
+      },
+    });
+  });
+
   test('rejects malformed successful responses before they reach page state', () => {
     expect(() =>
       applyBusinessSearchResponse(
@@ -146,6 +239,24 @@ describe('runBusinessSearch', () => {
           mode: { kind: 'initial' },
         }
       )
+    ).toThrow('invalid response');
+  });
+
+  test('rejects unknown zone archetypes before they reach page state', () => {
+    const rawResponse = response([zone('central', 'Central')]);
+    const firstZone = rawResponse.zones[0];
+    if (!firstZone) throw new Error('Expected response fixture zone');
+    (firstZone as { archetype: string }).archetype = 'unknown';
+
+    expect(() =>
+      applyBusinessSearchResponse(rawResponse, {
+        businessType: 'retail',
+        cacheIndustry: 'retail',
+        city: 'London',
+        country: 'gb',
+        deepAnalysis: false,
+        mode: { kind: 'initial' },
+      })
     ).toThrow('invalid response');
   });
 });

@@ -1,5 +1,9 @@
 import type { EnrichmentStatus } from '@/components/leads/EnrichButton';
-import type { PersistedSearchPayload, SearchSnapshot } from '@/lib/business/search-snapshot';
+import {
+  parsePersistedSearchPayload,
+  type PersistedSearchPayload,
+  type SearchSnapshot,
+} from '@/lib/business/search-snapshot';
 import type { EnrichmentResult } from '@/lib/hooks/useEnrichmentStream';
 
 const LAST_SEARCH_KEY = 'lead-snatcher-last-search';
@@ -30,17 +34,15 @@ export function getLastSearch(): CachedSearch | null {
   const stored = localStorage.getItem(LAST_SEARCH_KEY);
   if (!stored) return null;
 
-  try {
-    const cached = JSON.parse(stored) as CachedSearch;
-    // Discard stale results
-    if (Date.now() - cached.timestamp > CACHE_TTL_MS) {
-      localStorage.removeItem(LAST_SEARCH_KEY);
-      return null;
-    }
-    return cached;
-  } catch {
+  const cached = parsePersistedSearchPayload(stored) as CachedSearch | null;
+  if (!cached) return null;
+
+  // Discard stale results
+  if (Date.now() - cached.timestamp > CACHE_TTL_MS) {
+    localStorage.removeItem(LAST_SEARCH_KEY);
     return null;
   }
+  return cached;
 }
 
 export function hasLastSearch(): boolean {

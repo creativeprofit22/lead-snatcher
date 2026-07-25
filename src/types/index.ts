@@ -1,3 +1,4 @@
+import type { ZoneBbox } from '@/lib/business/zone-contract';
 import type { ScrapedWebsiteData } from './scraper';
 
 // Industry types for business categorization
@@ -257,7 +258,7 @@ export interface GeocodeResult {
   displayName: string;
   country: string;
   /** Bounding box: [south, north, west, east] in decimal degrees */
-  bbox?: [number, number, number, number];
+  bbox?: ZoneBbox;
 }
 
 // Task types

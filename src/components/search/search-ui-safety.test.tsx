@@ -1,9 +1,10 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
-import type { Zone } from '@/lib/business/zone-grid';
+import type { Zone } from '@/lib/business/zone-contract';
 import { AreaDensityMeter } from './AreaDensityMeter';
 import { getIdleScore, IdleScoreDial } from './IdleScoreDial';
+import { RadarScan } from './RadarScan';
 import { RegionPicker } from './RegionPicker';
 import { ZoneChipsStrip } from './ZoneChipsStrip';
 
@@ -166,23 +167,58 @@ describe('ZoneChipsStrip', () => {
     }
   );
 
-  test('ranks multiple zones, falls back to the top zone, and selects another', () => {
+  test('honors a second-ranked authoritative focus and selects the top zone', () => {
     const onZoneSelect = vi.fn();
     render(
       <ZoneChipsStrip
-        zones={[zone('low', 40), zone('high', 90)]}
-        focusedZoneId="missing"
+        zones={[zone('second', 40), zone('top', 90)]}
+        focusedZoneId="second"
         onZoneSelect={onZoneSelect}
       />
     );
 
     expect(screen.getByText('2 zones · tap to jump scan')).toBeTruthy();
-    expect(screen.getByText('Viewing').parentElement?.textContent).toContain('Zone high');
-    expect((screen.getByRole('button', { name: /Zone high/i }) as HTMLButtonElement).disabled).toBe(
+    expect(screen.getByText('Viewing').parentElement?.textContent).toContain('Zone second');
+    expect(
+      (screen.getByRole('button', { name: /Zone second/i }) as HTMLButtonElement).disabled
+    ).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: /Zone top/i }));
+    expect(onZoneSelect).toHaveBeenCalledWith(expect.objectContaining({ id: 'top' }));
+  });
+
+  test('keeps an eighth-ranked authoritative focus inside the seven-chip limit', () => {
+    const zones = Array.from({ length: 8 }, (_, index) => zone(String(index + 1), 100 - index));
+
+    render(<ZoneChipsStrip zones={zones} focusedZoneId="8" onZoneSelect={vi.fn()} />);
+
+    expect(screen.getAllByRole('button')).toHaveLength(7);
+    expect((screen.getByRole('button', { name: /Zone 8/i }) as HTMLButtonElement).disabled).toBe(
       true
     );
+    expect(screen.queryByRole('button', { name: /Zone 7/i })).toBeNull();
+    expect(screen.getByText('Viewing').parentElement?.textContent).toContain('Zone 8');
+  });
+});
 
-    fireEvent.click(screen.getByRole('button', { name: /Zone low/i }));
-    expect(onZoneSelect).toHaveBeenCalledWith(expect.objectContaining({ id: 'low' }));
+describe('RadarScan', () => {
+  test('locks and labels the authoritative focus when it ranks second by score', async () => {
+    vi.useFakeTimers();
+    render(
+      <RadarScan
+        city="London"
+        results={null}
+        zones={[zone('top', 90), zone('second', 70)]}
+        zoneBbox={[51, 52, -1, 0]}
+        focusedZoneId="second"
+      />
+    );
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_300);
+    });
+
+    expect(screen.getByLabelText('Radar lock: Zone second')).toBeTruthy();
+    expect(screen.queryByLabelText('Radar lock: Zone top')).toBeNull();
   });
 });

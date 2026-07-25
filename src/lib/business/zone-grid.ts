@@ -9,109 +9,37 @@
  * Cost: 1 free Overpass call, 0 paid Maps credits. Cached per city 7 days.
  */
 
-// Public Overpass instances, fired in parallel. The .de mirrors and kumi
-// have all been wedged (504 / hang) recently — keep them in the pool but
-// list the OSM-FR + OSM-CH mirrors first since they're the only ones
-// reliably answering during current outages.
-const OVERPASS_MIRRORS = [
-  'https://overpass.openstreetmap.fr/api/interpreter',
-  'https://overpass.osm.ch/api/interpreter',
-  'https://overpass-api.de/api/interpreter',
-  'https://lz4.overpass-api.de/api/interpreter',
-  'https://overpass.kumi.systems/api/interpreter',
-] as const;
+import type { Zone, ZoneBbox, ZoneGridResult } from './zone-contract';
+import { decodeZoneElements, type NamedPlace } from './zone-osm-signals';
+import { fetchZoneElements } from './zone-overpass';
+import { classifyRegion, type RegionDirection } from './zone-regions';
+import {
+  buildScoredZone,
+  DEFAULT_ZONE_RADIUS_METERS,
+  type ZoneAmenityFeature,
+} from './zone-scoring';
+export type {
+  Zone,
+  ZoneAmenities,
+  ZoneArchetype,
+  ZoneBbox,
+  ZoneGridResult,
+  ZoneLevel,
+} from './zone-contract';
+export { classifyZoneTags, ZONE_TAG_TO_AMENITY_KEY } from './zone-osm-signals';
 
-type AmenityKey = keyof Omit<ZoneAmenities, 'total'>;
-
-type TagToAmenityKey = Readonly<Record<string, AmenityKey>>;
-
-// These mappings are the single source of truth for both Overpass queries and
-// element classification. A queried tag therefore cannot silently go unclassified.
-export const ZONE_TAG_TO_AMENITY_KEY = {
-  amenity: {
-    bank: 'banks',
-    atm: 'banks',
-    hotel: 'hotels',
-    hospital: 'hospitals',
-    pharmacy: 'pharmacies',
-    supermarket: 'supermarkets',
-    fuel: 'fuelStations',
-    car_rental: 'fuelStations',
-    gym: 'affluenceSpots',
-    spa: 'affluenceSpots',
-    cinema: 'affluenceSpots',
-    theatre: 'affluenceSpots',
-    casino: 'casinos',
-    pawnshop: 'pawnshops',
-    money_lender: 'moneyLenders',
-    social_facility: 'socialFacilities',
-  } satisfies TagToAmenityKey,
-  shop: {
-    jewelry: 'luxuryRetail',
-    watches: 'luxuryRetail',
-    boutique: 'luxuryRetail',
-    art: 'luxuryRetail',
-    antiques: 'luxuryRetail',
-    wine: 'luxuryRetail',
-    gallery: 'luxuryRetail',
-    pawnbroker: 'pawnshops',
-    charity: 'charityShops',
-    second_hand: 'charityShops',
-  } satisfies TagToAmenityKey,
-  office: {
-    financial: 'professionalServices',
-    financial_advisor: 'professionalServices',
-    lawyer: 'professionalServices',
-    accountant: 'professionalServices',
-    insurance: 'professionalServices',
-    notary: 'professionalServices',
-    tax_advisor: 'professionalServices',
-    company: 'corporateOffices',
-    consulting: 'corporateOffices',
-    it: 'corporateOffices',
-    advertising_agency: 'corporateOffices',
-    coworking: 'corporateOffices',
-    research: 'corporateOffices',
-    estate_agent: 'corporateOffices',
-    government: 'corporateOffices',
-  } satisfies TagToAmenityKey,
-} as const;
-
-const TAG_CLASSIFIER_LOOKUPS = {
-  amenity: new Map(Object.entries(ZONE_TAG_TO_AMENITY_KEY.amenity)),
-  shop: new Map(Object.entries(ZONE_TAG_TO_AMENITY_KEY.shop)),
-  office: new Map(Object.entries(ZONE_TAG_TO_AMENITY_KEY.office)),
-} as const;
-
-const QUERY_TAG_SETS = {
-  amenity: Object.keys(ZONE_TAG_TO_AMENITY_KEY.amenity),
-  shop: Object.keys(ZONE_TAG_TO_AMENITY_KEY.shop),
-  office: Object.keys(ZONE_TAG_TO_AMENITY_KEY.office),
-} as const;
-
-const ZONE_RADIUS_METERS = 1500;
+const ZONE_RADIUS_METERS = DEFAULT_ZONE_RADIUS_METERS;
 const GRID_SIZE = 3; // 3x3
 // 20km bbox keeps Overpass queries tractable in ultra-dense metros (London,
 // NYC, Tokyo, Mumbai). Larger bbox + Overpass density = timeouts → single
 // zone fallback. 20km still covers central London zones 1-3 worth of leads.
 const MAX_BBOX_SIDE_KM = 20;
 const SMALL_CITY_DIAGONAL_KM = 4; // below this, skip grid and return single zone
-// Per-mirror timeouts. We hit all mirrors in parallel and take the first
-// non-empty response. The server-side `[timeout:N]` is the budget Overpass
-// gives the query before truncating; too-tight values cause silent empty
-// 200s on dense bboxes (greater London hit this with a 7s cap). Keep the
-// client cap loose enough that a real answer can come back.
-// Client timeout MUST exceed server timeout — otherwise we abort before
-// Overpass finishes computing and never see results that would have come
-// back within the server budget. Previously 12s client vs 20s server
-// silently killed dense-city queries (London) mid-flight.
-const OVERPASS_SERVER_TIMEOUT_S = 30;
-const OVERPASS_CLIENT_TIMEOUT_MS = 35000;
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 // Bump when the scoring formula or queried tag set changes. Old cached
 // results remain in the store under the previous key and will expire
 // naturally, but new callers get fresh data under the new version.
-const CACHE_SCHEMA_VERSION = 'v13-central-octant-cap-6';
+const CACHE_SCHEMA_VERSION = 'v15-unique-poi-total';
 
 // Place-based scanning: use OSM named places (Mayfair, Canary Wharf, etc.)
 // as zone centers instead of a 3×3 grid. If we find at least this many
@@ -122,116 +50,22 @@ const PLACE_SCAN_MIN_PLACES = 4;
 // higher-scoring one) — the 1.5km scan radius would otherwise produce
 // near-duplicate zones for adjacent OSM places.
 const PLACE_DEDUPE_METERS = 700;
-// Cap on returned zones from place-based scan. Raised from 25 → 36 in
-// tandem with the per-octant cap below — 9 octants × 4 per octant = 36
-// gives every region of the 3×3 RegionPicker a fair shot at coverage.
+// Cap on returned zones from place-based scan. Raised from 25 → 36 alongside
+// the per-region cap below so every RegionPicker cell gets fair coverage.
 const PLACE_MAX_ZONES = 36;
-// Per-octant zone cap. Without this, dense inner-city scores dominate the
+// Per-region zone cap. Without this, dense inner-city scores dominate the
 // top-N and outer regions (East London, Lower Manhattan, etc.) show up
-// empty in the RegionPicker even when legitimate places exist there. The
-// octant grid is the same 3×3 split the neighborhoods route uses for
-// region classification, so a cap here maps directly to a per-region cap
-// in the UI. Set to 6 rather than 4 because Central London / Midtown /
+// empty in the RegionPicker even when legitimate places exist there. This
+// uses the shared 3×3 bbox classifier, so capping and API grouping cannot
+// disagree. Set to 6 rather than 4 because Central London / Midtown /
 // Central Tokyo legitimately have ~6-8 named neighborhoods a user would
 // expect to pick (Mayfair, Soho, Knightsbridge, Belgravia, Covent Garden,
 // St James's); 4 was cropping recognizable places without helping outer
 // regions (which never hit the cap).
-const PLACE_MAX_PER_OCTANT = 6;
+const PLACE_MAX_PER_REGION = 6;
 // Short TTL for soft-failed lookups (Overpass down). Prevents thrash on
 // every autocomplete keystroke while still letting the user retry soon.
 const FAILURE_CACHE_TTL_MS = 60 * 1000;
-
-export type ZoneLevel = 'premium' | 'commercial' | 'moderate' | 'developing';
-
-/**
- * Two-axis archetype derived from wealth vs business scores.
- * - luxury: consumer-wealth dominant (Mayfair, Knightsbridge, Ginza) —
- *   luxury retail, premium hotels, high-end leisure. Ideal target for
- *   service businesses that sell TO the wealthy (salons, boutiques).
- * - corporate: business-density dominant (Canary Wharf, Shoreditch,
- *   King's Cross) — offices, professional services, tech. Ideal target
- *   for B2B SaaS, agencies, consulting.
- * - mixed: both axes strong (The City, Soho, Midtown). Broad ICP fit.
- * - developing: neither axis strong — outer suburbs / emerging areas.
- */
-export type ZoneArchetype = 'luxury' | 'corporate' | 'mixed' | 'developing';
-
-export interface ZoneAmenities {
-  // Legacy buckets — kept for UI continuity (AreaDensityMeter rim icons,
-  // describe-zone text, cached payloads from before v2-wealth).
-  banks: number;
-  hotels: number;
-  hospitals: number;
-  pharmacies: number;
-  supermarkets: number;
-  fuelStations: number;
-  affluenceSpots: number;
-  total: number;
-
-  // v2-wealth buckets — the ones that actually drive scoring now.
-  // Optional so pre-v2 cached payloads still typecheck after deserialization;
-  // the scorers treat `undefined` as 0.
-  /** shop=jewelry|watches|boutique|art|antiques|wine|gallery */
-  luxuryRetail?: number;
-  /** office=financial|lawyer|accountant|insurance|notary|... */
-  professionalServices?: number;
-  /** tourism=hotel with stars>=4 (subset of `hotels`) */
-  premiumHotels?: number;
-  /** amenity=casino (tracked separately from gym/spa bucket for weighting) */
-  casinos?: number;
-  /** office=company|consulting|it|advertising_agency|coworking|research|... */
-  corporateOffices?: number;
-  /** Negative signals — poverty indicators that deduct from score */
-  pawnshops?: number;
-  moneyLenders?: number;
-  socialFacilities?: number;
-  charityShops?: number;
-}
-
-export interface Zone {
-  id: string;
-  label: string; // neighborhood name or directional fallback
-  latitude: number;
-  longitude: number;
-  /**
-   * Headline 0-100 score — max of wealthScore and businessScore, with
-   * OSM prominence bonus applied. This is what the UI surfaces as the
-   * main number. Use wealthScore/businessScore/archetype for the full
-   * "what kind of money zone" breakdown.
-   */
-  score: number;
-  /** Consumer-wealth axis — luxury retail, premium hotels, affluence spots. */
-  wealthScore: number;
-  /** Business-density axis — corporate offices, professional services. */
-  businessScore: number;
-  /** Archetype derived from wealth vs business scores. */
-  archetype: ZoneArchetype;
-  level: ZoneLevel;
-  amenities: ZoneAmenities;
-  radiusMeters: number;
-  /** Meters from city centroid (helps UI distinguish "downtown" vs periphery) */
-  distanceFromCenterMeters: number;
-}
-
-export interface ZoneGridResult {
-  zones: Zone[]; // sorted by score DESC
-  centroid: { latitude: number; longitude: number };
-  bbox: [number, number, number, number]; // [south, north, west, east] actually queried
-  /** True when only a single zone was scanned (small city / missing bbox fallback) */
-  singleZone: boolean;
-}
-
-interface OverpassElement {
-  type: 'node' | 'way' | 'relation';
-  lat?: number;
-  lon?: number;
-  center?: { lat: number; lon: number };
-  tags?: Record<string, string>;
-}
-
-interface OverpassResponse {
-  elements?: OverpassElement[];
-}
 
 // ---------- in-memory cache ----------
 
@@ -276,17 +110,13 @@ function haversineMeters(lat1: number, lon1: number, lat2: number, lon2: number)
  * scanned bbox west and starves the East region (Canary Wharf, Stratford).
  * Use the bbox midpoint when available so coverage stays balanced.
  */
-function bboxCenter(bbox: [number, number, number, number]): { lat: number; lon: number } {
+function bboxCenter(bbox: ZoneBbox): { lat: number; lon: number } {
   const [south, north, west, east] = bbox;
   return { lat: (south + north) / 2, lon: (west + east) / 2 };
 }
 
 /** Clamp bbox so no side exceeds MAX_BBOX_SIDE_KM, centered on given point. */
-function clampBbox(
-  bbox: [number, number, number, number],
-  centerLat: number,
-  centerLon: number
-): [number, number, number, number] {
+function clampBbox(bbox: ZoneBbox, centerLat: number, centerLon: number): ZoneBbox {
   const [south, north, west, east] = bbox;
   const heightKm = haversineMeters(south, centerLon, north, centerLon) / 1000;
   const widthKm = haversineMeters(centerLat, west, centerLat, east) / 1000;
@@ -304,7 +134,7 @@ function clampBbox(
 
 /** Generate grid points at 20/50/80% across each axis (avoid the very edges). */
 function generateGridPoints(
-  bbox: [number, number, number, number]
+  bbox: ZoneBbox
 ): { lat: number; lon: number; row: number; col: number }[] {
   const [south, north, west, east] = bbox;
   const fractions = GRID_SIZE === 3 ? [0.2, 0.5, 0.8] : [0.25, 0.5, 0.75];
@@ -335,309 +165,7 @@ function directionalLabel(row: number, col: number): string {
   return DIRECTIONAL_LABELS[`${row},${col}`] ?? 'Zone';
 }
 
-// ---------- scoring ----------
-
-/**
- * Log-cap a raw count. log10(n+1) * 3 gives a soft ramp that rewards
- * density without letting a single mega-cluster dominate:
- *   n=1   → 0.90
- *   n=5   → 2.33
- *   n=10  → 3.13
- *   n=25  → 4.24
- *   n=50  → 5.11
- *   n=100 → 6.03
- *   n=500 → 8.07 (hits default cap)
- *
- * Default cap of 8 is deliberately loose — mid-tier zones need room to
- * separate from Central London / Times Square / Ginza extremes. Tight
- * caps (3-5) earlier produced the "everything scores 100" bug because
- * every dense zone saturated every signal.
- */
-function logCap(count: number | undefined, cap = 8): number {
-  if (!count || count <= 0) return 0;
-  return Math.min(cap, Math.log10(count + 1) * 3);
-}
-
-/**
- * Shared negative-signal deduction — pawnshops, money lenders, social
- * facilities, charity shops. Applied to both axes so a poverty-flagged
- * zone can't achieve a high score on either dimension.
- */
-function negativesPenalty(counts: ZoneAmenities): number {
-  const pawnshops = logCap(counts.pawnshops, 3);
-  const moneyLenders = logCap(counts.moneyLenders, 3);
-  const socialFacilities = logCap(counts.socialFacilities, 3);
-  const charityShops = logCap(counts.charityShops, 3);
-  return -6 * pawnshops + -4 * moneyLenders + -4 * socialFacilities + -2 * charityShops;
-}
-
-/**
- * Consumer-wealth axis (0-100). Rewards the Mayfair / Knightsbridge /
- * Ginza pattern — luxury retail density, premium hotels, affluence
- * leisure, some bank/hotel tail. Professional services kept in here
- * as a weak positive (rich clientele proxy) but dominant weight is on
- * retail, which is what differentiates consumer-wealth from pure
- * corporate districts.
- */
-function scoreWealth(counts: ZoneAmenities): number {
-  const luxury = logCap(counts.luxuryRetail);
-  const prof = logCap(counts.professionalServices);
-  const premiumHotel = logCap(counts.premiumHotels);
-  const casino = logCap(counts.casinos);
-  const banks = logCap(counts.banks);
-  const affluence = logCap(counts.affluenceSpots);
-  const genericHotel = logCap(counts.hotels);
-
-  const raw =
-    5 * luxury +
-    3 * premiumHotel +
-    2 * affluence +
-    1.5 * banks +
-    1.5 * genericHotel +
-    1.5 * casino +
-    1 * prof +
-    negativesPenalty(counts);
-
-  return Math.max(0, Math.min(100, Math.round(raw)));
-}
-
-/**
- * Business-density axis (0-100). Rewards the Canary Wharf / Shoreditch /
- * King's Cross / Silicon Valley pattern — corporate offices, finance
- * and legal professional services, commercial banks. Luxury retail is
- * ignored here so the axis doesn't drift back toward Mayfair.
- *
- * Premium hotels get a small weight because business travel concentrates
- * in corporate districts; generic hotels are ignored (too noisy).
- */
-function scoreBusiness(counts: ZoneAmenities): number {
-  const prof = logCap(counts.professionalServices);
-  const corporate = logCap(counts.corporateOffices);
-  const banks = logCap(counts.banks);
-  const premiumHotel = logCap(counts.premiumHotels);
-
-  // Weights bumped vs wealth axis to compensate for the business side
-  // having fewer signals (4 vs 7). Without the bump, corporate zones
-  // like Canary Wharf (40+ named HQs, 50+ offices, 38 banks) still
-  // topped out around 47/100 — numerically underselling genuine
-  // business density.
-  const raw = 5 * prof + 4.5 * corporate + 3 * banks + 2 * premiumHotel + negativesPenalty(counts);
-
-  return Math.max(0, Math.min(100, Math.round(raw)));
-}
-
-/**
- * Archetype thresholds. Tuned so that:
- * - Mayfair/Knightsbridge (W≥75, B<70) → luxury
- * - Canary Wharf (B≥70, W<70) → corporate
- * - The City / Soho / Midtown (both ≥70) → mixed
- * - outer suburbs (both <40) → developing
- *
- * Mixed requires both axes ≥70 (not 60) to avoid labeling Mayfair — which
- * has real but secondary office density — as mixed. Keeps the archetype
- * a useful targeting signal: "Mixed" actually means both flavors of money
- * are strong here.
- */
-function deriveArchetype(wealth: number, business: number): ZoneArchetype {
-  if (Math.max(wealth, business) < 40) return 'developing';
-  if (wealth >= 70 && business >= 70) return 'mixed';
-  return wealth >= business ? 'luxury' : 'corporate';
-}
-
-function levelForScore(score: number): ZoneLevel {
-  if (score >= 75) return 'premium';
-  if (score >= 50) return 'commercial';
-  if (score >= 25) return 'moderate';
-  return 'developing';
-}
-
-function emptyCounts(): ZoneAmenities {
-  return {
-    banks: 0,
-    hotels: 0,
-    hospitals: 0,
-    pharmacies: 0,
-    supermarkets: 0,
-    fuelStations: 0,
-    affluenceSpots: 0,
-    total: 0,
-    luxuryRetail: 0,
-    professionalServices: 0,
-    premiumHotels: 0,
-    casinos: 0,
-    corporateOffices: 0,
-    pawnshops: 0,
-    moneyLenders: 0,
-    socialFacilities: 0,
-    charityShops: 0,
-  };
-}
-
-// ---------- overpass ----------
-
-/** Single Overpass query: all premium amenities + named places in a bbox. */
-async function fetchOverpassForBbox(
-  bbox: [number, number, number, number]
-): Promise<OverpassElement[]> {
-  const [south, north, west, east] = bbox;
-  const bboxClause = `${south},${west},${north},${east}`;
-  const amenityRegex = QUERY_TAG_SETS.amenity.join('|');
-  const shopRegex = QUERY_TAG_SETS.shop.join('|');
-  const officeRegex = QUERY_TAG_SETS.office.join('|');
-
-  // v2-wealth query: original amenity set + shop=jewelry/watches/etc.
-  // + office=financial/lawyer/etc. + shop=pawnbroker/charity (negatives).
-  // Heavier than v1 but still a single batched Overpass call so cost is
-  // the same round-trip + marginally bigger payload.
-  const query = `
-    [out:json][timeout:${OVERPASS_SERVER_TIMEOUT_S}];
-    (
-      node["amenity"~"^(${amenityRegex})$"](${bboxClause});
-      way["amenity"~"^(${amenityRegex})$"](${bboxClause});
-      node["tourism"="hotel"](${bboxClause});
-      way["tourism"="hotel"](${bboxClause});
-      node["shop"~"^(${shopRegex})$"](${bboxClause});
-      way["shop"~"^(${shopRegex})$"](${bboxClause});
-      node["office"~"^(${officeRegex})$"](${bboxClause});
-      way["office"~"^(${officeRegex})$"](${bboxClause});
-      way["building"="office"]["name"](${bboxClause});
-      way["building"="office"]["operator"](${bboxClause});
-      node["place"~"^(suburb|neighbourhood|quarter|city_district|borough|locality)$"](${bboxClause});
-      way["place"~"^(suburb|neighbourhood|quarter|city_district|borough|locality)$"](${bboxClause});
-      relation["place"~"^(suburb|neighbourhood|quarter|city_district|borough|locality)$"](${bboxClause});
-      way["landuse"~"^(commercial|retail)$"]["name"](${bboxClause});
-      relation["landuse"~"^(commercial|retail)$"]["name"](${bboxClause});
-      relation["boundary"="administrative"]["admin_level"~"^(9|10)$"]["name"](${bboxClause});
-    );
-    out center tags;
-  `;
-
-  // Fire all mirrors in parallel, take the first success, cancel the rest.
-  // Without the shared abort, a fast 504 from .de still leaves us waiting
-  // on kumi's 20s grind because Promise.any only resolves once ALL inputs
-  // settle if no early winner appears.
-  const winnerAbort = new AbortController();
-  const attempts = OVERPASS_MIRRORS.map(async (endpoint) => {
-    const perAttempt = new AbortController();
-    const onWinnerAbort = () => perAttempt.abort();
-    winnerAbort.signal.addEventListener('abort', onWinnerAbort, { once: true });
-    const timeout = setTimeout(() => perAttempt.abort(), OVERPASS_CLIENT_TIMEOUT_MS);
-    try {
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-          // Overpass mirrors 406 requests without an explicit Accept +
-          // identify themselves as bot-unfriendly to unnamed UAs.
-          Accept: 'application/json',
-          'User-Agent':
-            'LeadSnatcher/1.0 (+https://github.com/creativeprofit22/aloo; Next.js app, low-volume dev use)',
-        },
-        body: `data=${encodeURIComponent(query)}`,
-        signal: perAttempt.signal,
-      });
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      const data = (await response.json()) as OverpassResponse;
-      const elements = data.elements ?? [];
-      // osm.ch et al. happily return 200 + [] when the query exceeds their
-      // internal budget. Treat that as a failure so the race continues to
-      // the slower mirrors that may have completed the actual query.
-      if (elements.length === 0) {
-        throw new Error('empty elements (likely silent timeout)');
-      }
-      return { endpoint, elements };
-    } finally {
-      clearTimeout(timeout);
-      winnerAbort.signal.removeEventListener('abort', onWinnerAbort);
-    }
-  });
-
-  try {
-    const winner = await Promise.any(attempts);
-    // Tell the slower siblings to give up — they're racing for nothing now.
-    winnerAbort.abort();
-    return winner.elements;
-  } catch (error) {
-    // Promise.any throws AggregateError when ALL inputs reject
-    if (error instanceof AggregateError) {
-      error.errors.forEach((err, i) => {
-        const ep = OVERPASS_MIRRORS[i];
-        if (err instanceof Error && err.name === 'AbortError') {
-          console.error(
-            `Overpass (zone grid) ${ep} -> client timeout after ${OVERPASS_CLIENT_TIMEOUT_MS}ms`
-          );
-        } else {
-          console.error(
-            `Overpass (zone grid) ${ep} -> ${err instanceof Error ? err.message : String(err)}`
-          );
-        }
-      });
-      console.error('Overpass (zone grid) all mirrors exhausted');
-    } else {
-      console.error('Overpass (zone grid) unexpected error:', error);
-    }
-    return [];
-  }
-}
-
-// ---------- aggregation ----------
-
-interface NamedPlace {
-  lat: number;
-  lon: number;
-  name: string;
-  /**
-   * OSM prominence bonus (0-10). Landmarks like Canary Wharf carry
-   * `wikidata`/`wikipedia`/`tourism=yes` + `place=suburb` tags; minor
-   * places (housing estates, micro-neighborhoods) do not. Without this,
-   * score-margin noise (±2 pts) lets a minor place inside the 700m
-   * dedupe radius suppress a globally-known landmark. The bonus is
-   * small enough to only break near-ties, not to reorder legitimately
-   * high-scoring zones.
-   */
-  prominence: number;
-}
-
-/**
- * Derive prominence bonus from an OSM element's tags. Caps at 10 so the
- * bonus nudges ties without overwhelming real amenity-density signal.
- */
-function prominenceBonus(tags: Record<string, string>): number {
-  let bonus = 0;
-  if (tags.wikidata) bonus += 3;
-  if (tags.wikipedia) bonus += 3;
-  if (tags.tourism) bonus += 2; // any tourism tag (yes/attraction/viewpoint/...)
-  if (tags.place === 'suburb') bonus += 2;
-  else if (tags.place === 'city_district' || tags.place === 'borough') bonus += 1;
-  return Math.min(10, bonus);
-}
-
-// True when the string's base glyphs are Latin. Diacritics are allowed
-// (Zürich, São Paulo). Rejects non-Latin scripts (Cyrillic, CJK, Arabic)
-// and special Latin letters like "ł" (Polish L-with-stroke) or "ß" that
-// don't decompose to plain ASCII under NFD.
-function isLatinOnly(s: string): boolean {
-  return /^[\x20-\x7e]+$/.test(s.normalize('NFD').replace(/[\u0300-\u036f]/g, ''));
-}
-
-// Pick an English-friendly place name from Overpass tags. Prefers the
-// explicit `name:en` tag OSM editors add for international places, falls
-// back to `name` only when its base glyphs are Latin. Returns null when
-// no clean label is available — caller falls back to the directional name.
-function pickEnglishName(tags: Record<string, string>): string | null {
-  const englishName = tags['name:en']?.trim();
-  if (englishName && isLatinOnly(englishName)) {
-    return englishName;
-  }
-  const nativeName = tags.name?.trim();
-  if (nativeName && isLatinOnly(nativeName)) {
-    return nativeName;
-  }
-  return null;
-}
-
+// ---------- labels and decoded signal aggregation ----------
 // Clean + title-case the user's raw search input for use as a zone label.
 // "chicago il" → "Chicago", "irving park, chicago" → "Irving Park".
 function formatUserSearchLabel(raw: string): string | null {
@@ -650,113 +178,6 @@ function formatUserSearchLabel(raw: string): string | null {
     .split(/\s+/)
     .map((w) => (w.length > 0 ? `${w.charAt(0).toUpperCase()}${w.slice(1).toLowerCase()}` : w))
     .join(' ');
-}
-
-/**
- * Parse the `stars` tag (OSM values range from "0" / "0S" to "5S"). A 4+
- * rating promotes the hotel from the generic bucket to the premium bucket
- * — matches the 2026 research weighting (premium hotels = C-suite spend).
- */
-function isPremiumHotel(tags: Record<string, string>): boolean {
-  const stars = tags.stars?.trim();
-  if (!stars) return false;
-  const first = stars[0];
-  if (!first) return false;
-  const n = parseInt(first, 10);
-  return Number.isFinite(n) && n >= 4;
-}
-
-/** Classify one queried OSM tag using the same lookups that build the query. */
-export function classifyZoneTags(tags: Record<string, string>): AmenityKey | undefined {
-  return (
-    TAG_CLASSIFIER_LOOKUPS.shop.get(tags.shop ?? '') ??
-    TAG_CLASSIFIER_LOOKUPS.office.get(tags.office ?? '') ??
-    TAG_CLASSIFIER_LOOKUPS.amenity.get(tags.amenity ?? '')
-  );
-}
-
-function splitElements(elements: OverpassElement[]): {
-  amenities: { lat: number; lon: number; key: AmenityKey }[];
-  places: NamedPlace[];
-} {
-  const amenities: { lat: number; lon: number; key: AmenityKey }[] = [];
-  const places: NamedPlace[] = [];
-
-  for (const el of elements) {
-    const lat = el.lat ?? el.center?.lat;
-    const lon = el.lon ?? el.center?.lon;
-    if (typeof lat !== 'number' || typeof lon !== 'number') continue;
-
-    const tags = el.tags ?? {};
-    const placeTag = tags.place;
-    if (placeTag) {
-      // `place=locality` is OSM's catch-all for "named point that is NOT
-      // a settlement" — gates, squares, springs, single landmarks, old
-      // hamlets that no longer exist. Without filtering, London pulls in
-      // "Albert's Gate", "Queen's Gate", etc. as zone chips, which is
-      // absurd because they aren't neighborhoods; the actual area there
-      // is Knightsbridge. Require localities to be notable enough for
-      // Wikipedia (or tagged `tourism`) before promoting them — keeps
-      // signal-heavy localities (e.g. Wall Street, some international
-      // districts tagged as locality) while dropping the gate/square noise.
-      if (placeTag === 'locality' && !tags.wikidata && !tags.wikipedia && !tags.tourism) {
-        continue;
-      }
-      const englishName = pickEnglishName(tags);
-      if (englishName) {
-        places.push({ lat, lon, name: englishName, prominence: prominenceBonus(tags) });
-      }
-      continue;
-    }
-
-    // Fallback place sources for districts OSM doesn't tag with place=*.
-    // Named commercial/retail landuse polygons (Canary Wharf is mapped this
-    // way in some renderings), and ward-level administrative relations
-    // (admin_level 9–10 = inner London wards, NYC CDs, etc.). These fill
-    // in outer-region coverage on dense cities without pulling in every
-    // named polygon — the name tag is required.
-    const landuseTag = tags.landuse;
-    const boundaryTag = tags.boundary;
-    const adminLevel = tags.admin_level;
-    if (
-      landuseTag === 'commercial' ||
-      landuseTag === 'retail' ||
-      (boundaryTag === 'administrative' && (adminLevel === '9' || adminLevel === '10'))
-    ) {
-      const englishName = pickEnglishName(tags);
-      if (englishName) {
-        places.push({ lat, lon, name: englishName, prominence: prominenceBonus(tags) });
-      }
-      continue;
-    }
-
-    const amenity = tags.amenity ?? '';
-    const tourism = tags.tourism ?? '';
-
-    // Hotels are explicit because tourism=hotel is queried separately and
-    // premium stars add a second classification in addition to generic hotel.
-    if (amenity === 'hotel' || tourism === 'hotel') {
-      amenities.push({ lat, lon, key: 'hotels' });
-      if (isPremiumHotel(tags)) {
-        amenities.push({ lat, lon, key: 'premiumHotels' });
-      }
-      continue;
-    }
-
-    const classifiedKey = classifyZoneTags(tags);
-    if (classifiedKey) {
-      amenities.push({ lat, lon, key: classifiedKey });
-      continue;
-    }
-
-    // Named corporate office buildings remain an explicit rule because they
-    // have no office=* value to include in the typed query mapping.
-    if (tags.building === 'office' && (Boolean(tags.name) || Boolean(tags.operator))) {
-      amenities.push({ lat, lon, key: 'corporateOffices' });
-    }
-  }
-
-  return { amenities, places };
 }
 
 function nearestPlaceName(
@@ -798,81 +219,47 @@ function normalizeLabel(raw: string): string {
  * score) and caps at PLACE_MAX_ZONES. Returns [] if there aren't enough
  * places in the bbox — caller should fall back to grid scanning.
  */
-/**
- * Octant key for a point within the clamped bbox, using the same 3×3
- * split the neighborhoods route uses for region classification. Kept
- * in sync so a per-octant cap here maps cleanly to per-region coverage
- * downstream.
- */
-function octantKey(lat: number, lon: number, bbox: [number, number, number, number]): string {
-  const [south, north, west, east] = bbox;
-  const latThird = (north - south) / 3;
-  const lonThird = (east - west) / 3;
-  const latIdx = lat < south + latThird ? 0 : lat < south + 2 * latThird ? 1 : 2;
-  const lonIdx = lon < west + lonThird ? 0 : lon < west + 2 * lonThird ? 1 : 2;
-  return `${latIdx},${lonIdx}`;
-}
-
 function buildPlaceBasedZones(
-  amenities: { lat: number; lon: number; key: AmenityKey }[],
+  amenities: ZoneAmenityFeature[],
   places: NamedPlace[],
   centerLat: number,
   centerLon: number,
-  clampedBbox: [number, number, number, number]
+  clampedBbox: ZoneBbox
 ): Zone[] {
   if (places.length < PLACE_SCAN_MIN_PLACES) return [];
 
-  // First: score every place on both axes (wealth + business), then
-  // take the max as the headline score and apply the OSM prominence
-  // bonus. Prominence nudges near-ties so globally-known landmarks
-  // (Canary Wharf, Times Square, Ginza) win the dedupe race against
-  // minor nearby places with marginally higher amenity counts.
-  const scored = places.map((p, i): Zone => {
-    const counts = emptyCounts();
-    for (const a of amenities) {
-      const d = haversineMeters(p.lat, p.lon, a.lat, a.lon);
-      if (d <= ZONE_RADIUS_METERS) {
-        counts[a.key] = (counts[a.key] ?? 0) + 1;
-        counts.total++;
-      }
-    }
-    const wealthScore = scoreWealth(counts);
-    const businessScore = scoreBusiness(counts);
-    const score = Math.min(100, Math.max(wealthScore, businessScore) + p.prominence);
-    return {
-      id: `place-${i}`,
-      label: p.name,
-      latitude: p.lat,
-      longitude: p.lon,
-      score,
-      wealthScore,
-      businessScore,
-      archetype: deriveArchetype(wealthScore, businessScore),
-      level: levelForScore(score),
-      amenities: counts,
-      radiusMeters: ZONE_RADIUS_METERS,
-      distanceFromCenterMeters: haversineMeters(centerLat, centerLon, p.lat, p.lon),
-    };
-  });
+  // Score every place through the canonical builder. Prominence is an
+  // explicit headline-only bonus used to break near-ties during dedupe.
+  const cityCenter = { latitude: centerLat, longitude: centerLon };
+  const scored = places.map(
+    (place, index): Zone =>
+      buildScoredZone({
+        id: `place-${index}`,
+        label: place.name,
+        coordinates: { latitude: place.lat, longitude: place.lon },
+        cityCenter,
+        amenityFeatures: amenities,
+        headlineScoreBonus: place.prominence,
+      })
+  );
 
-  // Dedupe + per-octant fairness: process highest-scoring first, skip
+  // Dedupe + per-region fairness: process highest-scoring first, skip
   // anything within PLACE_DEDUPE_METERS of a kept zone (suppresses
   // near-duplicate districts covering the same amenities), AND cap each
-  // 3×3 octant at PLACE_MAX_PER_OCTANT so dense inner-city scoring
-  // doesn't lock outer regions out of the returned set.
+  // region so dense inner-city scoring doesn't lock outer regions out.
   scored.sort((a, b) => b.score - a.score);
   const kept: Zone[] = [];
-  const perOctant = new Map<string, number>();
+  const perRegion = new Map<RegionDirection, number>();
   for (const z of scored) {
     if (z.score <= 0) continue;
-    const oct = octantKey(z.latitude, z.longitude, clampedBbox);
-    if ((perOctant.get(oct) ?? 0) >= PLACE_MAX_PER_OCTANT) continue;
+    const region = classifyRegion(z.latitude, z.longitude, clampedBbox);
+    if ((perRegion.get(region) ?? 0) >= PLACE_MAX_PER_REGION) continue;
     const tooClose = kept.some(
       (k) => haversineMeters(z.latitude, z.longitude, k.latitude, k.longitude) < PLACE_DEDUPE_METERS
     );
     if (tooClose) continue;
     kept.push(z);
-    perOctant.set(oct, (perOctant.get(oct) ?? 0) + 1);
+    perRegion.set(region, (perRegion.get(region) ?? 0) + 1);
     if (kept.length >= PLACE_MAX_ZONES) break;
   }
   return kept;
@@ -887,50 +274,34 @@ async function buildSingleZone(
 ): Promise<ZoneGridResult> {
   // Use a tight bbox around the center for the Overpass call
   const halfDeg = ZONE_RADIUS_METERS / 111000; // approx
-  const bbox: [number, number, number, number] = [
+  const bbox: ZoneBbox = [
     centerLat - halfDeg,
     centerLat + halfDeg,
     centerLon - halfDeg / Math.cos(toRadians(centerLat)),
     centerLon + halfDeg / Math.cos(toRadians(centerLat)),
   ];
-  const elements = await fetchOverpassForBbox(bbox);
-  const { amenities, places } = splitElements(elements);
-
-  const counts = emptyCounts();
-  for (const a of amenities) {
-    const d = haversineMeters(centerLat, centerLon, a.lat, a.lon);
-    if (d <= ZONE_RADIUS_METERS) {
-      counts[a.key] = (counts[a.key] ?? 0) + 1;
-      counts.total++;
-    }
+  const overpass = await fetchZoneElements(bbox);
+  if (overpass.status === 'unavailable') {
+    return buildUnavailableResult(centerLat, centerLon, bbox, true);
   }
+  const { amenities, places } = decodeZoneElements(overpass.elements);
 
-  const wealthScore = scoreWealth(counts);
-  const businessScore = scoreBusiness(counts);
-  const score = Math.max(wealthScore, businessScore);
   // User's search term wins — they should always see what they queried
   // reflected in the focused zone, not an adjacent OSM place name.
   const label =
     userSearchLabel ??
     nearestPlaceName(centerLat, centerLon, places, ZONE_RADIUS_METERS) ??
     'Central';
-
-  const zone: Zone = {
+  const zone = buildScoredZone({
     id: 'zone-0',
     label,
-    latitude: centerLat,
-    longitude: centerLon,
-    score,
-    wealthScore,
-    businessScore,
-    archetype: deriveArchetype(wealthScore, businessScore),
-    level: levelForScore(score),
-    amenities: counts,
-    radiusMeters: ZONE_RADIUS_METERS,
-    distanceFromCenterMeters: 0,
-  };
+    coordinates: { latitude: centerLat, longitude: centerLon },
+    cityCenter: { latitude: centerLat, longitude: centerLon },
+    amenityFeatures: amenities,
+  });
 
   return {
+    status: 'ok',
     zones: [zone],
     centroid: { latitude: centerLat, longitude: centerLon },
     bbox,
@@ -938,41 +309,19 @@ async function buildSingleZone(
   };
 }
 
-// Synthesized empty single zone — used when Overpass is unreachable so we
-// never sit through a second timeout via buildSingleZone's own Overpass call.
-function synthesizeEmptyZone(
+/** Provider failures carry no synthetic zone, so unavailable data cannot masquerade as score 0. */
+function buildUnavailableResult(
   centerLat: number,
   centerLon: number,
-  userSearchLabel?: string | null
+  bbox: ZoneBbox,
+  singleZone: boolean
 ): ZoneGridResult {
-  const halfDeg = ZONE_RADIUS_METERS / 111000;
-  const bbox: [number, number, number, number] = [
-    centerLat - halfDeg,
-    centerLat + halfDeg,
-    centerLon - halfDeg / Math.cos(toRadians(centerLat)),
-    centerLon + halfDeg / Math.cos(toRadians(centerLat)),
-  ];
-  const counts = emptyCounts();
   return {
-    zones: [
-      {
-        id: 'zone-0',
-        label: userSearchLabel ?? 'Central',
-        latitude: centerLat,
-        longitude: centerLon,
-        score: 0,
-        wealthScore: 0,
-        businessScore: 0,
-        archetype: 'developing',
-        level: levelForScore(0),
-        amenities: counts,
-        radiusMeters: ZONE_RADIUS_METERS,
-        distanceFromCenterMeters: 0,
-      },
-    ],
+    status: 'unavailable',
+    zones: [],
     centroid: { latitude: centerLat, longitude: centerLon },
     bbox,
-    singleZone: true,
+    singleZone,
   };
 }
 
@@ -989,7 +338,7 @@ export async function scanCityZones(
   country: string,
   centerLat: number,
   centerLon: number,
-  bbox?: [number, number, number, number]
+  bbox?: ZoneBbox
 ): Promise<ZoneGridResult> {
   const key = cacheKey(city, country);
   const cached = zoneGridCache.get(key);
@@ -1017,7 +366,7 @@ export async function scanCityZones(
 
     if (!workingBbox) {
       const result = await buildSingleZone(centerLat, centerLon, userSearchLabel);
-      const ttl = result.zones[0]?.amenities.total === 0 ? FAILURE_CACHE_TTL_MS : CACHE_TTL_MS;
+      const ttl = result.status === 'unavailable' ? FAILURE_CACHE_TTL_MS : CACHE_TTL_MS;
       zoneGridCache.set(key, { result, expiresAt: Date.now() + ttl });
       return result;
     }
@@ -1028,12 +377,9 @@ export async function scanCityZones(
     const { lat: clampLat, lon: clampLon } = bboxCenter(workingBbox);
     const clamped = clampBbox(workingBbox, clampLat, clampLon);
 
-    const elements = await fetchOverpassForBbox(clamped);
-    if (elements.length === 0) {
-      // Overpass unreachable. Don't recurse into buildSingleZone (which would
-      // fire ANOTHER Overpass call and double the timeout). Synthesize an
-      // empty single zone, cache it briefly so retries can recover.
-      const result = synthesizeEmptyZone(centerLat, centerLon, userSearchLabel);
+    const overpass = await fetchZoneElements(clamped);
+    if (overpass.status === 'unavailable') {
+      const result = buildUnavailableResult(centerLat, centerLon, clamped, false);
       zoneGridCache.set(key, {
         result,
         expiresAt: Date.now() + FAILURE_CACHE_TTL_MS,
@@ -1041,7 +387,7 @@ export async function scanCityZones(
       return result;
     }
 
-    const { amenities, places } = splitElements(elements);
+    const { amenities, places } = decodeZoneElements(overpass.elements);
 
     // Prefer place-based scanning — scan AT named OSM places (Mayfair,
     // Canary Wharf, Ginza, Polanco, etc.) rather than at fixed grid
@@ -1053,45 +399,26 @@ export async function scanCityZones(
       // Fallback: fixed 3×3 grid, label each point with the nearest place
       // name. Keeps old behaviour for cities where OSM places are sparse.
       const gridPoints = generateGridPoints(clamped);
-      zones = gridPoints.map((gp, i) => {
-        const counts = emptyCounts();
-        for (const a of amenities) {
-          const d = haversineMeters(gp.lat, gp.lon, a.lat, a.lon);
-          if (d <= ZONE_RADIUS_METERS) {
-            counts[a.key] = (counts[a.key] ?? 0) + 1;
-            counts.total++;
-          }
-        }
-        const wealthScore = scoreWealth(counts);
-        const businessScore = scoreBusiness(counts);
-        const score = Math.max(wealthScore, businessScore);
-        const nearName = nearestPlaceName(gp.lat, gp.lon, places, ZONE_RADIUS_METERS);
-        return {
-          id: `zone-${i}`,
-          label: nearName ?? directionalLabel(gp.row, gp.col),
-          latitude: gp.lat,
-          longitude: gp.lon,
-          score,
-          wealthScore,
-          businessScore,
-          archetype: deriveArchetype(wealthScore, businessScore),
-          level: levelForScore(score),
-          amenities: counts,
-          radiusMeters: ZONE_RADIUS_METERS,
-          distanceFromCenterMeters: haversineMeters(centerLat, centerLon, gp.lat, gp.lon),
-        };
+      const cityCenter = { latitude: centerLat, longitude: centerLon };
+      zones = gridPoints.map((gridPoint, index) => {
+        const nearName = nearestPlaceName(gridPoint.lat, gridPoint.lon, places, ZONE_RADIUS_METERS);
+        return buildScoredZone({
+          id: `zone-${index}`,
+          label: nearName ?? directionalLabel(gridPoint.row, gridPoint.col),
+          coordinates: { latitude: gridPoint.lat, longitude: gridPoint.lon },
+          cityCenter,
+          amenityFeatures: amenities,
+        });
       });
     }
 
     // User-label override — if the user typed a specific neighborhood,
-    // honor it. Three cases, in priority order:
+    // honor it. Two cases, in priority order:
     //   1. A place-based zone already matches the label (modulo case /
     //      apostrophes) → rename to canonical form so downstream lookups
     //      by label find it.
     //   2. The search center sits close enough to a place to be "about"
     //      it → rename the nearest zone.
-    //   3. No match → splice in a synthetic zone at the search center so
-    //      the user always sees what they searched for represented.
     if (userSearchLabel) {
       const normalizedUser = normalizeLabel(userSearchLabel);
       const matchIdx = zones.findIndex((z) => normalizeLabel(z.label) === normalizedUser);
@@ -1119,6 +446,7 @@ export async function scanCityZones(
     zones.sort((a, b) => b.score - a.score);
 
     const result: ZoneGridResult = {
+      status: 'ok',
       zones,
       centroid: { latitude: centerLat, longitude: centerLon },
       bbox: clamped,

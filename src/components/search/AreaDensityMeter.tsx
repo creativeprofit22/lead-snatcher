@@ -17,35 +17,14 @@ import {
 } from 'lucide-react';
 import GaugeChart from '@/components/animata/gauge-chart';
 import { SlidingNumber } from '@/components/motion-primitives/sliding-number';
-import type { Zone } from '@/lib/business/zone-grid';
-
-interface Amenities {
-  // Legacy fields — still accepted for backwards compatibility with
-  // pre-v2-wealth cached payloads. The rim icons below ignore them.
-  banks: number;
-  hotels: number;
-  hospitals: number;
-  pharmacies: number;
-  supermarkets: number;
-  fuelStations: number;
-  affluenceSpots: number;
-  total: number;
-
-  // v2-wealth buckets — what the rim now visualizes.
-  luxuryRetail?: number;
-  professionalServices?: number;
-  premiumHotels?: number;
-  corporateOffices?: number;
-  casinos?: number;
-  pawnshops?: number;
-}
+import type { Zone, ZoneAmenities } from '@/lib/business/zone-contract';
 
 interface AreaDensityMeterProps {
   score: number;
   level: string;
   label: string;
   description: string;
-  amenities?: Amenities;
+  amenities?: ZoneAmenities;
   /** Top-scored zone in the city scan — used to show exactly where data came from. */
   focusedZone?: Zone;
   /** Human city name (e.g. "Chicago") — shown alongside the neighborhood label. */
@@ -70,7 +49,7 @@ const CONTAINER_SIZE = GAUGE_SIZE + (ORBITAL_RADIUS - GAUGE_SIZE / 2) * 2 + 56;
 // distribute evenly and the rotating sweep band passes through each one's
 // center without the stacking that happened under the old 52° spacing.
 const AMENITIES: {
-  key: keyof Omit<Amenities, 'total'>;
+  key: keyof Omit<ZoneAmenities, 'total'>;
   label: string;
   icon: LucideIcon;
   angle: number;

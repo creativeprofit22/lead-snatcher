@@ -1,6 +1,12 @@
 import { z } from 'zod';
-import type { SearchMarketDensity, SearchSnapshot } from '@/lib/business/search-snapshot';
-import type { Zone } from '@/lib/business/zone-grid';
+import {
+  SEARCH_SNAPSHOT_VERSION,
+  searchMarketDensitySchema,
+  type SearchMarketDensity,
+  type SearchSnapshot,
+} from '@/lib/business/search-snapshot';
+import { zoneBboxSchema, zoneScanStatusSchema, zoneSchema } from '@/lib/business/zone-contract';
+import type { Zone, ZoneBbox, ZoneScanStatus } from '@/lib/business/zone-contract';
 import type { BusinessSearchResult, IndustryType } from '@/types';
 
 const businessResultSchema = z
@@ -18,52 +24,21 @@ const businessResultSchema = z
   })
   .passthrough();
 
-const amenitiesSchema = z.object({
-  banks: z.number(),
-  hotels: z.number(),
-  hospitals: z.number(),
-  pharmacies: z.number(),
-  supermarkets: z.number(),
-  fuelStations: z.number(),
-  affluenceSpots: z.number(),
-  total: z.number(),
-});
-
-const zoneSchema = z
-  .object({
-    id: z.string(),
-    label: z.string(),
-    latitude: z.number(),
-    longitude: z.number(),
-    score: z.number(),
-    wealthScore: z.number(),
-    businessScore: z.number(),
-    archetype: z.string(),
-    level: z.enum(['premium', 'commercial', 'moderate', 'developing']),
-    amenities: amenitiesSchema,
-    radiusMeters: z.number(),
-    distanceFromCenterMeters: z.number(),
-  })
-  .passthrough();
-
-const marketDensitySchema = z
-  .object({
-    count: z.number(),
-    level: z.string(),
-    label: z.string(),
-    description: z.string(),
-    areaScore: z.number().optional(),
-    competition: z.string().optional(),
-    amenities: amenitiesSchema.optional(),
+const marketDensitySchema = searchMarketDensitySchema
+  .unwrap()
+  .extend({
+    status: zoneScanStatusSchema,
   })
   .nullable();
 
 const responseSchema = z.object({
   results: z.array(businessResultSchema),
   marketDensity: marketDensitySchema,
+  zoneScanStatus: zoneScanStatusSchema,
   zones: z.array(zoneSchema),
-  zoneBbox: z.tuple([z.number(), z.number(), z.number(), z.number()]),
+  zoneBbox: zoneBboxSchema,
   singleZone: z.boolean(),
+  focusedZoneId: z.string().nullable(),
 });
 
 const errorSchema = z.object({ error: z.string().optional() });
@@ -74,7 +49,7 @@ export type SearchMode =
       kind: 'zone';
       zone: Zone;
       currentZones: Zone[];
-      currentZoneBbox: [number, number, number, number] | null;
+      currentZoneBbox: ZoneBbox | null;
       currentSingleZone: boolean;
     };
 
@@ -90,8 +65,9 @@ export interface RunBusinessSearchInput {
 export interface AppliedBusinessSearch {
   results: BusinessSearchResult[];
   marketDensity: SearchMarketDensity | null;
+  zoneScanStatus: ZoneScanStatus;
   zones: Zone[];
-  zoneBbox: [number, number, number, number] | null;
+  zoneBbox: ZoneBbox | null;
   singleZone: boolean;
   focusedZoneId: string | null;
   cachePayload: SearchSnapshot;
@@ -110,23 +86,6 @@ export class BusinessSearchError extends Error {
   }
 }
 
-function formatUserSearchLabel(raw: string): string | null {
-  const firstSegment = raw.split(',')[0]?.trim();
-  if (!firstSegment) return null;
-  const cleaned = firstSegment.replace(/\s+[A-Za-z]{2}$/, '').trim();
-  return (cleaned || firstSegment)
-    .split(/\s+/)
-    .map((word) => `${word.charAt(0).toUpperCase()}${word.slice(1).toLowerCase()}`)
-    .join(' ');
-}
-
-export function pickFocusedZoneId(zones: Zone[], city: string): string | null {
-  const label = formatUserSearchLabel(city);
-  return (
-    (label ? zones.find((zone) => zone.label === label)?.id : undefined) ?? zones[0]?.id ?? null
-  );
-}
-
 export function applyBusinessSearchResponse(
   rawResponse: unknown,
   input: RunBusinessSearchInput
@@ -142,7 +101,7 @@ export function applyBusinessSearchResponse(
 
   const data = parsed.data;
   const results = data.results as unknown as BusinessSearchResult[];
-  const responseZones = data.zones as Zone[];
+  const responseZones = data.zones;
   const mode = input.mode;
   const isInitial = mode.kind === 'initial';
   const zones =
@@ -155,9 +114,12 @@ export function applyBusinessSearchResponse(
     mode.kind === 'initial' ? data.zoneBbox : (data.zoneBbox ?? mode.currentZoneBbox);
   const singleZone = mode.kind === 'initial' ? data.singleZone : mode.currentSingleZone;
   const focusedZoneId =
-    mode.kind === 'initial' ? pickFocusedZoneId(zones, input.city) : mode.zone.id;
+    mode.kind === 'zone' && responseZones.length === 0
+      ? (data.focusedZoneId ?? mode.zone.id)
+      : data.focusedZoneId;
 
   const cachePayload: SearchSnapshot = {
+    version: SEARCH_SNAPSHOT_VERSION,
     results,
     industry: input.cacheIndustry,
     city: input.city,
@@ -167,6 +129,7 @@ export function applyBusinessSearchResponse(
     singleZone,
     focusedZoneId,
     marketDensity: data.marketDensity,
+    zoneScanStatus: data.zoneScanStatus,
   };
 
   let notification: AppliedBusinessSearch['notification'];
@@ -193,6 +156,7 @@ export function applyBusinessSearchResponse(
   return {
     results,
     marketDensity: data.marketDensity,
+    zoneScanStatus: data.zoneScanStatus,
     zones,
     zoneBbox,
     singleZone,

@@ -1,7 +1,10 @@
 import { NextRequest } from 'next/server';
 import { auth } from '@/lib/auth';
 import { putLastSearch, getLastSearch, clearLastSearch } from '@/lib/business/last-search-store';
-import type { PersistedSearchPayload } from '@/lib/business/search-snapshot';
+import {
+  SEARCH_SNAPSHOT_VERSION,
+  type PersistedSearchPayload,
+} from '@/lib/business/search-snapshot';
 
 /**
  * /api/business/last-search — the cross-session "resume last search" store.
@@ -78,6 +81,7 @@ export async function POST(request: NextRequest) {
   }
 
   await putLastSearch(session.user.id, {
+    version: SEARCH_SNAPSHOT_VERSION,
     results: incoming.results,
     industry: incoming.industry,
     city: incoming.city,
@@ -87,6 +91,7 @@ export async function POST(request: NextRequest) {
     zoneBbox: incoming.zoneBbox,
     singleZone: incoming.singleZone,
     focusedZoneId: incoming.focusedZoneId,
+    zoneScanStatus: incoming.zoneScanStatus,
     marketDensity: incoming.marketDensity,
   });
 

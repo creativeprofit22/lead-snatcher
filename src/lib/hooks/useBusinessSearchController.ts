@@ -8,7 +8,7 @@ import {
   type AppliedBusinessSearch,
 } from '@/lib/business/run-business-search';
 import type { SearchMarketDensity, SearchSnapshot } from '@/lib/business/search-snapshot';
-import type { Zone } from '@/lib/business/zone-grid';
+import type { Zone, ZoneBbox, ZoneScanStatus } from '@/lib/business/zone-contract';
 import type { BusinessSearchResult, IndustryType } from '@/types';
 
 export type SearchViewMode = 'search' | 'results';
@@ -17,8 +17,9 @@ export type SearchRadarPhase = 'off' | 'scanning' | 'revealing';
 export interface SearchResultSnapshot {
   results: BusinessSearchResult[];
   marketDensity: SearchMarketDensity | null;
+  zoneScanStatus: ZoneScanStatus | null;
   zones: Zone[];
-  zoneBbox: [number, number, number, number] | null;
+  zoneBbox: ZoneBbox | null;
   singleZone: boolean;
   focusedZoneId: string | null;
 }
@@ -77,6 +78,7 @@ type ControllerAction =
 export const EMPTY_SEARCH_RESULT_SNAPSHOT: SearchResultSnapshot = {
   results: [],
   marketDensity: null,
+  zoneScanStatus: null,
   zones: [],
   zoneBbox: null,
   singleZone: false,
@@ -96,6 +98,7 @@ function snapshotFromStoredSearch(snapshot: SearchSnapshot): SearchResultSnapsho
   return {
     results: snapshot.results,
     marketDensity: snapshot.marketDensity ?? null,
+    zoneScanStatus: snapshot.zoneScanStatus ?? snapshot.marketDensity?.status ?? null,
     zones: snapshot.zones ?? [],
     zoneBbox: snapshot.zoneBbox ?? null,
     singleZone: snapshot.singleZone ?? false,
@@ -107,6 +110,7 @@ function snapshotFromSearchResult(result: AppliedBusinessSearch): SearchResultSn
   return {
     results: result.results,
     marketDensity: result.marketDensity,
+    zoneScanStatus: result.zoneScanStatus,
     zones: result.zones,
     zoneBbox: result.zoneBbox,
     singleZone: result.singleZone,

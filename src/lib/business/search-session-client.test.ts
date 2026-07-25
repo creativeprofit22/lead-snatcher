@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { getLastSearch, saveLastSearch } from '@/lib/search-cache';
-import type { PersistedSearchPayload, SearchSnapshot } from './search-snapshot';
+import {
+  SEARCH_SNAPSHOT_VERSION,
+  type PersistedSearchPayload,
+  type SearchSnapshot,
+} from './search-snapshot';
 import { createSearchSessionClient } from './search-session-client';
 
 const NOW = 1_725_000_123_456;
@@ -8,6 +12,7 @@ const LAST_SEARCH_KEY = 'lead-snatcher-last-search';
 const DISMISSAL_KEY = 'lead-snatcher-resume-dismissed';
 
 const snapshot: SearchSnapshot = {
+  version: SEARCH_SNAPSHOT_VERSION,
   results: [
     {
       placeId: 'place-1',
@@ -67,6 +72,46 @@ describe('search session client persistence policy', () => {
     expect(client.readLocalResume()).toMatchObject({ city: 'Leeds', resultCount: 1 });
     await expect(client.fetchServerResumeIfLocalMissing()).resolves.toBeNull();
     expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  test('strips incompatible pre-v2 zones before local resume hydration', () => {
+    localStorage.setItem(
+      LAST_SEARCH_KEY,
+      JSON.stringify({
+        ...persisted,
+        version: 1,
+        zones: [
+          {
+            id: 'legacy-zone',
+            label: 'Legacy Zone',
+            latitude: 53.8,
+            longitude: -1.55,
+            score: 70,
+            level: 'commercial',
+            amenities: { total: 2 },
+            radiusMeters: 1_500,
+            distanceFromCenterMeters: 0,
+          },
+        ],
+        focusedZoneId: 'legacy-zone',
+      })
+    );
+    const client = createSearchSessionClient({ fetch: vi.fn<typeof fetch>() });
+    const resume = client.readLocalResume();
+    const hydrate = vi.fn();
+
+    expect(resume?.payload).toMatchObject({
+      version: SEARCH_SNAPSHOT_VERSION,
+      results: persisted.results,
+      city: 'Leeds',
+    });
+    expect(resume?.payload).not.toHaveProperty('zones');
+    expect(resume?.payload).not.toHaveProperty('marketDensity');
+    expect(resume?.payload).not.toHaveProperty('zoneBbox');
+    expect(resume?.payload).not.toHaveProperty('focusedZoneId');
+
+    if (resume) client.applySnapshot(resume.payload, hydrate);
+    expect(hydrate).toHaveBeenCalledWith(expect.not.objectContaining({ zones: expect.anything() }));
   });
 
   test.each(['missing', 'stale'] as const)(

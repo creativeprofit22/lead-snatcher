@@ -2,7 +2,7 @@ import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import type { AppliedBusinessSearch, runBusinessSearch } from '@/lib/business/run-business-search';
 import { BusinessSearchError } from '@/lib/business/run-business-search';
-import type { SearchSnapshot } from '@/lib/business/search-snapshot';
+import { SEARCH_SNAPSHOT_VERSION, type SearchSnapshot } from '@/lib/business/search-snapshot';
 import type { BusinessSearchResult, ScoreBreakdown } from '@/types';
 import {
   EMPTY_SEARCH_RESULT_SNAPSHOT,
@@ -60,6 +60,7 @@ const result: BusinessSearchResult = {
 
 function applied(overrides: Partial<AppliedBusinessSearch> = {}): AppliedBusinessSearch {
   const cachePayload: SearchSnapshot = {
+    version: SEARCH_SNAPSHOT_VERSION,
     results: [result],
     industry: 'retail',
     city: 'London',
@@ -68,7 +69,9 @@ function applied(overrides: Partial<AppliedBusinessSearch> = {}): AppliedBusines
     zoneBbox: [51, 52, -1, 0],
     singleZone: false,
     focusedZoneId: zone.id,
+    zoneScanStatus: 'ok',
     marketDensity: {
+      status: 'ok',
       count: 1,
       level: 'high',
       label: 'Central',
@@ -79,6 +82,7 @@ function applied(overrides: Partial<AppliedBusinessSearch> = {}): AppliedBusines
   return {
     results: cachePayload.results,
     marketDensity: cachePayload.marketDensity ?? null,
+    zoneScanStatus: cachePayload.zoneScanStatus ?? 'ok',
     zones: cachePayload.zones ?? [],
     zoneBbox: cachePayload.zoneBbox ?? null,
     singleZone: cachePayload.singleZone ?? false,
@@ -291,6 +295,7 @@ describe('useBusinessSearchController', () => {
 
     act(() =>
       harness.result.current.hydrateSnapshot({
+        version: SEARCH_SNAPSHOT_VERSION,
         results: [],
         industry: 'retail',
         city: 'Leeds',

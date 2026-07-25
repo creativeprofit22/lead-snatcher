@@ -1,36 +1,52 @@
+import { z } from 'zod';
 import type { BusinessSearchResult, IndustryType } from '@/types';
-import type { Zone } from './zone-grid';
+import {
+  zoneAmenitiesSchema,
+  zoneBboxSchema,
+  zoneScanStatusSchema,
+  zoneSchema,
+} from './zone-contract';
+import type { Zone, ZoneAmenities, ZoneBbox, ZoneScanStatus } from './zone-contract';
+
+export const SEARCH_SNAPSHOT_VERSION = 2 as const;
+
+export const searchMarketDensitySchema = z
+  .object({
+    status: zoneScanStatusSchema.optional(),
+    count: z.number(),
+    level: z.string(),
+    label: z.string(),
+    description: z.string(),
+    areaScore: z.number().optional(),
+    competition: z.string().optional(),
+    amenities: zoneAmenitiesSchema.optional(),
+  })
+  .nullable();
 
 export interface SearchMarketDensity {
+  status?: ZoneScanStatus;
   count: number;
   level: string;
   label: string;
   description: string;
   areaScore?: number;
   competition?: string;
-  amenities?: {
-    banks: number;
-    hotels: number;
-    hospitals: number;
-    pharmacies: number;
-    supermarkets: number;
-    fuelStations: number;
-    affluenceSpots: number;
-    total: number;
-  };
+  amenities?: ZoneAmenities;
 }
 
 /** Durable search data shared by local cache, auto-resume, and named sessions. */
 export interface SearchSnapshot {
+  version: typeof SEARCH_SNAPSHOT_VERSION;
   results: BusinessSearchResult[];
   industry: IndustryType;
   city: string;
   country: string;
   // Optional for compatibility with search payloads stored before zone analysis.
   zones?: Zone[];
-  zoneBbox?: [number, number, number, number] | null;
+  zoneBbox?: ZoneBbox | null;
   singleZone?: boolean;
   focusedZoneId?: string | null;
+  zoneScanStatus?: ZoneScanStatus;
   marketDensity?: SearchMarketDensity | null;
 }
 
@@ -39,13 +55,65 @@ export interface PersistedSearchPayload extends SearchSnapshot {
   timestamp: number;
 }
 
-/**
- * Parses stored payload JSON without validating nested search results.
- * Persistence historically accepted those objects as-is, so this only rejects malformed JSON.
- */
+const persistedSearchBaseSchema = z
+  .object({
+    version: z.number().int().optional(),
+    results: z.array(z.unknown()),
+    industry: z.string(),
+    city: z.string(),
+    country: z.string(),
+    timestamp: z.number(),
+  })
+  .passthrough();
+
+const zoneAnalysisSchema = z
+  .object({
+    zones: z.array(zoneSchema).optional(),
+    zoneBbox: zoneBboxSchema.nullable().optional(),
+    singleZone: z.boolean().optional(),
+    focusedZoneId: z.string().nullable().optional(),
+    zoneScanStatus: zoneScanStatusSchema.optional(),
+    marketDensity: searchMarketDensitySchema.optional(),
+  })
+  .passthrough();
+
+const ZONE_ANALYSIS_KEYS = [
+  'zones',
+  'zoneBbox',
+  'singleZone',
+  'focusedZoneId',
+  'zoneScanStatus',
+  'marketDensity',
+] as const;
+
+function migratePersistedSearchPayload(value: unknown): PersistedSearchPayload | null {
+  const base = persistedSearchBaseSchema.safeParse(value);
+  if (!base.success || (base.data.version ?? 0) > SEARCH_SNAPSHOT_VERSION) return null;
+
+  const hasZoneAnalysis = ZONE_ANALYSIS_KEYS.some((key) =>
+    Object.prototype.hasOwnProperty.call(base.data, key)
+  );
+  if (!hasZoneAnalysis) {
+    return { ...base.data, version: SEARCH_SNAPSHOT_VERSION } as PersistedSearchPayload;
+  }
+
+  const zoneAnalysis = zoneAnalysisSchema.safeParse(base.data);
+  if (zoneAnalysis.success) {
+    return { ...zoneAnalysis.data, version: SEARCH_SNAPSHOT_VERSION } as PersistedSearchPayload;
+  }
+
+  const migrated: Record<string, unknown> = {
+    ...base.data,
+    version: SEARCH_SNAPSHOT_VERSION,
+  };
+  for (const key of ZONE_ANALYSIS_KEYS) delete migrated[key];
+  return migrated as unknown as PersistedSearchPayload;
+}
+
+/** Parses and migrates durable search data before it reaches result-view hydration. */
 export function parsePersistedSearchPayload(raw: string): PersistedSearchPayload | null {
   try {
-    return JSON.parse(raw) as PersistedSearchPayload;
+    return migratePersistedSearchPayload(JSON.parse(raw));
   } catch {
     return null;
   }

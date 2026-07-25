@@ -32,6 +32,7 @@ import {
   useSearchSessionPersistence,
   type SearchSessionPayload,
 } from '@/lib/business/search-session-client';
+import { SEARCH_SNAPSHOT_VERSION } from '@/lib/business/search-snapshot';
 import {
   filterAndSortResults,
   mergeEnrichmentResults,
@@ -40,7 +41,7 @@ import {
 } from '@/lib/business/derive-search-results';
 import { DEFAULT_COUNTRY_CODE, INDUSTRY_TYPES } from '@/lib/constants';
 import type { IndustryType, BusinessSearchResult } from '@/types';
-import type { Zone } from '@/lib/business/zone-grid';
+import type { Zone } from '@/lib/business/zone-contract';
 
 export default function Home() {
   return (
@@ -67,6 +68,7 @@ function HomeInner() {
     searchResults,
     radarPhase,
     marketDensity,
+    zoneScanStatus,
     zones,
     zoneBbox,
     singleZone,
@@ -89,6 +91,7 @@ function HomeInner() {
     },
   });
 
+  const focusedZone = focusedZoneId ? zones.find((zone) => zone.id === focusedZoneId) : undefined;
   // Filter & sort state
   const [sortBy, setSortBy] = useState<SearchResultSort>('fit');
   const [filterHasEmail, setFilterHasEmail] = useState(false);
@@ -339,6 +342,7 @@ function HomeInner() {
                     'Session'
                   } in ${city}`}
                   getPayload={() => ({
+                    version: SEARCH_SNAPSHOT_VERSION,
                     results: searchResults,
                     industry: (selectedIndustry ?? 'other') as IndustryType,
                     city: city.trim(),
@@ -348,6 +352,7 @@ function HomeInner() {
                     zoneBbox,
                     singleZone,
                     focusedZoneId,
+                    zoneScanStatus: zoneScanStatus ?? undefined,
                     marketDensity,
                   })}
                 />
@@ -370,19 +375,35 @@ function HomeInner() {
               />
             )}
 
-            {marketDensity && marketDensity.areaScore !== undefined && (
-              <div className="mb-6">
-                <AreaDensityMeter
-                  score={marketDensity.areaScore}
-                  level={marketDensity.level}
-                  label={marketDensity.label}
-                  description={marketDensity.description}
-                  amenities={marketDensity.amenities}
-                  focusedZone={zones.find((z) => z.id === focusedZoneId) ?? zones[0]}
-                  cityLabel={city}
-                  singleZone={singleZone}
-                />
+            {zoneScanStatus === 'unavailable' && marketDensity ? (
+              <div
+                role="status"
+                className="mb-6 rounded-xl border border-border-bright/50 bg-surface/70 p-5 backdrop-blur-sm"
+              >
+                <p className="font-mono text-xs uppercase tracking-[0.18em] text-amber-300">
+                  Market density unavailable
+                </p>
+                <p className="mt-2 text-sm leading-6 text-gray-300">
+                  {marketDensity.description}
+                </p>
               </div>
+            ) : (
+              marketDensity &&
+              marketDensity.areaScore !== undefined &&
+              focusedZone && (
+                <div className="mb-6">
+                  <AreaDensityMeter
+                    score={marketDensity.areaScore}
+                    level={marketDensity.level}
+                    label={marketDensity.label}
+                    description={marketDensity.description}
+                    amenities={marketDensity.amenities}
+                    focusedZone={focusedZone}
+                    cityLabel={city}
+                    singleZone={singleZone}
+                  />
+                </div>
+              )
             )}
 
             {/* Filters & Sort — HUD panel */}
@@ -683,6 +704,7 @@ function HomeInner() {
             results={radarPhase === 'revealing' ? searchResults : null}
             zones={radarPhase === 'revealing' ? zones : null}
             zoneBbox={radarPhase === 'revealing' ? zoneBbox : null}
+            focusedZoneId={focusedZoneId}
             singleZone={singleZone}
             onComplete={completeRadar}
           />

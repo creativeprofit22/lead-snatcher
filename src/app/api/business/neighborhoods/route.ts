@@ -2,7 +2,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { geocodeCity, scanCityZones } from '@/lib/business';
 import { checkRateLimit, getClientIp, RATE_LIMITS } from '@/lib/rate-limit';
-import type { Zone, ZoneArchetype } from '@/lib/business/zone-grid';
+import type { Zone, ZoneArchetype } from '@/lib/business/zone-contract';
+import {
+  classifyRegion,
+  REGION_LABELS,
+  REGION_ORDER,
+  type RegionDirection,
+} from '@/lib/business/zone-regions';
 
 // Directional fallbacks used by zone-grid when no named place is nearby.
 // These are NOT real neighborhood names and should be hidden from suggestions.
@@ -18,8 +24,6 @@ const DIRECTIONAL_FALLBACK_LABELS = new Set([
   'NE Quadrant',
   'Zone',
 ]);
-
-type RegionDirection = 'nw' | 'n' | 'ne' | 'w' | 'central' | 'e' | 'sw' | 's' | 'se';
 
 interface RegionSummary {
   direction: RegionDirection;
@@ -44,54 +48,6 @@ interface NeighborhoodOut {
   region: RegionDirection;
 }
 
-const DIRECTION_LABELS: Record<RegionDirection, string> = {
-  nw: 'Northwest',
-  n: 'North',
-  ne: 'Northeast',
-  w: 'West',
-  central: 'Central',
-  e: 'East',
-  sw: 'Southwest',
-  s: 'South',
-  se: 'Southeast',
-};
-
-export function getRegionAt(
-  grid: readonly (readonly RegionDirection[])[],
-  latIndex: number,
-  lonIndex: number
-): RegionDirection {
-  return grid[latIndex]?.[lonIndex] ?? 'central';
-}
-
-/**
- * Classify a lat/lng into one of 9 regions based on the city bbox.
- * Splits bbox into a 3×3 grid. Lat axis: south third / mid third / north
- * third. Lon axis: west / mid / east. Combined gives SW/S/SE, W/Central/E,
- * NW/N/NE.
- */
-function classifyRegion(
-  lat: number,
-  lon: number,
-  bbox: [number, number, number, number]
-): RegionDirection {
-  const [south, north, west, east] = bbox;
-  const latThird = (north - south) / 3;
-  const lonThird = (east - west) / 3;
-
-  const latIdx = lat < south + latThird ? 0 : lat < south + 2 * latThird ? 1 : 2; // 0=south, 1=mid, 2=north
-  const lonIdx = lon < west + lonThird ? 0 : lon < west + 2 * lonThird ? 1 : 2; // 0=west, 1=mid, 2=east
-
-  const grid: RegionDirection[][] = [
-    ['sw', 's', 'se'],
-    ['w', 'central', 'e'],
-    ['nw', 'n', 'ne'],
-  ];
-  return getRegionAt(grid, latIdx, lonIdx);
-}
-
-const REGION_ORDER: RegionDirection[] = ['nw', 'n', 'ne', 'w', 'central', 'e', 'sw', 's', 'se'];
-
 function buildRegionSummaries(zones: NeighborhoodOut[]): RegionSummary[] {
   const byRegion = new Map<RegionDirection, NeighborhoodOut[]>();
   for (const z of zones) {
@@ -105,7 +61,7 @@ function buildRegionSummaries(zones: NeighborhoodOut[]): RegionSummary[] {
     const top = sorted[0];
     return {
       direction,
-      label: DIRECTION_LABELS[direction],
+      label: REGION_LABELS[direction],
       score: top?.score ?? 0,
       zoneCount: list.length,
       topLabel: top?.label ?? null,

@@ -4,14 +4,15 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { TextEffect } from '@/components/motion-primitives/text-effect';
 import type { BusinessSearchResult } from '@/types';
-import type { Zone } from '@/lib/business/zone-grid';
+import type { Zone, ZoneBbox } from '@/lib/business/zone-contract';
 
 interface RadarScanProps {
   city: string;
   results: BusinessSearchResult[] | null;
   zones?: Zone[] | null;
   /** [south, north, west, east] — used to place both zones and pins consistently. */
-  zoneBbox?: [number, number, number, number] | null;
+  zoneBbox?: ZoneBbox | null;
+  focusedZoneId: string | null;
   singleZone?: boolean;
   onComplete?: () => void;
 }
@@ -83,11 +84,7 @@ function crossedAngle(prev: number, curr: number, target: number): boolean {
 }
 
 /** Project lat/lng to radar SVG space using a bounding box. */
-function projectToRadar(
-  lat: number,
-  lng: number,
-  bbox: [number, number, number, number]
-): { x: number; y: number } {
+function projectToRadar(lat: number, lng: number, bbox: ZoneBbox): { x: number; y: number } {
   const [south, north, west, east] = bbox;
   const nx = (lng - west) / Math.max(east - west, 1e-6);
   const ny = 1 - (lat - south) / Math.max(north - south, 1e-6);
@@ -103,9 +100,7 @@ function projectToRadar(
 }
 
 /** Auto-compute bbox from a set of points (fallback when zoneBbox missing). */
-function autoBbox(
-  points: { latitude?: number; longitude?: number }[]
-): [number, number, number, number] | null {
+function autoBbox(points: { latitude?: number; longitude?: number }[]): ZoneBbox | null {
   const withCoords = points.filter(
     (p) => typeof p.latitude === 'number' && typeof p.longitude === 'number'
   );
@@ -122,6 +117,7 @@ export function RadarScan({
   results,
   zones,
   zoneBbox,
+  focusedZoneId,
   singleZone,
   onComplete,
 }: RadarScanProps) {
@@ -141,7 +137,7 @@ export function RadarScan({
   }
 
   // Pick bbox: prefer explicit zoneBbox, else derive from zones, else from results.
-  const effectiveBbox: [number, number, number, number] | null = useMemo(() => {
+  const effectiveBbox: ZoneBbox | null = useMemo(() => {
     if (zoneBbox) return zoneBbox;
     if (zones && zones.length > 0) {
       const bb = autoBbox(zones);
@@ -151,14 +147,16 @@ export function RadarScan({
     return null;
   }, [zoneBbox, zones, results]);
 
-  // Prepare zone dots — score-desc, label top 3 (named places only)
+  // Keep score ordering for bloom presentation, but always label the server-selected focus.
   const zoneDots: ZoneDot[] = useMemo(() => {
     if (!zones || zones.length === 0 || !effectiveBbox) return [];
     const sorted = [...zones].sort((a, b) => b.score - a.score);
 
-    // Only label zones that have real place names (not directional fallbacks)
+    // Label the highest-scoring named zones plus the authoritative focus, even when
+    // that focus is directional or ranks below the normal label cutoff.
     const nameable = sorted.filter((z) => !DIRECTIONAL_FALLBACK_LABELS.has(z.label));
     const labeledIds = new Set(nameable.slice(0, LABELED_ZONE_COUNT).map((z) => z.id));
+    if (focusedZoneId) labeledIds.add(focusedZoneId);
 
     return sorted.map((z, i) => {
       const { x, y } = projectToRadar(z.latitude, z.longitude, effectiveBbox);
@@ -172,7 +170,7 @@ export function RadarScan({
         order: i,
       };
     });
-  }, [zones, effectiveBbox]);
+  }, [zones, effectiveBbox, focusedZoneId]);
 
   // Ambient scanner pings — small "noise" dots that pop in/out at stable
   // random positions across the radar during sweep + bloom, making the scan
@@ -336,12 +334,14 @@ export function RadarScan({
   // ---------- header / footer text ----------
 
   const allLit = pins.length > 0 && lit.size >= pins.length;
-  const topZone = zoneDots[0] ?? null;
+  const lockTarget = focusedZoneId
+    ? (zoneDots.find((zone) => zone.id === focusedZoneId) ?? null)
+    : null;
 
   const headerLabel = (() => {
     if (phase === 'complete' || allLit) return 'Scan Complete';
     if (phase === 'pins') return 'Acquiring Targets';
-    if (phase === 'zooming') return topZone ? `Locking On ${topZone.label}` : 'Locking On';
+    if (phase === 'zooming') return lockTarget ? `Locking On ${lockTarget.label}` : 'Locking On';
     if (phase === 'bloom') {
       const premium = zoneDots.filter((z) => z.score >= 50).length;
       return premium > 0
@@ -355,10 +355,11 @@ export function RadarScan({
   const wedgeEndX = RADAR_CENTER + RADAR_RADIUS * Math.cos(wedgeEndRad);
   const wedgeEndY = RADAR_CENTER + RADAR_RADIUS * Math.sin(wedgeEndRad);
 
-  // Camera transform — scales + offsets SVG so topZone lands at container center.
-  const tightView = !!topZone && (phase === 'zooming' || phase === 'pins' || phase === 'complete');
-  const zoomXPct = topZone ? ((RADAR_CENTER - topZone.x * ZOOM_SCALE) / RADAR_SIZE) * 100 : 0;
-  const zoomYPct = topZone ? ((RADAR_CENTER - topZone.y * ZOOM_SCALE) / RADAR_SIZE) * 100 : 0;
+  // Camera transform follows the server-selected focus; score rank never chooses the lock target.
+  const tightView =
+    !!lockTarget && (phase === 'zooming' || phase === 'pins' || phase === 'complete');
+  const zoomXPct = lockTarget ? ((RADAR_CENTER - lockTarget.x * ZOOM_SCALE) / RADAR_SIZE) * 100 : 0;
+  const zoomYPct = lockTarget ? ((RADAR_CENTER - lockTarget.y * ZOOM_SCALE) / RADAR_SIZE) * 100 : 0;
 
   return (
     <motion.div
@@ -537,7 +538,7 @@ export function RadarScan({
                   </circle>
                 ))}
 
-              {/* Zone dots — visible during bloom, fade non-top zones on lock-in */}
+              {/* Zone dots — score ordered for bloom; focus ordered for lock-in. */}
               {(phase === 'bloom' ||
                 phase === 'zooming' ||
                 phase === 'pins' ||
@@ -548,12 +549,12 @@ export function RadarScan({
                   // Halo radius scales from 10px (score 0) to 36px (score 100).
                   const haloR = 10 + (z.score / 100) * 26;
                   const dotOpacity = 0.35 + (z.score / 100) * 0.65;
-                  const isTop = i === 0;
+                  const isFocused = z.id === focusedZoneId;
                   const locked = phase === 'zooming' || phase === 'pins' || phase === 'complete';
-                  // During lock-on, non-top zones fade; top zone stays bright.
-                  // Once pins start, even the top zone softens so pins dominate.
+                  // During lock-on, non-focused zones fade. Once pins start, the
+                  // focused zone also softens so business pins dominate.
                   const groupOpacity = locked
-                    ? isTop
+                    ? isFocused
                       ? phase === 'pins' || phase === 'complete'
                         ? 0.55
                         : 1
@@ -570,9 +571,10 @@ export function RadarScan({
                       <circle cx={z.x} cy={z.y} r={haloR} fill="url(#zone-halo)" />
                       <circle cx={z.x} cy={z.y} r={5} fill="#7dd3fc" fillOpacity={dotOpacity} />
                       <circle cx={z.x} cy={z.y} r={3} fill="#e0f2fe" />
-                      {/* Corner-bracket lock indicator, only on top zone during lock-on */}
-                      {isTop && locked && (
+                      {/* Corner-bracket lock indicator follows the authoritative focus. */}
+                      {isFocused && locked && (
                         <motion.g
+                          aria-label={`Radar lock: ${z.label}`}
                           initial={{ opacity: 0, scale: 0.6 }}
                           animate={{ opacity: 0.9, scale: 1 }}
                           transition={{ duration: 0.3, ease: 'easeOut' }}
@@ -688,13 +690,13 @@ export function RadarScan({
             if (!z.labeled) return null;
             const visible = phase !== 'bloom' || i < bloomedCount;
             if (!visible) return null;
-            const isTop = i === 0;
+            const isFocused = z.id === focusedZoneId;
             const locked = phase === 'zooming' || phase === 'pins' || phase === 'complete';
-            // Non-top zones fade out on lock-in. Top zone slides to container
-            // center so it tracks its dot through the zoom.
-            const labelLeft = locked && isTop ? 50 : (z.x / RADAR_SIZE) * 100;
-            const labelTop = locked && isTop ? 50 : (z.y / RADAR_SIZE) * 100;
-            const labelOpacity = locked && !isTop ? 0 : locked && isTop ? 0.9 : 1;
+            // Non-focused zones fade on lock-in. The authoritative label tracks
+            // its dot to the center through the zoom.
+            const labelLeft = locked && isFocused ? 50 : (z.x / RADAR_SIZE) * 100;
+            const labelTop = locked && isFocused ? 50 : (z.y / RADAR_SIZE) * 100;
+            const labelOpacity = locked && !isFocused ? 0 : locked ? 0.9 : 1;
             return (
               <motion.div
                 key={`label-${z.id}`}

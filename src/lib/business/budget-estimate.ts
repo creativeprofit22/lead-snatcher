@@ -8,11 +8,11 @@
  */
 
 import type { ScoreBreakdown } from '@/types';
-import type { ZoneArchetype } from './zone-grid';
+import type { ZoneArchetype, ZoneLevel } from './zone-contract';
 
 interface BudgetInput {
-  areaScore: number; // 0-100 from Overpass
-  areaLevel: string; // premium, commercial, moderate, developing
+  areaScore?: number; // 0-100 from Overpass; omitted when the provider is unavailable
+  areaLevel?: ZoneLevel;
   reviewCount: number;
   /** Google rating 0-5. Combined with reviewCount for the revenue composite. */
   rating?: number;
@@ -177,19 +177,21 @@ export function estimateBudget(input: BudgetInput): BudgetEstimate {
     }
   }
 
-  // Area quality (0-20 points)
-  if (input.areaScore >= 75) {
-    budgetPoints += 20;
-    reasons.push('Located in a premium commercial zone');
-  } else if (input.areaScore >= 50) {
-    budgetPoints += 14;
-    reasons.push('Located in an active commercial area');
-  } else if (input.areaScore >= 25) {
-    budgetPoints += 7;
-    reasons.push('Located in a moderate commercial area');
-  } else {
-    budgetPoints += 2;
-    reasons.push('Located in a developing area');
+  // Area quality (0-20 points). Provider outages contribute no inferred points or reasons.
+  if (typeof input.areaScore === 'number') {
+    if (input.areaScore >= 75) {
+      budgetPoints += 20;
+      reasons.push('Located in a premium commercial zone');
+    } else if (input.areaScore >= 50) {
+      budgetPoints += 14;
+      reasons.push('Located in an active commercial area');
+    } else if (input.areaScore >= 25) {
+      budgetPoints += 7;
+      reasons.push('Located in a moderate commercial area');
+    } else {
+      budgetPoints += 2;
+      reasons.push('Located in a developing area');
+    }
   }
 
   // Revenue composite (0-20 pts) — volume curve × rating quality multiplier.
@@ -297,8 +299,8 @@ export function buildBudgetInput(
   reviewCount: number,
   hasWebsite: boolean,
   contactPoints: number,
-  areaScore: number,
-  areaLevel: string,
+  areaScore?: number,
+  areaLevel?: ZoneLevel,
   priceLevel?: number,
   rating?: number,
   zoneArchetype?: ZoneArchetype,

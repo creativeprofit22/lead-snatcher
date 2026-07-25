@@ -1,4 +1,5 @@
 import type { GeocodeResult } from '@/types';
+import type { ZoneBbox } from './zone-contract';
 
 const NOMINATIM_BASE_URL = 'https://nominatim.openstreetmap.org';
 
@@ -52,7 +53,7 @@ export async function geocodeCity(
       return null;
     }
 
-    let bbox: [number, number, number, number] | undefined;
+    let bbox: ZoneBbox | undefined;
     if (result.boundingbox && result.boundingbox.length === 4) {
       const [south, north, west, east] = result.boundingbox.map(parseFloat);
       if (

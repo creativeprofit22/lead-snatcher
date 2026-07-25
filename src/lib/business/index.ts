@@ -10,7 +10,24 @@ export { searchBusinesses } from './search';
 export type { SearchOptions } from './search';
 export { analyzeWebsite, analyzeWebsitesBatch } from './pagespeed';
 export { scrapeWebsite, scrapeWebsitesBatch } from './scraper';
-export { scoreArea } from './area-score';
-export type { AreaScore } from './area-score';
 export { scanCityZones, clearZoneGridCache } from './zone-grid';
-export type { Zone, ZoneAmenities, ZoneGridResult, ZoneLevel } from './zone-grid';
+export {
+  zoneAmenitiesSchema,
+  zoneArchetypeSchema,
+  zoneBboxSchema,
+  zoneCentroidSchema,
+  zoneGridResultSchema,
+  zoneLevelSchema,
+  zoneScanStatusSchema,
+  zoneSchema,
+} from './zone-contract';
+export type {
+  Zone,
+  ZoneAmenities,
+  ZoneArchetype,
+  ZoneBbox,
+  ZoneCentroid,
+  ZoneGridResult,
+  ZoneLevel,
+  ZoneScanStatus,
+} from './zone-contract';

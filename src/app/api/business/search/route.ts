@@ -3,7 +3,7 @@ import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/db';
 import { geocodeCity, searchBusinesses, scanCityZones } from '@/lib/business';
 import { getPageSpeedKey } from '@/lib/business/pagespeed-key';
-import type { Zone, ZoneLevel } from '@/lib/business/zone-grid';
+import type { Zone, ZoneLevel } from '@/lib/business/zone-contract';
 import { estimateBudget, buildBudgetInput, computeFitScore } from '@/lib/business/budget-estimate';
 import { getSearchQuery } from '@/lib/constants';
 import { ApiError } from '@/lib/errors';
@@ -70,6 +70,59 @@ function describeZone(zone: Zone): string {
 export function getFallbackZoneLabel(displayName: string | null | undefined): string {
   return displayName?.split(',')[0]?.trim() || 'Area';
 }
+
+interface SearchCenter {
+  latitude: number;
+  longitude: number;
+}
+
+function distanceBetweenMeters(from: SearchCenter, to: SearchCenter): number {
+  const toRadians = (degrees: number) => (degrees * Math.PI) / 180;
+  const earthRadiusMeters = 6_371_000;
+  const latitudeDelta = toRadians(to.latitude - from.latitude);
+  const longitudeDelta = toRadians(to.longitude - from.longitude);
+  const fromLatitude = toRadians(from.latitude);
+  const toLatitude = toRadians(to.latitude);
+  const haversine =
+    Math.sin(latitudeDelta / 2) ** 2 +
+    Math.cos(fromLatitude) * Math.cos(toLatitude) * Math.sin(longitudeDelta / 2) ** 2;
+
+  return 2 * earthRadiusMeters * Math.asin(Math.sqrt(haversine));
+}
+
+/** Selects the one zone used for budgets, density, and persisted UI focus. */
+export function selectFocusedZone(
+  zones: Zone[],
+  searchCenter: SearchCenter | null,
+  targetedZoneLabel?: string
+): Zone | undefined {
+  if (targetedZoneLabel) {
+    const labelMatch = zones.find((zone) => zone.label === targetedZoneLabel);
+    if (labelMatch) return labelMatch;
+  }
+
+  if (
+    !searchCenter ||
+    !Number.isFinite(searchCenter.latitude) ||
+    !Number.isFinite(searchCenter.longitude)
+  ) {
+    return zones[0];
+  }
+
+  let nearestZone: Zone | undefined;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  for (const zone of zones) {
+    if (!Number.isFinite(zone.latitude) || !Number.isFinite(zone.longitude)) continue;
+    const distance = distanceBetweenMeters(searchCenter, zone);
+    if (distance < nearestDistance) {
+      nearestZone = zone;
+      nearestDistance = distance;
+    }
+  }
+
+  return nearestZone ?? zones[0];
+}
+
 export async function POST(request: NextRequest) {
   try {
     const session = await auth();
@@ -124,7 +177,7 @@ export async function POST(request: NextRequest) {
 
     // Run business search and city zone scan in parallel. Zone scan is free
     // (one Overpass call, cached 7d per city) and now serves as the single
-    // source of truth for area density — no separate scoreArea call that
+    // source of truth for area density, avoiding a redundant request that
     // could fail when Overpass is rate-limited.
     const [results, zoneGrid] = await Promise.all([
       searchBusinesses(session.user.id, searchQuery, searchCenterLat, searchCenterLng, limit, {
@@ -142,35 +195,16 @@ export async function POST(request: NextRequest) {
       ),
     ]);
 
-    // Pick the focused zone:
-    //  - If the caller specified a zoneLabel (chip click), use that zone
-    //  - Else the top-scoring zone (zones are already sorted desc by score)
-    //  - Fallback for empty zones list: synthesize a neutral zone so the
-    //    response is always well-formed.
-    const focusedZone: Zone = (zoneLabel && zoneGrid.zones.find((z) => z.label === zoneLabel)) ||
-      zoneGrid.zones[0] || {
-        id: 'zone-fallback',
-        label: getFallbackZoneLabel(geocodeResult.displayName),
-        latitude: searchCenterLat,
-        longitude: searchCenterLng,
-        score: 50,
-        wealthScore: 50,
-        businessScore: 50,
-        archetype: 'mixed',
-        level: 'moderate' as ZoneLevel,
-        amenities: {
-          banks: 0,
-          hotels: 0,
-          hospitals: 0,
-          pharmacies: 0,
-          supermarkets: 0,
-          fuelStations: 0,
-          affluenceSpots: 0,
-          total: 0,
-        },
-        radiusMeters: 1500,
-        distanceFromCenterMeters: 0,
-      };
+    // Resolve focus once on the server. Targeted labels win exactly; otherwise
+    // use the zone nearest the actual Maps search center, regardless of score rank.
+    const focusedZone =
+      zoneGrid.status === 'ok'
+        ? selectFocusedZone(
+            zoneGrid.zones,
+            { latitude: searchCenterLat, longitude: searchCenterLng },
+            isZoneTargeted ? zoneLabel : undefined
+          )
+        : undefined;
 
     // Enrich each result with budget estimate, area level, and Fit Score
     const enrichedResults = results.map((result) => {
@@ -179,11 +213,11 @@ export async function POST(request: NextRequest) {
         result.reviewCount || 0,
         !!result.website,
         result.contactPoints,
-        focusedZone.score,
-        focusedZone.level,
+        focusedZone?.score,
+        focusedZone?.level,
         result.priceLevel,
         result.rating,
-        focusedZone.archetype,
+        focusedZone?.archetype,
         result.types,
         result.name
       );
@@ -191,7 +225,7 @@ export async function POST(request: NextRequest) {
       return {
         ...result,
         budgetEstimate,
-        areaLevel: focusedZone.level,
+        areaLevel: focusedZone?.level,
         fitScore: computeFitScore(result.leadScore, budgetEstimate.points),
       };
     });
@@ -229,38 +263,46 @@ export async function POST(request: NextRequest) {
     // Market density from result count (business competition)
     const competitionLevel = count >= 30 ? 'high' : count >= 15 ? 'medium' : 'low';
 
-    // Market density is now derived from the focused zone. Label becomes the
-    // neighborhood name (e.g. "The Loop") rather than a generic "Premium Zone"
-    // string — much more concrete for users wondering "where did this score
-    // come from?" Description paraphrases the zone's amenity counts so it
-    // always has content, even when amenity totals are zero.
-    const densityLevelBucket: 'high' | 'medium' | 'low' =
-      focusedZone.level === 'premium' || focusedZone.level === 'commercial'
-        ? 'high'
-        : focusedZone.level === 'moderate'
-          ? 'medium'
-          : 'low';
-    const densityDescription = describeZone(focusedZone);
-
-    const marketDensity = {
-      count,
-      level: densityLevelBucket,
-      label: describeZoneLabel(focusedZone),
-      description: densityDescription,
-      areaScore: focusedZone.score,
-      competition: competitionLevel,
-      amenities: focusedZone.amenities,
-    };
+    // Successful scans report observed zone evidence. Provider failures omit
+    // numeric density entirely and tell the client to retry instead of inventing
+    // a low-density market.
+    const marketDensity = focusedZone
+      ? {
+          status: 'ok' as const,
+          count,
+          level:
+            focusedZone.level === 'premium' || focusedZone.level === 'commercial'
+              ? ('high' as const)
+              : focusedZone.level === 'moderate'
+                ? ('medium' as const)
+                : ('low' as const),
+          label: describeZoneLabel(focusedZone),
+          description: describeZone(focusedZone),
+          areaScore: focusedZone.score,
+          competition: competitionLevel,
+          amenities: focusedZone.amenities,
+        }
+      : {
+          status: 'unavailable' as const,
+          count,
+          level: 'unavailable' as const,
+          label: getFallbackZoneLabel(geocodeResult.displayName),
+          description:
+            'Area scan unavailable because the map provider could not be reached. Retry the search to refresh market density.',
+          competition: competitionLevel,
+        };
 
     return NextResponse.json({
       results: enrichedResults,
       location: geocodeResult,
       count,
       marketDensity,
+      zoneScanStatus: zoneGrid.status,
       zones: zoneGrid.zones,
       zoneCentroid: zoneGrid.centroid,
       zoneBbox: zoneGrid.bbox,
       singleZone: zoneGrid.singleZone,
+      focusedZoneId: focusedZone?.id ?? null,
       searchCenter: {
         latitude: searchCenterLat,
         longitude: searchCenterLng,

@@ -30,9 +30,42 @@ vi.mock('@/lib/rate-limit', () => ({
 }));
 
 import { getQueuedLead } from '@/app/api/business/enrich/route';
-import { getRegionAt } from '@/app/api/business/neighborhoods/route';
-import { getFallbackZoneLabel } from '@/app/api/business/search/route';
+import { getFallbackZoneLabel, selectFocusedZone } from '@/app/api/business/search/route';
+import type { Zone, ZoneBbox } from '@/lib/business/zone-contract';
+import { classifyRegion, getRegionAt } from '@/lib/business/zone-regions';
 import { HttpError, parseRouteBody, routeErrorResponse } from '@/lib/route-utils';
+
+function searchZone(
+  id: string,
+  label: string,
+  latitude: number,
+  longitude: number,
+  score: number
+): Zone {
+  return {
+    id,
+    label,
+    latitude,
+    longitude,
+    score,
+    wealthScore: score,
+    businessScore: score,
+    archetype: 'mixed',
+    level: 'commercial',
+    amenities: {
+      banks: 0,
+      hotels: 0,
+      hospitals: 0,
+      pharmacies: 0,
+      supermarkets: 0,
+      fuelStations: 0,
+      affluenceSpots: 0,
+      total: 0,
+    },
+    radiusMeters: 1500,
+    distanceFromCenterMeters: 0,
+  };
+}
 
 describe('route request safety helpers', () => {
   test('maps malformed JSON to a 400 response', async () => {
@@ -102,11 +135,60 @@ describe('business route strict-safety helpers', () => {
     expect(getRegionAt([['n']], 3, 0)).toBe('central');
   });
 
+  test.each([
+    [0.5, 0.5, 'sw'],
+    [0.5, 1.5, 's'],
+    [0.5, 2.5, 'se'],
+    [1.5, 0.5, 'w'],
+    [1.5, 1.5, 'central'],
+    [1.5, 2.5, 'e'],
+    [2.5, 0.5, 'nw'],
+    [2.5, 1.5, 'n'],
+    [2.5, 2.5, 'ne'],
+  ])('classifies bbox cell at lat %s and lon %s as %s', (lat, lon, expected) => {
+    const bbox: ZoneBbox = [0, 3, 0, 3];
+
+    expect(classifyRegion(lat, lon, bbox)).toBe(expected);
+  });
+
+  test('assigns exact one-third and two-third boundaries to the next region', () => {
+    const bbox: ZoneBbox = [0, 3, 0, 3];
+
+    expect(classifyRegion(1, 0.5, bbox)).toBe('w');
+    expect(classifyRegion(2, 0.5, bbox)).toBe('nw');
+    expect(classifyRegion(0.5, 1, bbox)).toBe('s');
+    expect(classifyRegion(0.5, 2, bbox)).toBe('se');
+    expect(classifyRegion(1, 1, bbox)).toBe('central');
+    expect(classifyRegion(2, 2, bbox)).toBe('ne');
+  });
+
   test('preserves valid city labels and defaults empty or missing labels', () => {
     expect(getFallbackZoneLabel(' Sydney, New South Wales ')).toBe('Sydney');
     expect(getFallbackZoneLabel('')).toBe('Area');
     expect(getFallbackZoneLabel('   ')).toBe('Area');
     expect(getFallbackZoneLabel(undefined)).toBe('Area');
     expect(getFallbackZoneLabel(null)).toBe('Area');
+  });
+
+  test('focuses the zone nearest the initial Maps center when it ranks second', () => {
+    const topZone = searchZone('top', 'Top Scorer', 51.7, -0.3, 95);
+    const centeredZone = searchZone('centered', 'Typed Area', 51.5001, -0.1001, 70);
+
+    expect(
+      selectFocusedZone([topZone, centeredZone], { latitude: 51.5, longitude: -0.1 })?.id
+    ).toBe('centered');
+  });
+
+  test('falls back to the zone nearest the targeted center when its label is absent', () => {
+    const topZone = searchZone('top', 'Top Scorer', 51.7, -0.3, 95);
+    const centeredZone = searchZone('centered', 'Nearby Area', 51.5001, -0.1001, 70);
+
+    expect(
+      selectFocusedZone(
+        [topZone, centeredZone],
+        { latitude: 51.5, longitude: -0.1 },
+        'Missing Target'
+      )?.id
+    ).toBe('centered');
   });
 });

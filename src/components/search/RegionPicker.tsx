@@ -4,7 +4,12 @@ import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { ArrowLeft, MapPin, Gem, Building2, Shuffle, TrendingUp } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-
+import type { ZoneArchetype, ZoneLevel } from '@/lib/business/zone-contract';
+import {
+  REGION_DISPLAY_LAYOUT,
+  REGION_SHORT_LABELS,
+  type RegionDirection,
+} from '@/lib/business/zone-regions';
 /**
  * Two-stage location picker that replaces the flat NeighborhoodChips. Lets
  * users browse by geographic region (3×3 grid: NW/N/NE, W/Central/E,
@@ -17,8 +22,6 @@ import type { LucideIcon } from 'lucide-react';
  * is bypassed — they type "Mayfair, London" and hit search.
  */
 
-type RegionDirection = 'nw' | 'n' | 'ne' | 'w' | 'central' | 'e' | 'sw' | 's' | 'se';
-
 interface RegionSummary {
   direction: RegionDirection;
   label: string;
@@ -27,15 +30,13 @@ interface RegionSummary {
   topLabel: string | null;
 }
 
-type ZoneArchetype = 'luxury' | 'corporate' | 'mixed' | 'developing';
-
 interface Neighborhood {
   label: string;
   score: number;
   wealthScore: number;
   businessScore: number;
   archetype: ZoneArchetype;
-  level: 'premium' | 'commercial' | 'moderate' | 'developing';
+  level: ZoneLevel;
   latitude: number;
   longitude: number;
   region: RegionDirection;
@@ -86,24 +87,6 @@ interface RegionPickerProps {
 
 const DEBOUNCE_MS = 700;
 const MIN_CHARS = 3;
-
-const REGION_LAYOUT: RegionDirection[][] = [
-  ['nw', 'n', 'ne'],
-  ['w', 'central', 'e'],
-  ['sw', 's', 'se'],
-];
-
-const REGION_SHORT: Record<RegionDirection, string> = {
-  nw: 'NW',
-  n: 'N',
-  ne: 'NE',
-  w: 'W',
-  central: 'Central',
-  e: 'E',
-  sw: 'SW',
-  s: 'S',
-  se: 'SE',
-};
 
 /**
  * Returns the base city name — i.e. the text after the first comma if the
@@ -356,7 +339,7 @@ export function RegionPicker({ city, country, onNeighborhoodSelect, disabled }: 
               </span>
             </div>
             <div className="grid grid-cols-3 gap-1.5">
-              {REGION_LAYOUT.flat().map((direction, i) => {
+              {REGION_DISPLAY_LAYOUT.flat().map((direction, i) => {
                 const region = regions.find((r) => r.direction === direction);
                 const score = region?.score ?? 0;
                 const count = region?.zoneCount ?? 0;
@@ -391,7 +374,7 @@ export function RegionPicker({ city, country, onNeighborhoodSelect, disabled }: 
                     <span
                       className={`font-mono text-[10px] uppercase tracking-[0.2em] ${tone.text}`}
                     >
-                      {REGION_SHORT[direction]}
+                      {REGION_SHORT_LABELS[direction]}
                     </span>
                     {!empty && (
                       <>

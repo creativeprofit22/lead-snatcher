@@ -3,7 +3,7 @@
 import { motion } from 'motion/react';
 import { MapPin, Loader2, Radar, Gem, Building2, Shuffle, TrendingUp } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import type { Zone, ZoneArchetype } from '@/lib/business/zone-grid';
+import type { Zone, ZoneArchetype } from '@/lib/business/zone-contract';
 
 const ARCHETYPE_DISPLAY: Record<ZoneArchetype, { icon: LucideIcon; label: string; tone: string }> =
   {
@@ -43,16 +43,24 @@ export function ZoneChipsStrip({
   onZoneSelect,
   disabled,
 }: ZoneChipsStripProps) {
-  // Surface meaningful zones only — score > 0 and at least some amenities.
+  // Rank meaningful zones for presentation, then guarantee the authoritative
+  // focus remains visible even when it falls below the chip limit.
   const ranked = [...zones]
-    .filter((z) => z.score > 0 && z.amenities.total > 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, MAX_CHIPS);
+    .filter((zone) => zone.score > 0 && zone.amenities.total > 0)
+    .sort((a, b) => b.score - a.score);
+  const focusedZone = focusedZoneId ? zones.find((zone) => zone.id === focusedZoneId) : undefined;
+  const visibleZones = ranked.slice(0, MAX_CHIPS);
 
-  if (ranked.length <= 1) return null;
+  if (focusedZone && !visibleZones.some((zone) => zone.id === focusedZone.id)) {
+    if (visibleZones.length === MAX_CHIPS) visibleZones[MAX_CHIPS - 1] = focusedZone;
+    else visibleZones.push(focusedZone);
+  }
 
-  const activeZone = ranked.find((z) => z.id === focusedZoneId) ?? ranked[0];
-  if (!activeZone) return null;
+  if (visibleZones.length <= 1) return null;
+
+  const activeZone = focusedZone
+    ? visibleZones.find((zone) => zone.id === focusedZone.id)
+    : undefined;
 
   return (
     <div className="mb-4 rounded-xl border border-sky-400/20 bg-gradient-to-br from-sky-500/[0.06] via-surface/60 to-surface/80 p-3 backdrop-blur-sm">
@@ -66,20 +74,22 @@ export function ZoneChipsStrip({
               Scanned Zones
             </div>
             <div className="text-[11px] text-white/50">
-              {ranked.length} zones · tap to jump scan
+              {visibleZones.length} zones · tap to jump scan
             </div>
           </div>
         </div>
-        <div className="hidden sm:flex items-center gap-1.5 rounded-full border border-white/10 bg-surface-elevated/60 px-2.5 py-1 text-[10px] text-white/60 font-mono">
-          <span className="h-1.5 w-1.5 rounded-full bg-sky-400 animate-pulse" />
-          <span className="uppercase tracking-wider">Viewing</span>
-          <span className="text-white">{activeZone.label}</span>
-        </div>
+        {activeZone && (
+          <div className="hidden sm:flex items-center gap-1.5 rounded-full border border-white/10 bg-surface-elevated/60 px-2.5 py-1 text-[10px] text-white/60 font-mono">
+            <span className="h-1.5 w-1.5 rounded-full bg-sky-400 animate-pulse" />
+            <span className="uppercase tracking-wider">Viewing</span>
+            <span className="text-white">{activeZone.label}</span>
+          </div>
+        )}
       </div>
 
       <div className="flex flex-wrap gap-2">
-        {ranked.map((z, i) => {
-          const isActive = activeZone.id === z.id;
+        {visibleZones.map((z, i) => {
+          const isActive = z.id === focusedZoneId;
           const isRescanning = rescanningZoneId === z.id;
           const isPremium = z.level === 'premium' || z.level === 'commercial';
           const isDirectional = DIRECTIONAL_FALLBACK_LABELS.has(z.label);
@@ -98,7 +108,7 @@ export function ZoneChipsStrip({
               initial={{ opacity: 0, y: 4 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: i * 0.04, duration: 0.22 }}
-              title={`💎 Wealth ${z.wealthScore}  ·  🏢 Business ${z.businessScore}`}
+              title={`Wealth ${z.wealthScore} · Business ${z.businessScore}`}
               className={`group relative inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-medium transition-all ${
                 isActive
                   ? 'border-sky-400/80 bg-sky-500/20 text-sky-50 shadow-[0_0_18px_rgba(56,189,248,0.45)]'
