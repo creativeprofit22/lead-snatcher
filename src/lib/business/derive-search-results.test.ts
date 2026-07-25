@@ -206,7 +206,7 @@ describe('filterAndSortResults sorting', () => {
         lead('fit-tie-lower-score', { fitScore: 90, leadScore: 50 }),
         lead('highest-fit', { fitScore: 95, leadScore: 20 }),
       ],
-      ['highest-fit', 'missing-fit', 'fit-tie-lower-score'],
+      ['highest-fit', 'fit-tie-lower-score', 'missing-fit'],
     ],
     [
       'contactPoints',
