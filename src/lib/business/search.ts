@@ -143,9 +143,8 @@ export async function searchBusinesses(
   let scrapedDataMap: Map<string, ScrapedWebsiteData> = new Map();
 
   if (websites.length > 0) {
-    // Step A: scrape every site first. Scraping is fast (~30s for 50
-    // sites at concurrency 8) and feeds the preliminary score that
-    // decides which leads are worth running PageSpeed on.
+    // Step A: scrape every site first. The extracted signals feed the
+    // preliminary score that decides which leads are worth running PageSpeed on.
     //
     // The try/catch here is deliberate: a scrape pipeline blow-up (OOM,
     // DNS flood, malformed HTML exploder) must NEVER prevent returning
@@ -155,9 +154,8 @@ export async function searchBusinesses(
     // Cheerio is not.
     if (options.enableWebsiteScraping) {
       try {
-        // Concurrency 8 keeps WSL socket pressure manageable (15 was
-        // causing intermittent EAI_AGAIN / file-descriptor pile-ups during
-        // dense-city scans) while still finishing a 50-site batch in <30s.
+        // Preserve the existing group size. The batch scheduler starts every
+        // cache miss immediately; this value is not an in-flight request cap.
         scrapedDataMap = await scrapeWebsitesBatch(websites, 8);
       } catch (err) {
         console.error(

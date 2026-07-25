@@ -1,3 +1,5 @@
+import type { ScrapedWebsiteData } from './scraper';
+
 // Industry types for business categorization
 export type IndustryType =
   | 'restaurant'
@@ -94,66 +96,14 @@ export interface WebsiteAnalysis {
   analyzedAt: string;
 }
 
-// Scraped website data for enrichment
-export interface ScrapedWebsiteData {
-  url: string;
-  isReachable: boolean;
-  loadTimeMs: number;
-  title?: string;
-  description?: string;
-  techStack: string[];
-  hasWordPress: boolean;
-  hasShopify: boolean;
-  hasCustomSite: boolean;
-  copyrightYear?: number;
-  estimatedAge: 'new' | 'recent' | 'outdated' | 'ancient' | 'unknown';
-  hasOnlineBooking: boolean;
-  hasContactForm: boolean;
-  hasLiveChat: boolean;
-  hasNewsletter: boolean;
-  hasEcommerce: boolean;
-  hasBlog: boolean;
-  socialLinks: {
-    facebook?: string;
-    instagram?: string;
-    twitter?: string;
-    linkedin?: string;
-    youtube?: string;
-    tiktok?: string;
-  };
-  socialCount: number;
-  hasMobileViewport: boolean;
-  isHttps: boolean;
-  emails: string[];
-  hasModernDesign: boolean;
-  marketingSignals: {
-    hasGoogleAds: boolean;
-    hasFacebookAds: boolean;
-    hasGoogleAnalytics: boolean;
-    hasBingAds: boolean;
-    hasHotjar: boolean;
-    hasOtherAds: boolean;
-    detectedPlatforms: string[];
-  };
-  hasMarketingBudget: boolean;
-  // Deep HTML quality signals (Layer 5 inputs)
-  qualitySignals?: {
-    hasTableLayout: boolean;
-    wordCount: number;
-    hasAnyForm: boolean;
-    hasSchemaOrg: boolean;
-    hasOpenGraph: boolean;
-    hasDeprecatedTags: boolean;
-    deprecatedTagsFound: string[];
-    hasFixedPixelWidth: boolean;
-    hasLangAttribute: boolean;
-    jqueryVersion: string | null;
-    isOldJquery: boolean;
-    templateFingerprint: string | null; // 'Wix' | 'GoDaddy Sites' | 'Weebly' | 'Google Business Site' | 'Jimdo' | null
-  };
-  error?: string;
-  scrapedAt: string;
-}
+export type {
+  FreshScrapedWebsiteData,
+  MarketingSignals,
+  PersistedScrapedWebsiteData,
+  ScrapedWebsiteData,
+  SocialLinks,
+  WebsiteQualitySignals,
+} from './scraper';
 
 // Extended business data with photo count
 export interface ExtendedBusinessData {

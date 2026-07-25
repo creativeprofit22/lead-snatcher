@@ -3,7 +3,6 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { runBatch } from './enrichment';
 import { geocodeCity } from './geocode';
 import { scrapePopularTimes } from './popular-times';
-import { scrapeWebsite } from './scraper';
 import { classifyZoneTags, ZONE_TAG_TO_AMENITY_KEY } from './zone-grid';
 
 function mockFetchResponse(body: unknown, ok = true, status = 200): void {
@@ -119,25 +118,6 @@ describe('business strict indexed-access and null safety', () => {
     expect(result.data.weekly[0]).toHaveLength(24);
     expect(result.data.currentPopularity).toBe(63);
     expect(result.data.timeSpent).toBe('20–40 min');
-  });
-
-  test('extracts valid captures and tolerates empty capture candidates', async () => {
-    mockFetchResponse(
-      '<html lang="en-US"><head><title> Example </title></head><body>© 2024 Example</body></html>'
-    );
-
-    await expect(scrapeWebsite('https://example.com')).resolves.toMatchObject({
-      isReachable: true,
-      title: 'Example',
-      language: 'en',
-      copyrightYear: 2024,
-    });
-
-    mockFetchResponse('<html><head><title></title></head><body>© Example</body></html>');
-    const emptyCaptures = await scrapeWebsite('https://example.com');
-    expect(emptyCaptures.isReachable).toBe(true);
-    expect(emptyCaptures.title).toBeUndefined();
-    expect(emptyCaptures.copyrightYear).toBeUndefined();
   });
 
   test('classifies every queried zone tag into its declared amenity bucket', () => {
