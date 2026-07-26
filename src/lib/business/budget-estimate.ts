@@ -8,13 +8,15 @@
  */
 
 import type { ScoreBreakdown } from '@/types';
-import type { ZoneArchetype, ZoneLevel } from './zone-contract';
+import type { BudgetEstimate } from './budget-contract';
+import { createDemandEvidenceProfile, formatDemandEvidenceLabel } from './revenue-profile';
+import { normalizeLeadScore } from './score-breakdown-contract';
+import type { ZoneArchetype } from './zone-contract';
 
-interface BudgetInput {
+export interface BudgetInput {
   areaScore?: number; // 0-100 from Overpass; omitted when the provider is unavailable
-  areaLevel?: ZoneLevel;
   reviewCount: number;
-  /** Google rating 0-5. Combined with reviewCount for the revenue composite. */
+  /** Google rating 0-5. Combined with reviewCount as demand/traffic evidence. */
   rating?: number;
   hasMarketingBudget: boolean;
   hasWebsite: boolean;
@@ -28,6 +30,10 @@ interface BudgetInput {
   /** Business name — used as a secondary signal for low-margin tells (e.g. "kebab", "laundry") when types are generic. */
   businessName?: string;
 }
+
+type BudgetInputSource = Omit<BudgetInput, 'hasMarketingBudget'> & {
+  breakdown: Pick<ScoreBreakdown, 'hasMarketingBudget'>;
+};
 
 /**
  * Google place types that identify inherently low-margin businesses.
@@ -76,16 +82,6 @@ function detectLowMargin(types?: string[], name?: string): boolean {
   if (types?.some((t) => LOW_MARGIN_TYPES.has(t))) return true;
   if (name && LOW_MARGIN_NAME_TELLS.some((re) => re.test(name))) return true;
   return false;
-}
-
-export interface BudgetEstimate {
-  min: number;
-  max: number;
-  label: string;
-  confidence: 'high' | 'medium' | 'low';
-  reasons: string[];
-  /** Raw 0-100 score the budget range was derived from. Used by Fit Score. */
-  points: number;
 }
 
 /**
@@ -194,42 +190,27 @@ export function estimateBudget(input: BudgetInput): BudgetEstimate {
     }
   }
 
-  // Revenue composite (0-20 pts) — volume curve × rating quality multiplier.
-  // Replaces the old binary review-count tier. A 4.8★ boutique with 150
-  // reviews now has a meaningful signal; a 3.8★ chain with 2K reviews gets
-  // a quality drag instead of a flat "high traffic" tier. Volume saturates
-  // around 2K reviews so a 500-review business isn't drowned by 5K-review
-  // mega-chains.
+  // Review-based spending-capacity points (0-20): logarithmic volume curve × quality.
+  // The shared profile classifies the evidence; this budget formula remains independent.
   {
-    const reviews = Math.max(0, input.reviewCount);
-    const rating = input.rating ?? 0;
-    // log10(n+1)*6: 0 at 0, ~12 at 100, ~16 at 500, ~18 at 1000, ~20 at 2000
-    const volumeCurve = Math.min(20, Math.log10(reviews + 1) * 6);
-    let qualityMult = 1.0;
-    let qualityNote: string | null = null;
-    if (rating >= 4.6) {
-      qualityMult = 1.2;
-      qualityNote = `${rating.toFixed(1)}★ quality premium`;
-    } else if (rating >= 4.0 || rating === 0) {
-      qualityMult = 1.0; // neutral — unrated businesses aren't punished
-    } else {
-      qualityMult = 0.75;
-      qualityNote = `${rating.toFixed(1)}★ rating drag`;
-    }
-    const revenuePoints = Math.max(0, Math.min(20, Math.round(volumeCurve * qualityMult)));
-    budgetPoints += revenuePoints;
+    const demandProfile = createDemandEvidenceProfile(input.reviewCount, input.rating);
+    const volumeCurve = Math.min(20, Math.log10(demandProfile.reviewCount + 1) * 6);
+    const qualityMultiplier =
+      demandProfile.ratingQualityBand === 'premium'
+        ? 1.2
+        : demandProfile.ratingQualityBand === 'drag'
+          ? 0.75
+          : 1;
+    const demandPoints = Math.max(0, Math.min(20, Math.round(volumeCurve * qualityMultiplier)));
+    budgetPoints += demandPoints;
 
-    // Pick a single, legible reason line that captures the shape of the signal.
-    if (reviews >= 500 && rating >= 4.5) {
-      reasons.push(`${reviews} reviews @ ${rating.toFixed(1)}★ — sustained premium demand`);
-    } else if (reviews >= 200) {
-      reasons.push(`${reviews} reviews — high traffic, likely has budget`);
-    } else if (reviews >= 50 && rating >= 4.6) {
-      reasons.push(`${rating.toFixed(1)}★ on ${reviews} reviews — boutique demand signal`);
-    } else if (reviews >= 50) {
-      reasons.push(`${reviews} reviews — established traffic`);
+    if (
+      demandProfile.volumeBand === 'established' ||
+      demandProfile.volumeBand === 'high' ||
+      demandProfile.volumeBand === 'sustained'
+    ) {
+      reasons.push(formatDemandEvidenceLabel(demandProfile));
     }
-    if (qualityNote && reviews >= 50) reasons.push(qualityNote);
   }
 
   // Marketing budget signal (0-12 points)
@@ -287,38 +268,17 @@ export function estimateBudget(input: BudgetInput): BudgetEstimate {
 }
 
 function formatBudgetLabel(min: number, max: number): string {
-  const fmt = (n: number) => (n >= 1000 ? `$${(n / 1000).toFixed(0)}K` : `$${n}`);
+  const fmt = (amount: number) => (amount >= 1000 ? `$${amount / 1000}K` : `$${amount}`);
   return `${fmt(min)} - ${fmt(max)}`;
 }
 
 /**
- * Build budget input from search result data + area score
+ * Build budget input from search result data + area score.
  */
-export function buildBudgetInput(
-  breakdown: ScoreBreakdown,
-  reviewCount: number,
-  hasWebsite: boolean,
-  contactPoints: number,
-  areaScore?: number,
-  areaLevel?: ZoneLevel,
-  priceLevel?: number,
-  rating?: number,
-  zoneArchetype?: ZoneArchetype,
-  businessTypes?: string[],
-  businessName?: string
-): BudgetInput {
+export function buildBudgetInput({ breakdown, ...input }: BudgetInputSource): BudgetInput {
   return {
-    areaScore,
-    areaLevel,
-    reviewCount,
-    rating,
+    ...input,
     hasMarketingBudget: breakdown.hasMarketingBudget,
-    hasWebsite,
-    contactPoints,
-    priceLevel,
-    zoneArchetype,
-    businessTypes,
-    businessName,
   };
 }
 
@@ -332,7 +292,7 @@ export function buildBudgetInput(
  *   capacity = 100 → fitScore = leadScore × 1.0
  */
 export function computeFitScore(leadScore: number, budgetPoints: number): number {
-  const need = Math.max(0, Math.min(100, leadScore));
+  const need = normalizeLeadScore(leadScore);
   const capacity = Math.max(0, Math.min(100, budgetPoints));
   const multiplier = 0.4 + 0.6 * (capacity / 100);
   return Math.round(need * multiplier);

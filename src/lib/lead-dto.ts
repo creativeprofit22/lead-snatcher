@@ -1,6 +1,7 @@
 import type { Lead as PrismaLead, Tag as PrismaTag } from '@/generated/prisma/client';
+import { scoreBreakdownSchema } from '@/lib/business/score-breakdown-contract';
 import { parseLeadStatus } from '@/lib/lead-status';
-import type { IndustryType, Lead, ScoreBreakdown, Tag } from '@/types';
+import type { IndustryType, Lead, Tag } from '@/types';
 
 type PersistedLead = PrismaLead & {
   tags?: Array<{ tag: PrismaTag }>;
@@ -16,6 +17,11 @@ function parseJson<T>(value: string | null, fallback: T): T {
   }
 }
 
+function parseScoreBreakdown(value: string | null) {
+  const result = scoreBreakdownSchema.safeParse(parseJson<unknown>(value, null));
+
+  return result.success ? result.data : null;
+}
 function toTagDto(tag: PrismaTag): Tag {
   return {
     id: tag.id,
@@ -40,7 +46,7 @@ export function toLeadDto(lead: PersistedLead): Lead {
     photoUrl: lead.photoUrl,
     mapsUrl: lead.mapsUrl,
     leadScore: lead.leadScore,
-    scoreBreakdown: parseJson<ScoreBreakdown | null>(lead.scoreBreakdown, null),
+    scoreBreakdown: parseScoreBreakdown(lead.scoreBreakdown),
     status: parseLeadStatus(lead.status),
     notes: lead.notes,
     opportunities: parseJson<string[]>(lead.opportunities, []),

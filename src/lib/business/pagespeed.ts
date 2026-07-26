@@ -1,4 +1,5 @@
 import type { WebsiteAnalysis } from '@/types';
+import { isSocialProfileUrl } from './social-profile-url';
 import { getCachedMany, putCached } from './url-cache';
 
 const PAGESPEED_API_URL = 'https://www.googleapis.com/pagespeedonline/v5/runPagespeed';
@@ -186,7 +187,7 @@ export async function analyzeWebsitesBatch(
   concurrency: number = 2
 ): Promise<Map<string, WebsiteAnalysis>> {
   const results = new Map<string, WebsiteAnalysis>();
-  const validWebsites = websites.filter((url) => url && !isSocialOnlyWebsite(url));
+  const validWebsites = websites.filter((url) => url && !isSocialProfileUrl(url));
   if (validWebsites.length === 0) return results;
 
   // Cache hit pass — anything we've analyzed in the last 7 days skips
@@ -233,23 +234,4 @@ export async function analyzeWebsitesBatch(
   }
 
   return results;
-}
-
-/**
- * Check if a website is just a social media profile (skip analysis)
- */
-function isSocialOnlyWebsite(website: string): boolean {
-  const socialPatterns = [
-    'facebook.com',
-    'fb.com',
-    'instagram.com',
-    'twitter.com',
-    'x.com',
-    'tiktok.com',
-    'linkedin.com',
-    'youtube.com',
-  ];
-
-  const lowerWebsite = website.toLowerCase();
-  return socialPatterns.some((pattern) => lowerWebsite.includes(pattern));
 }

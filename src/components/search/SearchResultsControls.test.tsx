@@ -39,8 +39,10 @@ const scoreBreakdown: ScoreBreakdown = {
   qualityChips: [],
   hasMarketingBudget: false,
   marketingPlatforms: [],
-  revenueSignal: 'low',
-  revenueLabel: 'Low revenue signal',
+  demandSignal: 'low',
+  demandReasonCode: 'no_review_evidence',
+  demandLabel: 'Limited traffic signal',
+  rawTotal: 0,
   total: 0,
 };
 

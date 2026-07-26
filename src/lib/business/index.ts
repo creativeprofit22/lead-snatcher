@@ -1,10 +1,5 @@
 export { geocodeCity } from './geocode';
-export {
-  calculateLeadScore,
-  calculateLeadScoreWithAnalysis,
-  getLeadPriority,
-  getScoreColor,
-} from './scoring';
+export { calculateLeadScore, calculateLeadScoreWithAnalysis } from './scoring';
 export { generateOpportunities, detectIndustryType } from './opportunities';
 export { searchBusinesses } from './search';
 export type { SearchOptions } from './search';

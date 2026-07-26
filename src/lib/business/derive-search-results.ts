@@ -1,4 +1,8 @@
-import type { BusinessSearchResult } from '@/types';
+import type { BusinessSearchResult, ExtendedBusinessData } from '@/types';
+import type { Zone } from './zone-contract';
+import { buildBudgetInput, computeFitScore, estimateBudget } from './budget-estimate';
+import { generateOpportunities } from './opportunities';
+import { calculateLeadScore } from './scoring';
 
 export type SearchResultSort = 'fit' | 'score' | 'contactPoints' | 'reviews' | 'rating';
 
@@ -13,24 +17,89 @@ export interface SearchResultFilters {
 export interface SearchResultEnrichment {
   website?: string;
   socials?: Partial<BusinessSearchResult['socialLinks']>;
+  websiteAnalysis?: BusinessSearchResult['websiteAnalysis'];
+  scrapedData?: BusinessSearchResult['scrapedData'];
+}
+
+export type SearchResultZoneContext = Pick<Zone, 'score' | 'level' | 'archetype'>;
+
+export function rederiveEnrichedSearchResult(
+  lead: BusinessSearchResult,
+  enrichment: SearchResultEnrichment,
+  zoneContext?: SearchResultZoneContext
+): BusinessSearchResult {
+  const website = lead.website ?? enrichment.website;
+  const socialLinks = {
+    ...(lead.socialLinks ?? {}),
+    ...(enrichment.socials ?? {}),
+  };
+  const websiteAnalysis = enrichment.websiteAnalysis ?? lead.websiteAnalysis;
+  const scrapedData = enrichment.scrapedData ?? lead.scrapedData;
+  const contactPoints = [lead.phone, lead.email, website, ...Object.values(socialLinks)].filter(
+    Boolean
+  ).length;
+  const businessData: ExtendedBusinessData = {
+    photoCount: lead.photoCount,
+    website,
+    phone: lead.phone,
+    rating: lead.rating,
+    reviewCount: lead.reviewCount,
+    industryType: lead.industryType,
+    websiteAnalysis: websiteAnalysis ?? null,
+    scrapedData: scrapedData ?? null,
+  };
+  const scoreBreakdown = calculateLeadScore(businessData);
+  const leadScore = scoreBreakdown.total;
+  const opportunities = generateOpportunities(lead.industryType, {
+    website,
+    phone: lead.phone,
+    email: lead.email,
+    rating: lead.rating,
+    reviewCount: lead.reviewCount,
+    types: lead.types,
+    scrapedData,
+  });
+  const budgetEstimate = estimateBudget(
+    buildBudgetInput({
+      breakdown: scoreBreakdown,
+      reviewCount: lead.reviewCount ?? 0,
+      hasWebsite: Boolean(website),
+      contactPoints,
+      areaScore: zoneContext?.score,
+      priceLevel: lead.priceLevel,
+      rating: lead.rating,
+      zoneArchetype: zoneContext?.archetype,
+      businessTypes: lead.types,
+      businessName: lead.name,
+    })
+  );
+
+  return {
+    ...lead,
+    website,
+    socialLinks,
+    websiteAnalysis,
+    scrapedData,
+    contactPoints,
+    scoreBreakdown,
+    leadScore,
+    opportunities,
+    budgetEstimate,
+    areaLevel: zoneContext?.level ?? lead.areaLevel,
+    fitScore: computeFitScore(leadScore, budgetEstimate.points),
+  };
 }
 
 export function mergeEnrichmentResults(
   results: readonly BusinessSearchResult[],
-  enrichmentByPlaceId: Readonly<Record<string, SearchResultEnrichment | undefined>>
+  enrichmentByPlaceId: Readonly<Record<string, SearchResultEnrichment | undefined>>,
+  zoneContext?: SearchResultZoneContext
 ): BusinessSearchResult[] {
   return results.map((lead) => {
     const found = enrichmentByPlaceId[lead.placeId];
     if (!found) return lead;
 
-    return {
-      ...lead,
-      website: lead.website ?? found.website,
-      socialLinks: {
-        ...(lead.socialLinks ?? {}),
-        ...(found.socials ?? {}),
-      },
-    } satisfies BusinessSearchResult;
+    return rederiveEnrichedSearchResult(lead, found, zoneContext);
   });
 }
 

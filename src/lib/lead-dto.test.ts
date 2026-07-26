@@ -1,8 +1,14 @@
 import { describe, expect, test } from 'vitest';
 import type { Lead as PrismaLead, Tag as PrismaTag } from '@/generated/prisma/client';
+import { createScoreBreakdown } from '@/lib/business/score-breakdown-contract';
 import { toLeadDto } from './lead-dto';
 
 const timestamp = new Date('2026-07-24T10:00:00.000Z');
+const currentScoreBreakdown = createScoreBreakdown({
+  noWebsite: 45,
+  noOnlineBooking: 8,
+  qualityChips: ['No website'],
+});
 const tag: PrismaTag = {
   id: 'tag-1',
   userId: 'user-1',
@@ -25,7 +31,7 @@ const persistedLead: PrismaLead & { tags: Array<{ tag: PrismaTag }> } = {
   photoUrl: null,
   mapsUrl: 'https://maps.example/acme',
   leadScore: 72,
-  scoreBreakdown: '{"noWebsite":20}',
+  scoreBreakdown: JSON.stringify(currentScoreBreakdown),
   status: 'contacted',
   notes: null,
   opportunities: '["Build a website"]',
@@ -51,7 +57,7 @@ const expectedLead = {
   photoUrl: null,
   mapsUrl: 'https://maps.example/acme',
   leadScore: 72,
-  scoreBreakdown: { noWebsite: 20 },
+  scoreBreakdown: currentScoreBreakdown,
   status: 'contacted',
   notes: null,
   opportunities: ['Build a website'],
@@ -81,14 +87,45 @@ describe('lead endpoint response mapper contracts', () => {
   test('maps the detail endpoint lead contract', expectLeadContract);
   test('maps the update endpoint lead contract', expectLeadContract);
 
-  test('uses safe defaults for absent relations and invalid persisted JSON', () => {
+  test('normalizes the legacy +20 partial record with canonical defaults', () => {
+    const scoreBreakdown = toLeadDto({
+      ...persistedLead,
+      scoreBreakdown: '{"noWebsite":20}',
+    }).scoreBreakdown;
+
+    expect(scoreBreakdown).toEqual(createScoreBreakdown({ noWebsite: 20 }));
+    expect(scoreBreakdown).toMatchObject({
+      qualityChips: [],
+      hasMarketingBudget: false,
+      marketingPlatforms: [],
+      total: 20,
+    });
+  });
+
+  test('strips unknown persisted keys instead of exposing non-canonical fields', () => {
+    const scoreBreakdown = toLeadDto({
+      ...persistedLead,
+      scoreBreakdown: '{"noWebsite":20,"futureSignal":9}',
+    }).scoreBreakdown;
+
+    expect(scoreBreakdown).toEqual(createScoreBreakdown({ noWebsite: 20 }));
+    expect(scoreBreakdown).not.toHaveProperty('futureSignal');
+  });
+
+  test.each([
+    ['malformed JSON', 'invalid'],
+    ['a malformed field type', '{"noWebsite":"20"}'],
+  ])('returns null for %s in persisted score breakdowns', (_case, scoreBreakdown) => {
+    expect(toLeadDto({ ...persistedLead, scoreBreakdown }).scoreBreakdown).toBeNull();
+  });
+
+  test('uses safe defaults for absent relations and invalid opportunities JSON', () => {
     expect(
       toLeadDto({
         ...persistedLead,
-        scoreBreakdown: 'invalid',
         opportunities: 'invalid',
         tags: undefined,
       })
-    ).toMatchObject({ scoreBreakdown: null, opportunities: [], tags: [] });
+    ).toMatchObject({ opportunities: [], tags: [] });
   });
 });

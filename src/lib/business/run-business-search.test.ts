@@ -1,5 +1,11 @@
 import { describe, expect, test, vi } from 'vitest';
-import { applyBusinessSearchResponse, runBusinessSearch } from './run-business-search';
+import type { BusinessSearchResult } from '@/types';
+import { createScoreBreakdown } from './score-breakdown-contract';
+import {
+  applyBusinessSearchResponse,
+  BusinessSearchError,
+  runBusinessSearch,
+} from './run-business-search';
 import type { Zone, ZoneAmenities } from './zone-contract';
 
 const legacyAmenities = {
@@ -43,6 +49,16 @@ function zone(id: string, label: string, zoneAmenities: ZoneAmenities = amenitie
   };
 }
 
+const currentScoreBreakdown = createScoreBreakdown({
+  noWebsite: 20,
+  noPhone: 10,
+  qualityChips: ['No website'],
+  hasMarketingBudget: true,
+  marketingPlatforms: ['Google Ads'],
+  demandSignal: 'high',
+  demandLabel: 'Strong review volume',
+});
+
 const result = {
   placeId: 'place-1',
   name: 'Example Co',
@@ -51,10 +67,10 @@ const result = {
   socialLinks: {},
   contactPoints: 2,
   leadScore: 60,
-  scoreBreakdown: {},
+  scoreBreakdown: currentScoreBreakdown,
   opportunities: [],
   industryType: 'retail',
-};
+} satisfies BusinessSearchResult;
 
 function response(
   zones: Zone[],
@@ -115,6 +131,68 @@ describe('runBusinessSearch', () => {
     const initialRequest = fetcher.mock.calls[0]?.[1] as RequestInit;
     expect(JSON.parse(initialRequest.body as string)).not.toHaveProperty('searchLat');
     expect(initialRequest.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  test('accepts and preserves a complete current score breakdown', () => {
+    const applied = applyBusinessSearchResponse(response([zone('central', 'Central')]), {
+      businessType: 'retail',
+      cacheIndustry: 'retail',
+      city: 'London',
+      country: 'gb',
+      deepAnalysis: false,
+      mode: { kind: 'initial' },
+    });
+
+    expect(applied.results[0]?.scoreBreakdown).toEqual(currentScoreBreakdown);
+    expect(applied.cachePayload.results[0]?.scoreBreakdown).toEqual(currentScoreBreakdown);
+  });
+
+  test('accepts unknown future score keys without exposing them to UI state', () => {
+    const futureResult = {
+      ...result,
+      scoreBreakdown: { ...currentScoreBreakdown, futureSignal: 15 },
+    };
+
+    const applied = applyBusinessSearchResponse(
+      response([zone('central', 'Central')], undefined, [futureResult]),
+      {
+        businessType: 'retail',
+        cacheIndustry: 'retail',
+        city: 'London',
+        country: 'gb',
+        deepAnalysis: false,
+        mode: { kind: 'initial' },
+      }
+    );
+
+    expect(applied.results[0]?.scoreBreakdown).toEqual(currentScoreBreakdown);
+    expect(applied.results[0]?.scoreBreakdown).not.toHaveProperty('futureSignal');
+  });
+
+  test('rejects malformed live score breakdown fields through the safe error path', () => {
+    const malformedResult = {
+      ...result,
+      scoreBreakdown: { ...currentScoreBreakdown, noWebsite: '20' },
+    };
+
+    expect(() =>
+      applyBusinessSearchResponse(
+        response([zone('central', 'Central')], undefined, [malformedResult]),
+        {
+          businessType: 'retail',
+          cacheIndustry: 'retail',
+          city: 'London',
+          country: 'gb',
+          deepAnalysis: false,
+          mode: { kind: 'initial' },
+        }
+      )
+    ).toThrowError(
+      expect.objectContaining<Partial<BusinessSearchError>>({
+        kind: 'invalid-response',
+        message: expect.stringContaining('invalid response'),
+      })
+    );
   });
 
   test('preserves every v2 and negative amenity field in state and cache payloads', () => {

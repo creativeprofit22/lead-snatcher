@@ -1,7 +1,8 @@
 import { rapidApiFetch } from '@/lib/rapidapi/client';
-import { calculateLeadScore } from './scoring';
-import { generateOpportunities, detectIndustryType } from './opportunities';
+import { detectIndustryType } from './industry-classification';
+import { generateOpportunities } from './opportunities';
 import { analyzeWebsitesBatch } from './pagespeed';
+import { calculateLeadScore } from './scoring';
 import { scrapeWebsitesBatch, type ScrapedWebsiteData } from './scraper';
 import type { BusinessSearchResult, WebsiteAnalysis, ExtendedBusinessData } from '@/types';
 

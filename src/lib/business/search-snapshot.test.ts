@@ -1,6 +1,18 @@
 import { describe, expect, test } from 'vitest';
+import type { BusinessSearchResult } from '@/types';
+import { createScoreBreakdown } from './score-breakdown-contract';
 import type { PersistedSearchPayload } from './search-snapshot';
 import { SEARCH_SNAPSHOT_VERSION, parsePersistedSearchPayload } from './search-snapshot';
+
+const currentScoreBreakdown = createScoreBreakdown({
+  noWebsite: 20,
+  noPhone: 10,
+  qualityChips: ['No website'],
+  hasMarketingBudget: true,
+  marketingPlatforms: ['Google Ads'],
+  demandSignal: 'high',
+  demandLabel: 'Strong review volume',
+});
 
 const result = {
   placeId: 'place-1',
@@ -10,10 +22,10 @@ const result = {
   socialLinks: {},
   contactPoints: 2,
   leadScore: 60,
-  scoreBreakdown: {},
+  scoreBreakdown: currentScoreBreakdown,
   opportunities: [],
   industryType: 'retail',
-} as unknown as PersistedSearchPayload['results'][number];
+} satisfies BusinessSearchResult;
 
 const currentZone: NonNullable<PersistedSearchPayload['zones']>[number] = {
   id: 'central',
@@ -96,6 +108,64 @@ describe('parsePersistedSearchPayload', () => {
     expect(parsePersistedSearchPayload(JSON.stringify(currentPayload))).toEqual(currentPayload);
   });
 
+  test('migrates a legacy partial score breakdown to complete canonical defaults', () => {
+    const legacyPayload = {
+      ...currentPayload,
+      results: [
+        {
+          ...result,
+          scoreBreakdown: { noWebsite: 20, total: 999 },
+        },
+      ],
+    };
+
+    const parsed = parsePersistedSearchPayload(JSON.stringify(legacyPayload));
+
+    expect(parsed?.results[0]?.scoreBreakdown).toEqual(createScoreBreakdown({ noWebsite: 20 }));
+  });
+
+  test('clamps lead scores written by the legacy uncapped scorer', () => {
+    const legacyPayload = {
+      ...currentPayload,
+      results: [{ ...result, leadScore: 135 }],
+    };
+
+    const parsed = parsePersistedSearchPayload(JSON.stringify(legacyPayload));
+
+    expect(parsed?.results[0]?.leadScore).toBe(100);
+  });
+
+  test('returns null when a cached score breakdown contains malformed fields', () => {
+    const malformedPayload = {
+      ...currentPayload,
+      results: [
+        {
+          ...result,
+          scoreBreakdown: { ...currentScoreBreakdown, qualityChips: 'No website' },
+        },
+      ],
+    };
+
+    expect(parsePersistedSearchPayload(JSON.stringify(malformedPayload))).toBeNull();
+  });
+
+  test('accepts unknown future score keys without exposing them to hydrated UI state', () => {
+    const futurePayload = {
+      ...currentPayload,
+      results: [
+        {
+          ...result,
+          scoreBreakdown: { ...currentScoreBreakdown, futureSignal: 15 },
+        },
+      ],
+    };
+
+    const parsed = parsePersistedSearchPayload(JSON.stringify(futurePayload));
+
+    expect(parsed?.results[0]?.scoreBreakdown).toEqual(currentScoreBreakdown);
+    expect(parsed?.results[0]?.scoreBreakdown).not.toHaveProperty('futureSignal');
+  });
+
   test('migrates a pre-v2 multi-zone payload by discarding incompatible zone analysis', () => {
     const preV2Payload = {
       ...currentPayload,
@@ -119,9 +189,10 @@ describe('parsePersistedSearchPayload', () => {
     expect(parsed).not.toHaveProperty('focusedZoneId');
   });
 
-  test('discards zone analysis with a malformed archetype', () => {
+  test('discards malformed zone analysis without dropping unrelated passthrough data', () => {
     const malformedPayload = {
       ...currentPayload,
+      browserEnrichment: { completedPlaceIds: ['place-1'] },
       zones: [{ ...currentZone, archetype: 'residential' }],
     };
 
@@ -129,6 +200,7 @@ describe('parsePersistedSearchPayload', () => {
 
     expect(parsed?.results).toEqual(currentPayload.results);
     expect(parsed?.city).toBe(currentPayload.city);
+    expect(parsed).toHaveProperty('browserEnrichment', { completedPlaceIds: ['place-1'] });
     expect(parsed).not.toHaveProperty('zones');
     expect(parsed).not.toHaveProperty('marketDensity');
     expect(parsed).not.toHaveProperty('zoneBbox');

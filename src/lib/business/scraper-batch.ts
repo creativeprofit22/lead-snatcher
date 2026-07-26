@@ -1,4 +1,5 @@
 import type { ScrapedWebsiteData } from '@/types/scraper';
+import { isSocialProfileUrl } from './social-profile-url';
 
 const SCRAPE_CACHE_SERVICE = 'scrape' as const;
 
@@ -15,20 +16,6 @@ export interface ScraperBatchDependencies {
   ) => Promise<void>;
 }
 
-export function isSocialMediaUrl(url: string): boolean {
-  const socialDomains = [
-    'facebook.com',
-    'fb.com',
-    'instagram.com',
-    'twitter.com',
-    'x.com',
-    'linkedin.com',
-    'youtube.com',
-    'tiktok.com',
-  ];
-  return socialDomains.some((domain) => url.toLowerCase().includes(domain));
-}
-
 /**
  * Applies the legacy batch policy. chunkSize controls result grouping only;
  * every cache miss is started before any worker is awaited.
@@ -39,7 +26,7 @@ export async function runScraperBatch(
   dependencies: ScraperBatchDependencies
 ): Promise<Map<string, ScrapedWebsiteData>> {
   const results = new Map<string, ScrapedWebsiteData>();
-  const validUrls = urls.filter((url) => url && !isSocialMediaUrl(url));
+  const validUrls = urls.filter((url) => url && !isSocialProfileUrl(url));
   if (validUrls.length === 0) return results;
 
   const cached = await dependencies.getCachedMany(SCRAPE_CACHE_SERVICE, validUrls);

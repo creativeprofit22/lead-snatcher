@@ -4,7 +4,7 @@ import { prisma } from '@/lib/db';
 import { geocodeCity, searchBusinesses, scanCityZones } from '@/lib/business';
 import { getPageSpeedKey } from '@/lib/business/pagespeed-key';
 import type { Zone, ZoneLevel } from '@/lib/business/zone-contract';
-import { estimateBudget, buildBudgetInput, computeFitScore } from '@/lib/business/budget-estimate';
+import { rederiveEnrichedSearchResult } from '@/lib/business/derive-search-results';
 import { getSearchQuery } from '@/lib/constants';
 import { ApiError } from '@/lib/errors';
 import { checkRateLimit, getClientIp, RATE_LIMITS } from '@/lib/rate-limit';
@@ -206,29 +206,10 @@ export async function POST(request: NextRequest) {
           )
         : undefined;
 
-    // Enrich each result with budget estimate, area level, and Fit Score
-    const enrichedResults = results.map((result) => {
-      const budgetInput = buildBudgetInput(
-        result.scoreBreakdown,
-        result.reviewCount || 0,
-        !!result.website,
-        result.contactPoints,
-        focusedZone?.score,
-        focusedZone?.level,
-        result.priceLevel,
-        result.rating,
-        focusedZone?.archetype,
-        result.types,
-        result.name
-      );
-      const budgetEstimate = estimateBudget(budgetInput);
-      return {
-        ...result,
-        budgetEstimate,
-        areaLevel: focusedZone?.level,
-        fitScore: computeFitScore(result.leadScore, budgetEstimate.points),
-      };
-    });
+    // Run initial results through the same pure derivation used after client enrichment.
+    const enrichedResults = results.map((result) =>
+      rederiveEnrichedSearchResult(result, {}, focusedZone)
+    );
 
     // Save search to database — persist the exact coords queried so zone
     // rescans show up as distinct history rows.

@@ -45,8 +45,10 @@ const scoreBreakdown: ScoreBreakdown = {
   qualityChips: [],
   hasMarketingBudget: false,
   marketingPlatforms: [],
-  revenueSignal: 'medium',
-  revenueLabel: 'Established local demand',
+  demandSignal: 'medium',
+  demandReasonCode: 'established_traffic',
+  demandLabel: 'Established local demand',
+  rawTotal: 65,
   total: 65,
 };
 

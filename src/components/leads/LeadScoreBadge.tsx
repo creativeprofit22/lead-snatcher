@@ -14,6 +14,11 @@ import {
 import { SlidingNumber } from '@/components/motion-primitives/sliding-number';
 import { TextEffect } from '@/components/motion-primitives/text-effect';
 import { GlowEffect } from '@/components/motion-primitives/glow-effect';
+import {
+  getLeadScoreBand,
+  LEAD_SCORE_BAND_LABELS,
+  type LeadScoreBand,
+} from '@/lib/business/lead-score-band';
 import type { ScoreBreakdown, WebsiteAnalysis } from '@/types';
 
 interface LeadScoreBadgeProps {
@@ -21,6 +26,39 @@ interface LeadScoreBadgeProps {
   breakdown?: ScoreBreakdown;
   websiteAnalysis?: WebsiteAnalysis;
 }
+
+const LEAD_SCORE_BADGE_STYLES = {
+  hot: {
+    text: 'text-orange-300',
+    border: 'border-orange-500/30',
+    bg: 'bg-orange-500/10',
+    glow: 'shadow-[0_0_10px_rgba(249,115,22,0.15)]',
+    glowColors: ['#f97316', '#fb923c', '#fbbf24', '#f97316'],
+  },
+  mid: {
+    text: 'text-gray-300',
+    border: 'border-white/10',
+    bg: 'bg-white/5',
+    glow: '',
+    glowColors: ['#fbbf24', '#f59e0b', '#facc15', '#fbbf24'],
+  },
+  cold: {
+    text: 'text-blue-300',
+    border: 'border-blue-500/20',
+    bg: 'bg-blue-500/5',
+    glow: '',
+    glowColors: ['#60a5fa', '#3b82f6', '#38bdf8', '#60a5fa'],
+  },
+} satisfies Record<
+  LeadScoreBand,
+  {
+    text: string;
+    border: string;
+    bg: string;
+    glow: string;
+    glowColors: string[];
+  }
+>;
 
 // Hot Lead Icon - flame with glow
 function HotLeadIcon() {
@@ -42,8 +80,8 @@ function ColdLeadIcon() {
   );
 }
 
-// Neutral Lead Icon - sparkles with amber glow
-function NeutralLeadIcon() {
+// Warm Lead Icon - sparkles with amber glow
+function WarmLeadIcon() {
   return (
     <div className="relative">
       <div className="absolute inset-0 blur-sm bg-amber-500/20 rounded-full" />
@@ -65,44 +103,16 @@ export function LeadScoreBadge({ score, breakdown, websiteAnalysis }: LeadScoreB
     return () => clearTimeout(t);
   }, [score]);
 
-  // Score styling with color accents
-  const getScoreStyle = (s: number) => {
-    if (s >= 55) {
-      return {
-        text: 'text-orange-300',
-        border: 'border-orange-500/30',
-        bg: 'bg-orange-500/10',
-        glow: 'shadow-[0_0_10px_rgba(249,115,22,0.15)]',
-        glowColors: ['#f97316', '#fb923c', '#fbbf24', '#f97316'],
-      };
-    }
-    if (s >= 35) {
-      return {
-        text: 'text-gray-300',
-        border: 'border-white/10',
-        bg: 'bg-white/5',
-        glow: '',
-        glowColors: ['#fbbf24', '#f59e0b', '#facc15', '#fbbf24'],
-      };
-    }
-    return {
-      text: 'text-blue-300',
-      border: 'border-blue-500/20',
-      bg: 'bg-blue-500/5',
-      glow: '',
-      glowColors: ['#60a5fa', '#3b82f6', '#38bdf8', '#60a5fa'],
-    };
-  };
-
-  const style = getScoreStyle(score);
+  const leadScoreBand = getLeadScoreBand(score);
+  const label = LEAD_SCORE_BAND_LABELS[leadScoreBand];
+  const style = LEAD_SCORE_BADGE_STYLES[leadScoreBand];
 
   return (
     <div className="flex flex-col items-end gap-1">
-      <div className="flex items-center gap-2">
-        {/* Hot/Neutral/Cold Icon */}
-        {score >= 55 && <HotLeadIcon />}
-        {score >= 35 && score < 55 && <NeutralLeadIcon />}
-        {score < 35 && <ColdLeadIcon />}
+      <div className="flex items-center gap-2" data-lead-score-band={leadScoreBand}>
+        {leadScoreBand === 'hot' && <HotLeadIcon />}
+        {leadScoreBand === 'mid' && <WarmLeadIcon />}
+        {leadScoreBand === 'cold' && <ColdLeadIcon />}
 
         <div className="relative">
           <GlowEffect
@@ -115,12 +125,15 @@ export function LeadScoreBadge({ score, breakdown, websiteAnalysis }: LeadScoreB
           />
           <button
             onClick={() => breakdown && setIsExpanded(!isExpanded)}
-            className={`relative flex items-center justify-center min-w-[44px] h-10 px-1 rounded-lg font-mono text-lg transition-all hover:bg-white/10 ${style.text} ${style.border} ${style.bg} ${style.glow}`}
+            className={`relative flex items-center justify-center min-w-[44px] h-10 px-1 rounded-lg font-mono text-lg transition-colors hover:bg-white/10 ${style.text} ${style.border} ${style.bg} ${style.glow}`}
             title={breakdown ? 'Click for details' : undefined}
+            aria-label={`${label} lead score: ${score}`}
+            aria-expanded={breakdown ? isExpanded : undefined}
           >
             <SlidingNumber value={displayScore} />
           </button>
         </div>
+        <span className={`text-xs font-medium ${style.text}`}>{label}</span>
       </div>
 
       {/* Signal Badges */}
@@ -156,30 +169,30 @@ export function LeadScoreBadge({ score, breakdown, websiteAnalysis }: LeadScoreB
             )}
           </div>
 
-          {/* Revenue Signal */}
+          {/* Demand / Traffic Signal */}
           <div
             className={`flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium ${
-              breakdown.revenueSignal === 'high'
+              breakdown.demandSignal === 'high'
                 ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400'
-                : breakdown.revenueSignal === 'medium'
+                : breakdown.demandSignal === 'medium'
                   ? 'bg-amber-500/10 border border-amber-500/20 text-amber-400'
                   : 'bg-white/5 border border-white/10 text-gray-500'
             }`}
-            title={breakdown.revenueLabel}
+            title={breakdown.demandLabel}
           >
-            {breakdown.revenueSignal === 'high' ? (
+            {breakdown.demandSignal === 'high' ? (
               <TrendingUp className="w-3 h-3" />
-            ) : breakdown.revenueSignal === 'medium' ? (
+            ) : breakdown.demandSignal === 'medium' ? (
               <Minus className="w-3 h-3" />
             ) : (
               <TrendingDown className="w-3 h-3" />
             )}
             <TextEffect as="span" per="char" preset="fade-in-blur" speedReveal={2} delay={0.55}>
-              {breakdown.revenueSignal === 'high'
-                ? 'High Revenue'
-                : breakdown.revenueSignal === 'medium'
-                  ? 'Established'
-                  : 'Low Traffic'}
+              {breakdown.demandSignal === 'high'
+                ? 'Strong Demand'
+                : breakdown.demandSignal === 'medium'
+                  ? 'Moderate Demand'
+                  : 'Limited Demand'}
             </TextEffect>
           </div>
         </div>
@@ -293,28 +306,28 @@ export function LeadScoreBadge({ score, breakdown, websiteAnalysis }: LeadScoreB
             )}
           </div>
 
-          {/* Revenue Signal */}
+          {/* Demand / Traffic Signal */}
           <div className="mb-2">
             <div className="text-gray-500 text-[10px] uppercase tracking-wide mb-1">
-              Revenue Signal
+              Demand / Traffic Signal
             </div>
             <div
               className={`flex items-center gap-1.5 ${
-                breakdown.revenueSignal === 'high'
+                breakdown.demandSignal === 'high'
                   ? 'text-emerald-400'
-                  : breakdown.revenueSignal === 'medium'
+                  : breakdown.demandSignal === 'medium'
                     ? 'text-amber-400'
                     : 'text-gray-600'
               }`}
             >
-              {breakdown.revenueSignal === 'high' ? (
+              {breakdown.demandSignal === 'high' ? (
                 <TrendingUp className="w-3 h-3" />
-              ) : breakdown.revenueSignal === 'medium' ? (
+              ) : breakdown.demandSignal === 'medium' ? (
                 <Minus className="w-3 h-3" />
               ) : (
                 <TrendingDown className="w-3 h-3" />
               )}
-              <span>{breakdown.revenueLabel}</span>
+              <span>{breakdown.demandLabel}</span>
             </div>
           </div>
 
@@ -349,10 +362,21 @@ export function LeadScoreBadge({ score, breakdown, websiteAnalysis }: LeadScoreB
             </div>
           )}
 
-          {/* Total */}
-          <div className="mt-2 pt-2 border-t border-white/10 flex justify-between font-medium">
-            <span className="text-gray-400">Total Score</span>
-            <span className="text-white">{breakdown.total}/100</span>
+          {/* Public and raw totals */}
+          <div className="mt-2 pt-2 border-t border-white/10 space-y-1">
+            <div className="flex justify-between text-gray-500">
+              <span>Signal points (uncapped)</span>
+              <span className="text-gray-300">{breakdown.rawTotal}</span>
+            </div>
+            <div className="flex justify-between font-medium">
+              <span className="text-gray-400">Lead Score (max 100)</span>
+              <span className="text-white">{breakdown.total}/100</span>
+            </div>
+            {breakdown.rawTotal > breakdown.total && (
+              <p className="text-[10px] leading-4 text-gray-500">
+                All signal points remain visible; the public Lead Score is capped at 100.
+              </p>
+            )}
           </div>
         </div>
       )}

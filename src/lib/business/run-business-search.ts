@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { businessSearchResultSchema } from '@/lib/business/business-search-result-contract';
 import {
   SEARCH_SNAPSHOT_VERSION,
   searchMarketDensitySchema,
@@ -9,21 +10,6 @@ import { zoneBboxSchema, zoneScanStatusSchema, zoneSchema } from '@/lib/business
 import type { Zone, ZoneBbox, ZoneScanStatus } from '@/lib/business/zone-contract';
 import type { BusinessSearchResult, IndustryType } from '@/types';
 
-const businessResultSchema = z
-  .object({
-    placeId: z.string(),
-    name: z.string(),
-    photoCount: z.number(),
-    types: z.array(z.string()),
-    socialLinks: z.record(z.string(), z.string()).optional().default({}),
-    contactPoints: z.number(),
-    leadScore: z.number(),
-    scoreBreakdown: z.object({}).passthrough(),
-    opportunities: z.array(z.string()),
-    industryType: z.string(),
-  })
-  .passthrough();
-
 const marketDensitySchema = searchMarketDensitySchema
   .unwrap()
   .extend({
@@ -32,7 +18,7 @@ const marketDensitySchema = searchMarketDensitySchema
   .nullable();
 
 const responseSchema = z.object({
-  results: z.array(businessResultSchema),
+  results: z.array(businessSearchResultSchema),
   marketDensity: marketDensitySchema,
   zoneScanStatus: zoneScanStatusSchema,
   zones: z.array(zoneSchema),
@@ -100,7 +86,7 @@ export function applyBusinessSearchResponse(
   }
 
   const data = parsed.data;
-  const results = data.results as unknown as BusinessSearchResult[];
+  const results = data.results;
   const responseZones = data.zones;
   const mode = input.mode;
   const isInitial = mode.kind === 'initial';

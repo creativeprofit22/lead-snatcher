@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'vitest';
+import { createScoreBreakdown } from '@/lib/business/score-breakdown-contract';
 import { COUNTRIES, DEFAULT_COUNTRY_CODE } from '@/lib/constants';
 import {
   businessEnrichSchema,
   businessSearchSchema,
+  createLeadSchema,
   createTagSchema,
   createTaskSchema,
   updateTagSchema,
@@ -93,5 +95,82 @@ describe('tag validation', () => {
     expect(updateTagSchema.parse({ name: ` ${maximumLengthName} ` }).name).toBe(maximumLengthName);
     expect(createTagSchema.safeParse({ name: ` ${overLengthName} `, color }).success).toBe(false);
     expect(updateTagSchema.safeParse({ name: ` ${overLengthName} ` }).success).toBe(false);
+  });
+});
+
+describe('create lead score breakdown validation', () => {
+  const requiredLeadFields = { placeId: 'place-1', name: 'Acme Dental' };
+
+  test('accepts a complete current record and recalculates its canonical totals', () => {
+    const currentScoreBreakdown = createScoreBreakdown({
+      noWebsite: 45,
+      noOnlineBooking: 8,
+      qualityChips: ['No website'],
+      hasMarketingBudget: true,
+      marketingPlatforms: ['Google Ads'],
+    });
+
+    expect(
+      createLeadSchema.parse({
+        ...requiredLeadFields,
+        scoreBreakdown: { ...currentScoreBreakdown, rawTotal: 999, total: 999 },
+      }).scoreBreakdown
+    ).toEqual(currentScoreBreakdown);
+  });
+
+  test('normalizes a known legacy partial record with canonical array and boolean defaults', () => {
+    const scoreBreakdown = createLeadSchema.parse({
+      ...requiredLeadFields,
+      // Legacy persisted/search output used +20 and omitted the rest of the contract.
+      scoreBreakdown: { noWebsite: 20 },
+    }).scoreBreakdown;
+
+    expect(scoreBreakdown).toEqual(createScoreBreakdown({ noWebsite: 20 }));
+    expect(scoreBreakdown).toMatchObject({
+      qualityChips: [],
+      hasMarketingBudget: false,
+      marketingPlatforms: [],
+      rawTotal: 20,
+      total: 20,
+    });
+  });
+
+  test('strips unknown score keys before persistence', () => {
+    const parsed = createLeadSchema.parse({
+      ...requiredLeadFields,
+      scoreBreakdown: { noWebsite: 20, futureSignal: 9 },
+    });
+
+    expect(parsed.scoreBreakdown).toEqual(createScoreBreakdown({ noWebsite: 20 }));
+    expect(parsed.scoreBreakdown).not.toHaveProperty('futureSignal');
+  });
+
+  test('accepts a capped lead score with an over-cap raw breakdown for saving', () => {
+    const scoreBreakdown = createScoreBreakdown({ noWebsite: 100, noPhone: 5 });
+    const parsed = createLeadSchema.parse({
+      ...requiredLeadFields,
+      leadScore: scoreBreakdown.total,
+      scoreBreakdown,
+    });
+
+    expect(parsed.leadScore).toBe(100);
+    expect(parsed.scoreBreakdown).toMatchObject({ rawTotal: 105, total: 100 });
+    expect(
+      createLeadSchema.safeParse({
+        ...requiredLeadFields,
+        leadScore: 101,
+        scoreBreakdown,
+      }).success
+    ).toBe(false);
+  });
+
+  test.each([
+    ['numeric field', { noWebsite: '20' }],
+    ['array field', { qualityChips: 'No website' }],
+    ['boolean field', { hasMarketingBudget: 'true' }],
+  ])('rejects a malformed %s', (_field, scoreBreakdown) => {
+    expect(createLeadSchema.safeParse({ ...requiredLeadFields, scoreBreakdown }).success).toBe(
+      false
+    );
   });
 });

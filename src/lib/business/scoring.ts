@@ -1,163 +1,147 @@
-import type { ScoreBreakdown, ExtendedBusinessData, WebsiteAnalysis } from '@/types';
+import type { ExtendedBusinessData, ScoreBreakdown, WebsiteAnalysis } from '@/types';
+import { INDUSTRY_POLICIES } from './industry-policy';
+import { createDemandEvidenceProfile, formatDemandEvidenceLabel } from './revenue-profile';
+import {
+  calculateScoreBreakdownRawTotal,
+  calculateScoreBreakdownTotal,
+  createScoreBreakdown,
+} from './score-breakdown-contract';
+import { isSocialProfileUrl } from './social-profile-url';
 
-// Industries that benefit from online booking
-const BOOKING_INDUSTRIES = ['salon', 'fitness', 'medical', 'restaurant', 'automotive'];
+const SCORE_POLICY = {
+  noWebsite: { points: 45 },
+  socialOnlyWebsite: { points: 30 },
+  noPhone: { points: 5 },
+  fewPhotos: { photoCountThreshold: 5, points: 8 },
+  lowReviews: {
+    lowReviewCountThreshold: 20,
+    lowPoints: 7,
+    moderateReviewCountThreshold: 100,
+    moderatePoints: 4,
+  },
+  hiddenGem: { minimumRating: 4, reviewCountThreshold: 50, points: 5 },
+  poorPerformance: { performanceThreshold: 50, points: 10, unavailablePoints: 5 },
+  notMobileFriendly: { points: 10 },
+  noHttps: { points: 5 },
+  outdatedWebsite: { points: 10 },
+  noOnlineBooking: { points: 8 },
+  noSocialLinks: { points: 5 },
+  basicTechStack: { points: 7 },
+  noViewport: { points: 10 },
+  tableLayout: { points: 8 },
+  thinContent: { minimumMeasuredWordCount: 1, wordCountThreshold: 150, points: 6 },
+  deprecatedTags: { points: 6 },
+  templateFingerprint: { points: 7 },
+  noForm: { points: 5 },
+  fixedPixelWidth: { points: 4 },
+  outdatedJquery: { points: 4 },
+  noSchemaOrg: { points: 4 },
+  noOpenGraph: { points: 3 },
+  noLangAttribute: { points: 2 },
+  lowAccessibility: { scoreThreshold: 70, points: 6 },
+  lowSeo: { scoreThreshold: 70, points: 6 },
+  lowBestPractices: { scoreThreshold: 80, points: 4 },
+  slowLcp: { millisecondsThreshold: 4_000, points: 5 },
+  highCls: { threshold: 0.25, points: 3 },
+  qualityChips: { limit: 3 },
+} as const;
 
 /**
- * Multi-Layer Lead Scoring System v4
+ * Multi-layer lead scoring system.
  *
- * CORE PRINCIPLE: No website = BIGGEST opportunity
- * Businesses without websites get implied points for missing features they'd need.
- *
- * Layer 1: Basic Presence (max 50 pts)
- *   - No website: +45 pts (THE biggest opportunity - they need everything!)
- *   - Social-only website: +30 pts (needs real website)
- *   - No phone: +5 pts
- *
- * Layer 2: Google Profile Quality (max 20 pts)
- *   - Few photos (<5): +8 pts
- *   - Low reviews (<20): +7 pts, (20-100): +4 pts
- *   - Hidden gem (rating ≥4.0 + low reviews): +5 pts
- *
- * Layer 3: Website Technical (max 25 pts) - only for sites that exist
- *   - Poor performance (<50): +10 pts
- *   - Not mobile-friendly: +10 pts
- *   - No HTTPS: +5 pts
- *
- * Layer 4: Website Opportunities (max 30 pts) - from Scraping
- *   - Outdated website (>3 years): +10 pts
- *   - No online booking (for service businesses): +8 pts
- *   - No social links on site: +5 pts
- *   - Basic tech stack: +7 pts
- *
- * Total max: ~100 pts (varies by situation)
+ * Basic business-presence, Google profile, website technical, website
+ * opportunity, and deep website-quality signals contribute to the total.
+ * Marketing and demand/traffic signals remain informational.
  */
 export function calculateLeadScore(business: ExtendedBusinessData): ScoreBreakdown {
-  const breakdown: ScoreBreakdown = {
-    // Layer 1
-    noWebsite: 0,
-    socialOnlyWebsite: 0,
-    noPhone: 0,
-    // Layer 2
-    fewPhotos: 0,
-    lowReviews: 0,
-    hiddenGem: 0,
-    // Layer 3
-    poorPerformance: 0,
-    notMobileFriendly: 0,
-    noHttps: 0,
-    // Layer 4
-    outdatedWebsite: 0,
-    noOnlineBooking: 0,
-    noSocialLinks: 0,
-    basicTechStack: 0,
-    // Layer 5 — concrete, defensible website-quality signals
-    noViewport: 0,
-    tableLayout: 0,
-    thinContent: 0,
-    deprecatedTags: 0,
-    templateFingerprint: 0,
-    noForm: 0,
-    fixedPixelWidth: 0,
-    outdatedJquery: 0,
-    noSchemaOrg: 0,
-    noOpenGraph: 0,
-    noLangAttribute: 0,
-    lowAccessibility: 0,
-    lowSeo: 0,
-    lowBestPractices: 0,
-    slowLcp: 0,
-    highCls: 0,
-    qualityChips: [],
-    hasMarketingBudget: false,
-    marketingPlatforms: [],
-    revenueSignal: 'low',
-    revenueLabel: '',
-    total: 0,
-  };
+  const breakdown = createScoreBreakdown();
 
-  const isServiceBusiness =
-    business.industryType && BOOKING_INDUSTRIES.includes(business.industryType);
+  const bookingScored = business.industryType
+    ? INDUSTRY_POLICIES[business.industryType].bookingScored
+    : false;
 
   // === LAYER 1: Basic Presence ===
 
   if (!business.website) {
     // NO WEBSITE = BIGGEST OPPORTUNITY
     // They need everything: website, mobile, booking, social integration
-    breakdown.noWebsite = 45;
+    breakdown.noWebsite = SCORE_POLICY.noWebsite.points;
 
     // Also give implied points for features they're missing
     // Service businesses without website = they definitely need booking
-    if (isServiceBusiness) {
-      breakdown.noOnlineBooking = 8;
+    if (bookingScored) {
+      breakdown.noOnlineBooking = SCORE_POLICY.noOnlineBooking.points;
     }
-  } else if (isSocialOnlyWebsite(business.website)) {
+  } else if (isSocialProfileUrl(business.website)) {
     // Social-only is bad but not as bad as nothing
-    breakdown.socialOnlyWebsite = 30;
+    breakdown.socialOnlyWebsite = SCORE_POLICY.socialOnlyWebsite.points;
 
     // They still need booking if service business
-    if (isServiceBusiness) {
-      breakdown.noOnlineBooking = 8;
+    if (bookingScored) {
+      breakdown.noOnlineBooking = SCORE_POLICY.noOnlineBooking.points;
     }
   }
 
   if (!business.phone) {
-    breakdown.noPhone = 5;
+    breakdown.noPhone = SCORE_POLICY.noPhone.points;
   }
 
-  // === LAYER 2: Google Profile Quality (max 20 pts) ===
+  // === LAYER 2: Google Profile Quality ===
 
-  if (business.photoCount < 5) {
-    breakdown.fewPhotos = 8;
+  if (business.photoCount < SCORE_POLICY.fewPhotos.photoCountThreshold) {
+    breakdown.fewPhotos = SCORE_POLICY.fewPhotos.points;
   }
 
   const reviewCount = business.reviewCount || 0;
-  if (reviewCount < 20) {
-    breakdown.lowReviews = 7;
-  } else if (reviewCount < 100) {
-    breakdown.lowReviews = 4;
+  if (reviewCount < SCORE_POLICY.lowReviews.lowReviewCountThreshold) {
+    breakdown.lowReviews = SCORE_POLICY.lowReviews.lowPoints;
+  } else if (reviewCount < SCORE_POLICY.lowReviews.moderateReviewCountThreshold) {
+    breakdown.lowReviews = SCORE_POLICY.lowReviews.moderatePoints;
   }
 
   const rating = business.rating || 0;
-  if (rating >= 4.0 && reviewCount < 50) {
-    breakdown.hiddenGem = 5;
+  if (
+    rating >= SCORE_POLICY.hiddenGem.minimumRating &&
+    reviewCount < SCORE_POLICY.hiddenGem.reviewCountThreshold
+  ) {
+    breakdown.hiddenGem = SCORE_POLICY.hiddenGem.points;
   }
 
-  // === LAYER 3: Website Technical (max 25 pts) ===
+  // === LAYER 3: Website Technical ===
   // Only apply if business HAS a website (not social-only)
 
-  const hasRealWebsite = business.website && !isSocialOnlyWebsite(business.website);
+  const hasRealWebsite = business.website && !isSocialProfileUrl(business.website);
 
   if (hasRealWebsite) {
     if (business.websiteAnalysis && !business.websiteAnalysis.hasErrors) {
       const analysis = business.websiteAnalysis;
 
-      if (analysis.performanceScore < 50) {
-        breakdown.poorPerformance = 10;
+      if (analysis.performanceScore < SCORE_POLICY.poorPerformance.performanceThreshold) {
+        breakdown.poorPerformance = SCORE_POLICY.poorPerformance.points;
       }
 
       if (!analysis.isMobileFriendly) {
-        breakdown.notMobileFriendly = 10;
+        breakdown.notMobileFriendly = SCORE_POLICY.notMobileFriendly.points;
       }
 
       if (!analysis.isHttps) {
-        breakdown.noHttps = 5;
+        breakdown.noHttps = SCORE_POLICY.noHttps.points;
       }
     } else if (business.scrapedData && business.scrapedData.isReachable) {
       // Fallback to scraped data if no PageSpeed analysis
       if (!business.scrapedData.hasMobileViewport) {
-        breakdown.notMobileFriendly = 10;
+        breakdown.notMobileFriendly = SCORE_POLICY.notMobileFriendly.points;
       }
       if (!business.scrapedData.isHttps) {
-        breakdown.noHttps = 5;
+        breakdown.noHttps = SCORE_POLICY.noHttps.points;
       }
     } else {
       // Website exists but couldn't be analyzed - assume issues
-      breakdown.poorPerformance = 5;
+      breakdown.poorPerformance = SCORE_POLICY.poorPerformance.unavailablePoints;
     }
   }
 
-  // === LAYER 4: Website Opportunities (max 30 pts) - from Scraping ===
+  // === LAYER 4: Website Opportunities ===
   // Only apply if business HAS a real website we could scrape
 
   if (hasRealWebsite && business.scrapedData && business.scrapedData.isReachable) {
@@ -165,17 +149,17 @@ export function calculateLeadScore(business: ExtendedBusinessData): ScoreBreakdo
 
     // Outdated website
     if (scraped.estimatedAge === 'outdated' || scraped.estimatedAge === 'ancient') {
-      breakdown.outdatedWebsite = 10;
+      breakdown.outdatedWebsite = SCORE_POLICY.outdatedWebsite.points;
     }
 
     // No online booking for service businesses (only if not already counted above)
-    if (isServiceBusiness && !scraped.hasOnlineBooking && breakdown.noOnlineBooking === 0) {
-      breakdown.noOnlineBooking = 8;
+    if (bookingScored && !scraped.hasOnlineBooking && breakdown.noOnlineBooking === 0) {
+      breakdown.noOnlineBooking = SCORE_POLICY.noOnlineBooking.points;
     }
 
     // No social links on website
     if (scraped.socialCount === 0) {
-      breakdown.noSocialLinks = 5;
+      breakdown.noSocialLinks = SCORE_POLICY.noSocialLinks.points;
     }
 
     // Basic tech stack (old WordPress, plain HTML, no modern framework)
@@ -188,7 +172,7 @@ export function calculateLeadScore(business: ExtendedBusinessData): ScoreBreakdo
       (scraped.techStack.length === 1 && scraped.techStack[0] === 'jQuery');
 
     if (!hasModernTech && (isBasicWordPress || isPlainHtml)) {
-      breakdown.basicTechStack = 7;
+      breakdown.basicTechStack = SCORE_POLICY.basicTechStack.points;
     }
   }
 
@@ -204,57 +188,87 @@ export function calculateLeadScore(business: ExtendedBusinessData): ScoreBreakdo
     const q = scraped.qualitySignals;
 
     if (!scraped.hasMobileViewport) {
-      breakdown.noViewport = 10;
-      qualityChipCandidates.push({ label: 'No mobile viewport', pts: 10 });
+      breakdown.noViewport = SCORE_POLICY.noViewport.points;
+      qualityChipCandidates.push({
+        label: 'No mobile viewport',
+        pts: SCORE_POLICY.noViewport.points,
+      });
     }
 
     if (q) {
       if (q.hasTableLayout) {
-        breakdown.tableLayout = 8;
-        qualityChipCandidates.push({ label: 'Table-based layout', pts: 8 });
+        breakdown.tableLayout = SCORE_POLICY.tableLayout.points;
+        qualityChipCandidates.push({
+          label: 'Table-based layout',
+          pts: SCORE_POLICY.tableLayout.points,
+        });
       }
-      if (q.wordCount > 0 && q.wordCount < 150) {
-        breakdown.thinContent = 6;
-        qualityChipCandidates.push({ label: `Only ${q.wordCount} words`, pts: 6 });
+      if (
+        q.wordCount >= SCORE_POLICY.thinContent.minimumMeasuredWordCount &&
+        q.wordCount < SCORE_POLICY.thinContent.wordCountThreshold
+      ) {
+        breakdown.thinContent = SCORE_POLICY.thinContent.points;
+        qualityChipCandidates.push({
+          label: `Only ${q.wordCount} words`,
+          pts: SCORE_POLICY.thinContent.points,
+        });
       }
       if (q.hasDeprecatedTags) {
-        breakdown.deprecatedTags = 6;
+        breakdown.deprecatedTags = SCORE_POLICY.deprecatedTags.points;
         const tag = q.deprecatedTagsFound[0] || 'deprecated tags';
-        qualityChipCandidates.push({ label: `Uses ${tag}`, pts: 6 });
+        qualityChipCandidates.push({
+          label: `Uses ${tag}`,
+          pts: SCORE_POLICY.deprecatedTags.points,
+        });
       }
       if (q.templateFingerprint) {
-        breakdown.templateFingerprint = 7;
+        breakdown.templateFingerprint = SCORE_POLICY.templateFingerprint.points;
         qualityChipCandidates.push({
           label: `${q.templateFingerprint} template`,
-          pts: 7,
+          pts: SCORE_POLICY.templateFingerprint.points,
         });
       }
       if (!q.hasAnyForm) {
-        breakdown.noForm = 5;
-        qualityChipCandidates.push({ label: 'No contact form', pts: 5 });
+        breakdown.noForm = SCORE_POLICY.noForm.points;
+        qualityChipCandidates.push({
+          label: 'No contact form',
+          pts: SCORE_POLICY.noForm.points,
+        });
       }
       if (q.hasFixedPixelWidth) {
-        breakdown.fixedPixelWidth = 4;
-        qualityChipCandidates.push({ label: 'Fixed pixel widths', pts: 4 });
+        breakdown.fixedPixelWidth = SCORE_POLICY.fixedPixelWidth.points;
+        qualityChipCandidates.push({
+          label: 'Fixed pixel widths',
+          pts: SCORE_POLICY.fixedPixelWidth.points,
+        });
       }
       if (q.isOldJquery) {
-        breakdown.outdatedJquery = 4;
+        breakdown.outdatedJquery = SCORE_POLICY.outdatedJquery.points;
         qualityChipCandidates.push({
           label: `jQuery ${q.jqueryVersion}`,
-          pts: 4,
+          pts: SCORE_POLICY.outdatedJquery.points,
         });
       }
       if (!q.hasSchemaOrg) {
-        breakdown.noSchemaOrg = 4;
-        qualityChipCandidates.push({ label: 'No schema.org data', pts: 4 });
+        breakdown.noSchemaOrg = SCORE_POLICY.noSchemaOrg.points;
+        qualityChipCandidates.push({
+          label: 'No schema.org data',
+          pts: SCORE_POLICY.noSchemaOrg.points,
+        });
       }
       if (!q.hasOpenGraph) {
-        breakdown.noOpenGraph = 3;
-        qualityChipCandidates.push({ label: 'No Open Graph tags', pts: 3 });
+        breakdown.noOpenGraph = SCORE_POLICY.noOpenGraph.points;
+        qualityChipCandidates.push({
+          label: 'No Open Graph tags',
+          pts: SCORE_POLICY.noOpenGraph.points,
+        });
       }
       if (!q.hasLangAttribute) {
-        breakdown.noLangAttribute = 2;
-        qualityChipCandidates.push({ label: 'Missing <html lang>', pts: 2 });
+        breakdown.noLangAttribute = SCORE_POLICY.noLangAttribute.points;
+        qualityChipCandidates.push({
+          label: 'Missing <html lang>',
+          pts: SCORE_POLICY.noLangAttribute.points,
+        });
       }
     }
   }
@@ -262,45 +276,59 @@ export function calculateLeadScore(business: ExtendedBusinessData): ScoreBreakdo
   // PageSpeed-based signals — apply whenever we have analysis for a real site.
   if (hasRealWebsite && business.websiteAnalysis && !business.websiteAnalysis.hasErrors) {
     const a = business.websiteAnalysis;
-    if (typeof a.accessibilityScore === 'number' && a.accessibilityScore < 70) {
-      breakdown.lowAccessibility = 6;
+    if (
+      typeof a.accessibilityScore === 'number' &&
+      a.accessibilityScore < SCORE_POLICY.lowAccessibility.scoreThreshold
+    ) {
+      breakdown.lowAccessibility = SCORE_POLICY.lowAccessibility.points;
       qualityChipCandidates.push({
         label: `Accessibility ${a.accessibilityScore}`,
-        pts: 6,
+        pts: SCORE_POLICY.lowAccessibility.points,
       });
     }
-    if (typeof a.seoScore === 'number' && a.seoScore < 70) {
-      breakdown.lowSeo = 6;
-      qualityChipCandidates.push({ label: `SEO ${a.seoScore}`, pts: 6 });
+    if (typeof a.seoScore === 'number' && a.seoScore < SCORE_POLICY.lowSeo.scoreThreshold) {
+      breakdown.lowSeo = SCORE_POLICY.lowSeo.points;
+      qualityChipCandidates.push({
+        label: `SEO ${a.seoScore}`,
+        pts: SCORE_POLICY.lowSeo.points,
+      });
     }
-    if (typeof a.bestPracticesScore === 'number' && a.bestPracticesScore < 80) {
-      breakdown.lowBestPractices = 4;
+    if (
+      typeof a.bestPracticesScore === 'number' &&
+      a.bestPracticesScore < SCORE_POLICY.lowBestPractices.scoreThreshold
+    ) {
+      breakdown.lowBestPractices = SCORE_POLICY.lowBestPractices.points;
       qualityChipCandidates.push({
         label: `Best practices ${a.bestPracticesScore}`,
-        pts: 4,
+        pts: SCORE_POLICY.lowBestPractices.points,
       });
     }
-    if (typeof a.largestContentfulPaint === 'number' && a.largestContentfulPaint > 4000) {
-      breakdown.slowLcp = 5;
+    if (
+      typeof a.largestContentfulPaint === 'number' &&
+      a.largestContentfulPaint > SCORE_POLICY.slowLcp.millisecondsThreshold
+    ) {
+      breakdown.slowLcp = SCORE_POLICY.slowLcp.points;
       qualityChipCandidates.push({
         label: `LCP ${(a.largestContentfulPaint / 1000).toFixed(1)}s`,
-        pts: 5,
+        pts: SCORE_POLICY.slowLcp.points,
       });
     }
-    if (typeof a.cumulativeLayoutShift === 'number' && a.cumulativeLayoutShift > 0.25) {
-      breakdown.highCls = 3;
+    if (
+      typeof a.cumulativeLayoutShift === 'number' &&
+      a.cumulativeLayoutShift > SCORE_POLICY.highCls.threshold
+    ) {
+      breakdown.highCls = SCORE_POLICY.highCls.points;
       qualityChipCandidates.push({
         label: `CLS ${a.cumulativeLayoutShift.toFixed(2)}`,
-        pts: 3,
+        pts: SCORE_POLICY.highCls.points,
       });
     }
   }
 
-  // Top 3 triggered signals, most valuable first — these are what the
-  // card renders as chips and what the sales email quotes.
+  // Highest-value triggered signals are shown on cards and quoted in sales email.
   breakdown.qualityChips = qualityChipCandidates
     .sort((a, b) => b.pts - a.pts)
-    .slice(0, 3)
+    .slice(0, SCORE_POLICY.qualityChips.limit)
     .map((c) => c.label);
 
   // === MARKETING INTELLIGENCE (informational, not scored) ===
@@ -309,68 +337,15 @@ export function calculateLeadScore(business: ExtendedBusinessData): ScoreBreakdo
     breakdown.marketingPlatforms = business.scrapedData.marketingSignals?.detectedPlatforms || [];
   }
 
-  // === REVENUE SIGNAL (informational, not scored) ===
-  // Composite of volume + rating quality. A 2K-review 3.8★ chain and a
-  // 150-review 4.9★ boutique both exist; flat review-count tiers flattened
-  // them together and biased scoring toward high-volume/low-margin places.
-  // The budget estimator does the actual math; this label just mirrors it.
-  const revRating = business.rating || 0;
-  const rL = revRating > 0 ? ` · ${revRating.toFixed(1)}★` : '';
-  if (reviewCount >= 200 && revRating >= 4.0) {
-    breakdown.revenueSignal = 'high';
-    breakdown.revenueLabel = `${reviewCount} reviews${rL} — high traffic, likely has budget`;
-  } else if (reviewCount >= 200) {
-    // High volume but poor ratings — demote from 'high' to avoid crediting
-    // churny, low-margin operations as premium revenue.
-    breakdown.revenueSignal = 'medium';
-    breakdown.revenueLabel = `${reviewCount} reviews${rL} — high volume but rating drag`;
-  } else if (reviewCount >= 50 && revRating >= 4.6) {
-    // Low/mid volume but exceptional rating — boutique or specialist.
-    // Surface as 'medium' so it doesn't get buried under mediocre chains.
-    breakdown.revenueSignal = 'medium';
-    breakdown.revenueLabel = `${reviewCount} reviews${rL} — boutique / selective clientele`;
-  } else if (reviewCount >= 50) {
-    breakdown.revenueSignal = 'medium';
-    breakdown.revenueLabel = `${reviewCount} reviews${rL} — established business`;
-  } else {
-    breakdown.revenueSignal = 'low';
-    breakdown.revenueLabel =
-      reviewCount > 0
-        ? `${reviewCount} reviews${rL} — newer or low-traffic business`
-        : 'No reviews — very new or unlisted';
-  }
+  // === DEMAND / TRAFFIC SIGNAL (informational, not scored) ===
+  // Need points remain independent; this profile only describes review-based evidence.
+  const demandProfile = createDemandEvidenceProfile(reviewCount, business.rating);
+  breakdown.demandSignal = demandProfile.displaySignal;
+  breakdown.demandReasonCode = demandProfile.reasonCode;
+  breakdown.demandLabel = formatDemandEvidenceLabel(demandProfile);
 
-  // Calculate total
-  breakdown.total =
-    breakdown.noWebsite +
-    breakdown.socialOnlyWebsite +
-    breakdown.noPhone +
-    breakdown.fewPhotos +
-    breakdown.lowReviews +
-    breakdown.hiddenGem +
-    breakdown.poorPerformance +
-    breakdown.notMobileFriendly +
-    breakdown.noHttps +
-    breakdown.outdatedWebsite +
-    breakdown.noOnlineBooking +
-    breakdown.noSocialLinks +
-    breakdown.basicTechStack +
-    breakdown.noViewport +
-    breakdown.tableLayout +
-    breakdown.thinContent +
-    breakdown.deprecatedTags +
-    breakdown.templateFingerprint +
-    breakdown.noForm +
-    breakdown.fixedPixelWidth +
-    breakdown.outdatedJquery +
-    breakdown.noSchemaOrg +
-    breakdown.noOpenGraph +
-    breakdown.noLangAttribute +
-    breakdown.lowAccessibility +
-    breakdown.lowSeo +
-    breakdown.lowBestPractices +
-    breakdown.slowLcp +
-    breakdown.highCls;
+  breakdown.rawTotal = calculateScoreBreakdownRawTotal(breakdown);
+  breakdown.total = calculateScoreBreakdownTotal(breakdown);
 
   return breakdown;
 }
@@ -386,48 +361,4 @@ export function calculateLeadScoreWithAnalysis(
     ...business,
     websiteAnalysis,
   });
-}
-
-/**
- * Check if a website is just a social media profile
- */
-function isSocialOnlyWebsite(website: string): boolean {
-  const socialPatterns = [
-    'facebook.com',
-    'fb.com',
-    'instagram.com',
-    'twitter.com',
-    'x.com',
-    'tiktok.com',
-    'linkedin.com',
-    'youtube.com',
-  ];
-
-  const lowerWebsite = website.toLowerCase();
-  return socialPatterns.some((pattern) => lowerWebsite.includes(pattern));
-}
-
-/**
- * Get priority level based on score
- *
- * With v4 scoring:
- * - No website + service business + few photos + low reviews = 45+8+8+7 = 68+ (Hot)
- * - No website + few photos + low reviews = 45+8+7 = 60 (Hot)
- * - Social-only + service business + few photos = 30+8+8 = 46+ (Warm)
- * - Bad website with issues = 15-45 typically (Warm to Hot depending on issues)
- * - Good website with minor issues = 5-20 (Cold - they're doing okay)
- */
-export function getLeadPriority(score: number): 'high' | 'medium' | 'low' {
-  if (score >= 55) return 'high'; // Hot Lead - major opportunities
-  if (score >= 35) return 'medium'; // Warm Lead - some opportunities
-  return 'low'; // Cold Lead - fewer immediate needs
-}
-
-/**
- * Get score color for display
- */
-export function getScoreColor(score: number): string {
-  if (score >= 55) return '#22c55e'; // green - Hot Lead
-  if (score >= 35) return '#eab308'; // yellow - Warm Lead
-  return '#6b7280'; // gray - Cold Lead
 }

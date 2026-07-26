@@ -212,10 +212,9 @@ function HomeInner() {
     }
   };
 
-  // Merge any post-sweep enrichment results (website + socials) into
-  // each lead so rendering, filtering, and sorting all see the live
-  // data — not the stale pre-enrichment snapshot.
-  const enrichedResults = mergeEnrichmentResults(searchResults, enrichResultMap);
+  // Merge enrichment and re-derive every dependent intelligence field before
+  // rendering, filtering, sorting, or passing a lead to the save handler.
+  const enrichedResults = mergeEnrichmentResults(searchResults, enrichResultMap, focusedZone);
   const selectedEnrichedResults = selectResultsById(enrichedResults, selectedForEnrich);
   const cachedSelectedCount = selectedEnrichedResults.filter(
     (lead) => enrichResultMap[lead.placeId]?.cached

@@ -1,9 +1,15 @@
 import { describe, expect, test } from 'vitest';
-import type { BusinessSearchResult, ScoreBreakdown } from '@/types';
+import type {
+  BusinessSearchResult,
+  ScoreBreakdown,
+  ScrapedWebsiteData,
+  WebsiteAnalysis,
+} from '@/types';
 import {
   filterAndSortResults,
   isRealEmail,
   mergeEnrichmentResults,
+  rederiveEnrichedSearchResult,
   selectResultsById,
   type SearchResultFilters,
   type SearchResultSort,
@@ -42,8 +48,10 @@ const scoreBreakdown: ScoreBreakdown = {
   qualityChips: [],
   hasMarketingBudget: false,
   marketingPlatforms: [],
-  revenueSignal: 'low',
-  revenueLabel: 'Low revenue signal',
+  demandSignal: 'low',
+  demandReasonCode: 'no_review_evidence',
+  demandLabel: 'Limited traffic signal',
+  rawTotal: 0,
   total: 0,
 };
 
@@ -66,6 +74,78 @@ function lead(
   };
 }
 
+function healthyScrapedEvidence(): ScrapedWebsiteData {
+  return {
+    url: 'https://original.example',
+    isReachable: true,
+    loadTimeMs: 250,
+    techStack: ['React'],
+    hasWordPress: false,
+    hasShopify: false,
+    hasSquarespace: false,
+    hasWix: false,
+    hasCustomSite: true,
+    estimatedAge: 'recent',
+    hasOnlineBooking: true,
+    hasContactForm: true,
+    hasLiveChat: true,
+    hasNewsletter: true,
+    hasEcommerce: false,
+    hasBlog: true,
+    emails: [],
+    socialLinks: { facebook: 'https://facebook.com/original' },
+    socialCount: 1,
+    hasMobileViewport: true,
+    isHttps: true,
+    hasSSLIssues: false,
+    hasModernDesign: true,
+    imageCount: 10,
+    hasVideo: false,
+    marketingSignals: {
+      hasGoogleAds: false,
+      hasFacebookAds: false,
+      hasGoogleAnalytics: false,
+      hasBingAds: false,
+      hasHotjar: false,
+      hasOtherAds: false,
+      detectedPlatforms: [],
+    },
+    hasMarketingBudget: false,
+    scrapedAt: '2026-01-01T00:00:00.000Z',
+    qualitySignals: {
+      hasTableLayout: false,
+      wordCount: 500,
+      hasAnyForm: true,
+      hasSchemaOrg: true,
+      hasOpenGraph: true,
+      hasDeprecatedTags: false,
+      deprecatedTagsFound: [],
+      hasFixedPixelWidth: false,
+      hasLangAttribute: true,
+      jqueryVersion: null,
+      isOldJquery: false,
+      templateFingerprint: null,
+    },
+  };
+}
+
+function healthyPageSpeedEvidence(): WebsiteAnalysis {
+  return {
+    url: 'https://original.example',
+    isHttps: true,
+    performanceScore: 95,
+    accessibilityScore: 95,
+    seoScore: 95,
+    bestPracticesScore: 95,
+    largestContentfulPaint: 1_500,
+    cumulativeLayoutShift: 0.05,
+    isMobileFriendly: true,
+    responseTime: 250,
+    hasErrors: false,
+    analyzedAt: '2026-01-01T00:00:00.000Z',
+  };
+}
+
 const noFilters: SearchResultFilters = {
   hasEmail: false,
   hasPhone: false,
@@ -79,7 +159,7 @@ function ids(results: readonly BusinessSearchResult[]): string[] {
 }
 
 describe('mergeEnrichmentResults', () => {
-  test('keeps an existing website, adds a discovered website, and lets discovered socials win', () => {
+  test('preserves website precedence while enriched socials replace matching keys', () => {
     const existing = lead('existing', {
       website: 'https://original.example',
       socialLinks: {
@@ -105,13 +185,13 @@ describe('mergeEnrichmentResults', () => {
 
     expect(merged[0]).toMatchObject({
       website: 'https://original.example',
-      contactPoints: 3,
       socialLinks: {
         facebook: 'https://facebook.com/discovered',
         instagram: 'https://instagram.com/original',
         twitter: 'https://twitter.com/discovered',
       },
     });
+    expect(existing.contactPoints).toBe(3);
     expect(merged[1]?.website).toBe('https://found.example');
     expect(merged[2]).toBe(untouched);
   });
@@ -134,6 +214,116 @@ describe('mergeEnrichmentResults', () => {
     });
 
     expect(results).toEqual(before);
+  });
+
+  test('re-derives intelligence after discovering a website with no new site evidence', () => {
+    const original = lead('discovered-website', {
+      phone: '555-0100',
+      photoCount: 10,
+      rating: 4.5,
+      reviewCount: 100,
+      contactPoints: 1,
+      leadScore: 45,
+      scoreBreakdown: { ...scoreBreakdown, noWebsite: 45, rawTotal: 45, total: 45 },
+      opportunities: ['Website design and development'],
+    });
+
+    const result = rederiveEnrichedSearchResult(
+      original,
+      { website: 'https://found.example' },
+      { score: 50, level: 'commercial', archetype: 'mixed' }
+    );
+
+    expect(result).toMatchObject({
+      website: 'https://found.example',
+      contactPoints: 2,
+      leadScore: 5,
+      fitScore: 3,
+      areaLevel: 'commercial',
+      scoreBreakdown: { noWebsite: 0, poorPerformance: 5, total: 5 },
+      budgetEstimate: { min: 1_500, points: 40 },
+    });
+    expect(result.opportunities).toContain('SEO audit and optimization');
+    expect(result.opportunities).not.toContain('Website design and development');
+    expect(result.budgetEstimate?.reasons).toContain('Already invested in a website');
+    expect(result.budgetEstimate?.reasons).not.toContain(
+      'No website — first-time digital investment'
+    );
+
+    expect(filterAndSortResults([result], { ...noFilters, hasSocial: true }, 'fit')).toEqual([]);
+    const displayedForSave = filterAndSortResults(
+      [result],
+      { ...noFilters, minBudget: 1_500 },
+      'fit'
+    );
+    expect(displayedForSave).toEqual([result]);
+    expect(displayedForSave[0]).toMatchObject({
+      website: 'https://found.example',
+      leadScore: 5,
+      opportunities: result.opportunities,
+    });
+  });
+
+  test('re-derives intelligence after socials are added and replaced while preserving site evidence', () => {
+    const scrapedData = healthyScrapedEvidence();
+    const websiteAnalysis = healthyPageSpeedEvidence();
+    const original = lead('social-enrichment', {
+      website: 'https://original.example',
+      photoCount: 10,
+      rating: 4.5,
+      reviewCount: 100,
+      socialLinks: { facebook: 'https://facebook.com/original' },
+      contactPoints: 2,
+      leadScore: 99,
+      scrapedData,
+      websiteAnalysis,
+    });
+
+    const [result] = mergeEnrichmentResults(
+      [original],
+      {
+        'social-enrichment': {
+          website: 'https://ignored.example',
+          socials: {
+            facebook: 'https://facebook.com/replacement',
+            instagram: 'https://instagram.com/discovered',
+            twitter: 'https://twitter.com/discovered',
+          },
+        },
+      },
+      { score: 50, level: 'commercial', archetype: 'mixed' }
+    );
+
+    expect(result).toMatchObject({
+      website: 'https://original.example',
+      socialLinks: {
+        facebook: 'https://facebook.com/replacement',
+        instagram: 'https://instagram.com/discovered',
+        twitter: 'https://twitter.com/discovered',
+      },
+      contactPoints: 4,
+      leadScore: 5,
+      fitScore: 3,
+      scoreBreakdown: { noWebsite: 0, total: 5 },
+      budgetEstimate: { min: 1_500, points: 43 },
+    });
+    expect(result?.scrapedData).toBe(scrapedData);
+    expect(result?.websiteAnalysis).toBe(websiteAnalysis);
+    expect(result?.opportunities).not.toContain('Website design and development');
+    expect(result?.budgetEstimate?.reasons).toContain('Multiple contact channels active');
+
+    const displayedForSave = filterAndSortResults(
+      result ? [result] : [],
+      { ...noFilters, hasSocial: true, minBudget: 1_500 },
+      'fit'
+    );
+    expect(displayedForSave).toEqual([result]);
+    expect(displayedForSave[0]).toMatchObject({
+      contactPoints: 4,
+      leadScore: 5,
+      fitScore: 3,
+      budgetEstimate: { points: 43 },
+    });
   });
 });
 

@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import type { BusinessSearchResult, IndustryType } from '@/types';
+import { industryTypeSchema } from '@/lib/validations';
+import { persistedBusinessSearchResultSchema } from './business-search-result-contract';
 import {
   zoneAmenitiesSchema,
   zoneBboxSchema,
@@ -58,8 +60,8 @@ export interface PersistedSearchPayload extends SearchSnapshot {
 const persistedSearchBaseSchema = z
   .object({
     version: z.number().int().optional(),
-    results: z.array(z.unknown()),
-    industry: z.string(),
+    results: z.array(persistedBusinessSearchResultSchema),
+    industry: industryTypeSchema,
     city: z.string(),
     country: z.string(),
     timestamp: z.number(),
@@ -94,20 +96,20 @@ function migratePersistedSearchPayload(value: unknown): PersistedSearchPayload |
     Object.prototype.hasOwnProperty.call(base.data, key)
   );
   if (!hasZoneAnalysis) {
-    return { ...base.data, version: SEARCH_SNAPSHOT_VERSION } as PersistedSearchPayload;
+    return { ...base.data, version: SEARCH_SNAPSHOT_VERSION };
   }
 
   const zoneAnalysis = zoneAnalysisSchema.safeParse(base.data);
   if (zoneAnalysis.success) {
-    return { ...zoneAnalysis.data, version: SEARCH_SNAPSHOT_VERSION } as PersistedSearchPayload;
+    return { ...base.data, ...zoneAnalysis.data, version: SEARCH_SNAPSHOT_VERSION };
   }
 
-  const migrated: Record<string, unknown> = {
+  const migrated: PersistedSearchPayload & Record<string, unknown> = {
     ...base.data,
     version: SEARCH_SNAPSHOT_VERSION,
   };
   for (const key of ZONE_ANALYSIS_KEYS) delete migrated[key];
-  return migrated as unknown as PersistedSearchPayload;
+  return migrated;
 }
 
 /** Parses and migrates durable search data before it reaches result-view hydration. */

@@ -29,10 +29,24 @@ function deferred<T>() {
 }
 
 describe('website scrape batch policy', () => {
-  test.each([
-    ['empty', []],
-    ['social-only', ['', 'https://facebook.com/acme', 'https://x.com/acme']],
-  ])('%s input skips cache, scraper, and persistence collaborators', async (_label, urls) => {
+  test('all social platforms and preserved substring edge cases skip batch collaborators', async () => {
+    const urls = [
+      '',
+      'https://facebook.com/acme',
+      'https://fb.com/acme',
+      'https://instagram.com/acme',
+      'https://twitter.com/acme',
+      'https://x.com/acme',
+      'https://tiktok.com/acme',
+      'https://linkedin.com/acme',
+      'https://youtube.com/acme',
+      'HTTPS://FACEBOOK.COM/Acme',
+      'instagram.com/acme',
+      '://facebook.com/%zz',
+      'https://business.facebook.com/acme',
+      'https://notfacebook.com/acme',
+      'https://example.com/?next=facebook.com/acme',
+    ];
     const dependencies = createDependencies();
 
     await expect(scrapeWebsitesBatch(urls, 2, dependencies)).resolves.toEqual(new Map());
@@ -40,6 +54,16 @@ describe('website scrape batch policy', () => {
     expect(dependencies.getCachedMany).not.toHaveBeenCalled();
     expect(dependencies.scrapeWebsite).not.toHaveBeenCalled();
     expect(dependencies.putCached).not.toHaveBeenCalled();
+  });
+
+  test('ordinary and malformed non-social values remain eligible for scraping', async () => {
+    const urls = ['https://example.com/acme', 'not a valid URL'];
+    const dependencies = createDependencies();
+
+    await scrapeWebsitesBatch(urls, 2, dependencies);
+
+    expect(dependencies.getCachedMany).toHaveBeenCalledWith('scrape', urls);
+    expect(dependencies.scrapeWebsite).toHaveBeenCalledTimes(urls.length);
   });
 
   test('cache hits keep their original keys and skip scraping and writes', async () => {

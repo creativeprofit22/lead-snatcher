@@ -5,8 +5,9 @@
 
 import type { FreshScrapedWebsiteData, ScrapedWebsiteData } from '@/types/scraper';
 import { fetchPublicHttpUrl, type PublicFetchDependencies } from './public-url';
-import { isSocialMediaUrl, runScraperBatch, type ScraperBatchDependencies } from './scraper-batch';
+import { runScraperBatch, type ScraperBatchDependencies } from './scraper-batch';
 import { extractWebsiteData } from './scraper-extract';
+import { isSocialProfileUrl } from './social-profile-url';
 import { getCachedMany, putCached } from './url-cache';
 
 export type {
@@ -88,7 +89,7 @@ export async function scrapeWebsite(
   const result = createInitialScrapeResult(websiteUrl);
 
   // Skip social media URLs
-  if (isSocialMediaUrl(websiteUrl)) {
+  if (isSocialProfileUrl(websiteUrl)) {
     result.error = 'Social media URL - skipped';
     return result;
   }

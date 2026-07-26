@@ -1,7 +1,11 @@
+import type { BudgetEstimate } from '@/lib/business/budget-contract';
+import type { ZoneBbox, ZoneLevel } from '@/lib/business/zone-contract';
+import type { ScoreBreakdown } from '@/lib/business/score-breakdown-contract';
 import type { LeadStatus } from '@/lib/lead-status';
-import type { ZoneBbox } from '@/lib/business/zone-contract';
 import type { ScrapedWebsiteData } from './scraper';
 
+export type { BudgetEstimate } from '@/lib/business/budget-contract';
+export type { ScoreBreakdown } from '@/lib/business/score-breakdown-contract';
 export type { LeadStatus } from '@/lib/lead-status';
 
 // Industry types for business categorization
@@ -15,61 +19,6 @@ export type IndustryType =
   | 'real_estate'
   | 'professional_services'
   | 'other';
-
-// Score breakdown for transparency - Layer-based scoring system
-export interface ScoreBreakdown {
-  // Layer 1: Basic Presence (max 25 pts)
-  noWebsite: number; // +20 if no website
-  socialOnlyWebsite: number; // +15 if only social media
-  noPhone: number; // +5 if no phone
-
-  // Layer 2: Google Profile Quality (max 20 pts)
-  fewPhotos: number; // +8 if <5 photos
-  lowReviews: number; // +7 if <20 reviews, +4 if 20-100
-  hiddenGem: number; // +5 if high rating but low reviews
-
-  // Layer 3: Website Technical (max 25 pts) - from PageSpeed/Scraping
-  poorPerformance: number; // +10 if Lighthouse score <50
-  notMobileFriendly: number; // +10 if fails mobile test
-  noHttps: number; // +5 if no HTTPS
-
-  // Layer 4: Website Opportunities (max 30 pts) - from Scraping
-  outdatedWebsite: number; // +10 if copyright year > 3 years old
-  noOnlineBooking: number; // +8 if no booking system (for service businesses)
-  noSocialLinks: number; // +5 if no social media links on site
-  basicTechStack: number; // +7 if using old/basic tech (plain HTML, old WordPress)
-
-  // Layer 5: Website Quality (HTML + PageSpeed deep signals)
-  noViewport: number; // +10 no <meta viewport>
-  tableLayout: number; // +8 table-based layout
-  thinContent: number; // +6 body word count <150
-  deprecatedTags: number; // +6 <marquee>/<center>/<font>/bgcolor/inline HTML styling
-  templateFingerprint: number; // +7 wix/godaddysites/weebly/business.site/jimdo
-  noForm: number; // +5 no <form> anywhere
-  fixedPixelWidth: number; // +4 fixed pixel widths on layout
-  outdatedJquery: number; // +4 jQuery <2
-  noSchemaOrg: number; // +4 no JSON-LD structured data
-  noOpenGraph: number; // +3 no og: tags
-  noLangAttribute: number; // +2 <html> missing lang
-  lowAccessibility: number; // +6 Lighthouse accessibility <70
-  lowSeo: number; // +6 Lighthouse SEO <70
-  lowBestPractices: number; // +4 Lighthouse best-practices <80
-  slowLcp: number; // +5 LCP > 4s
-  highCls: number; // +3 CLS > 0.25
-
-  // Human-readable chips for the top triggered Layer 5 signals
-  qualityChips: string[];
-
-  // Marketing Intelligence (not scored - informational)
-  hasMarketingBudget: boolean; // true if business runs paid ads
-  marketingPlatforms: string[]; // detected platforms list
-
-  // Revenue Signal (not scored - informational)
-  revenueSignal: 'high' | 'medium' | 'low'; // based on review count
-  revenueLabel: string; // human-readable label
-
-  total: number;
-}
 
 // Website analysis result from PageSpeed API
 export interface WebsiteAnalysis {
@@ -137,15 +86,8 @@ export interface BusinessSearchResult {
   contactPoints: number; // Total contact channels (phone, email, website, socials)
   /** Google-style price tier, 0-4 (0=free, 1=$, 2=$$, 3=$$$, 4=$$$$). Undefined when Maps provider didn't return it. */
   priceLevel?: number;
-  budgetEstimate?: {
-    min: number; // e.g. 1000
-    max: number; // e.g. 3000
-    label: string; // e.g. "$1K - $3K"
-    confidence: 'high' | 'medium' | 'low';
-    reasons: string[]; // why we think this
-    points: number; // raw 0-100 score
-  };
-  areaLevel?: string; // premium, commercial, moderate, developing
+  budgetEstimate?: BudgetEstimate;
+  areaLevel?: ZoneLevel;
   leadScore: number;
   /** Combined need × capacity score 0-100 — used for "Best Fit" sort */
   fitScore?: number;

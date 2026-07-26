@@ -1,4 +1,9 @@
 import { z } from 'zod';
+import {
+  LEAD_SCORE_MAX,
+  LEAD_SCORE_MIN,
+  scoreBreakdownSchema,
+} from '@/lib/business/score-breakdown-contract';
 import { DEFAULT_COUNTRY_CODE } from '@/lib/constants';
 import { LEAD_STATUS_VALUES } from '@/lib/lead-status';
 
@@ -94,10 +99,8 @@ export const createLeadSchema = z.object({
   industryType: industryTypeSchema.default('other'),
   photoUrl: z.string().max(2000).nullish(),
   mapsUrl: z.string().max(2000).nullish(),
-  leadScore: z.number().int().min(0).max(100).default(0),
-  scoreBreakdown: z
-    .record(z.string(), z.union([z.number(), z.boolean(), z.string(), z.array(z.string())]))
-    .nullish(),
+  leadScore: z.number().int().min(LEAD_SCORE_MIN).max(LEAD_SCORE_MAX).default(0),
+  scoreBreakdown: scoreBreakdownSchema.nullish(),
   opportunities: z.array(z.string()).nullish(),
   /** Optional: pre-scraped Popular Times data from search-time enrichment. */
   popularTimesData: z.string().max(50_000).nullish(),
