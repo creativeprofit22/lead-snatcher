@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { Prisma } from '@/generated/prisma/client';
 
 const { getCurrentUserId, findTag, updateTag, deleteTag } = vi.hoisted(() => ({
   getCurrentUserId: vi.fn(),
@@ -26,6 +27,14 @@ const storedTag = {
   createdAt,
 };
 const updatedTag = { ...storedTag, color: '#ef4444', _count: { leads: 2 } };
+
+function uniqueTagNameError() {
+  return new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+    code: 'P2002',
+    clientVersion: Prisma.prismaVersion.client,
+    meta: { modelName: 'Tag', target: ['userId', 'name'] },
+  });
+}
 
 function patch(body: BodyInit) {
   return PATCH(
@@ -96,6 +105,25 @@ describe('PATCH /api/tags/[id]', () => {
     });
   });
 
+  test('returns 409 when the unique tag-name update loses a race', async () => {
+    updateTag.mockRejectedValue(uniqueTagNameError());
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const response = await patch(JSON.stringify({ name: 'Follow up' }));
+
+    expect(response.status).toBe(409);
+    expect(findTag).toHaveBeenCalledTimes(1);
+    expect(findTag).toHaveBeenCalledWith({ where: { id: 'tag-1', userId: 'user-1' } });
+    expect(updateTag).toHaveBeenCalledWith({
+      where: { id: 'tag-1' },
+      data: { name: 'Follow up' },
+      include: { _count: { select: { leads: true } } },
+    });
+    await expect(response.json()).resolves.toEqual({
+      error: 'A tag with this name already exists',
+    });
+  });
+
   test.each(['foreign', 'nonexistent'])('returns the same 404 for a %s tag ID', async () => {
     findTag.mockResolvedValue(null);
 
@@ -107,7 +135,7 @@ describe('PATCH /api/tags/[id]', () => {
   });
 
   test('returns only the fallback message for unexpected database errors', async () => {
-    findTag.mockRejectedValue(new Error('SQLite connection details'));
+    updateTag.mockRejectedValue(new Error('SQLite connection details'));
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     const response = await patch(JSON.stringify({ color: '#ef4444' }));

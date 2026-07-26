@@ -17,10 +17,10 @@ import {
   BulkActions,
 } from '@/components/crm';
 import type { TabValue, ViewMode } from '@/components/crm';
-import type { TagMutationResult } from '@/components/crm/TagManager';
 import { LeadDetailModal } from '@/components/leads';
 import { patchLeadEditableFields } from '@/components/leads/LeadDetailModal.client';
 import { TaskSlideOver } from '@/components/tasks';
+import type { CrmTagMutation } from '@/lib/crm-tags-client';
 import { useCrmTags } from '@/lib/hooks/useCrmTags';
 import { useCrmLeadsController } from '@/lib/hooks/useCrmLeadsController';
 import { CrmTasksProvider } from '@/lib/hooks/useCrmTasks';
@@ -231,7 +231,7 @@ function CRMPageContent() {
   }, [fetchLeads, fetchStats, tagCatalog]);
 
   const handleTagMutation = useCallback(
-    async (mutation: TagMutationResult) => {
+    async (mutation: CrmTagMutation) => {
       const nextFilters =
         mutation.type === 'deleted' && filters.tags.includes(mutation.tagId)
           ? { ...filters, tags: filters.tags.filter((tagId) => tagId !== mutation.tagId) }

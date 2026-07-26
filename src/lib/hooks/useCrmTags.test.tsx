@@ -18,6 +18,17 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+
+  return { promise, resolve, reject };
+}
+
 afterEach(() => cleanup());
 
 describe('CRM tags resource', () => {
@@ -78,5 +89,81 @@ describe('CRM tags resource', () => {
 
     expect(result.current).toMatchObject({ tags: [catalogTag], loading: false, error: null });
     expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  test('keeps a newer success when an older request resolves afterward', async () => {
+    const initialRequest = deferred<Response>();
+    const newerRequest = deferred<Response>();
+    const newerTag = { ...catalogTag, leadCount: 2 };
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockReturnValueOnce(initialRequest.promise)
+      .mockReturnValueOnce(newerRequest.promise);
+    const { result } = renderHook(() => useCrmTags(fetcher));
+
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+    let newerRefetch!: Promise<void>;
+    act(() => {
+      newerRefetch = result.current.refetch();
+    });
+    expect(result.current.loading).toBe(true);
+
+    await act(async () => {
+      newerRequest.resolve(jsonResponse({ tags: [newerTag] }));
+      await newerRefetch;
+    });
+    expect(result.current).toMatchObject({ tags: [newerTag], loading: false, error: null });
+
+    await act(async () => {
+      initialRequest.resolve(jsonResponse({ tags: [catalogTag] }));
+      await initialRequest.promise;
+    });
+    expect(result.current).toMatchObject({ tags: [newerTag], loading: false, error: null });
+  });
+
+  test('ignores an older request failure after a newer success', async () => {
+    const initialRequest = deferred<Response>();
+    const newerRequest = deferred<Response>();
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockReturnValueOnce(initialRequest.promise)
+      .mockReturnValueOnce(newerRequest.promise);
+    const { result } = renderHook(() => useCrmTags(fetcher));
+
+    await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(1));
+    let newerRefetch!: Promise<void>;
+    act(() => {
+      newerRefetch = result.current.refetch();
+    });
+
+    await act(async () => {
+      newerRequest.resolve(jsonResponse({ tags: [catalogTag] }));
+      await newerRefetch;
+    });
+    expect(result.current).toMatchObject({ tags: [catalogTag], loading: false, error: null });
+
+    await act(async () => {
+      initialRequest.reject(new Error('Stale request failed'));
+      await expect(initialRequest.promise).rejects.toThrow('Stale request failed');
+    });
+    expect(result.current).toMatchObject({ tags: [catalogTag], loading: false, error: null });
+  });
+
+  test('exposes a current response error and clears it after a successful retry', async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({}))
+      .mockResolvedValueOnce(jsonResponse({ tags: [catalogTag] }));
+    const { result } = renderHook(() => useCrmTags(fetcher));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.tags).toEqual([]);
+    expect(result.current.error).toEqual(
+      new CrmTagsResponseError('CRM tags response is malformed')
+    );
+
+    await act(async () => result.current.refetch());
+
+    expect(result.current).toMatchObject({ tags: [catalogTag], loading: false, error: null });
   });
 });

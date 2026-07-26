@@ -45,25 +45,19 @@ export async function POST(request: Request, { params }: RouteParams) {
       return NextResponse.json({ error: 'Tag not found' }, { status: 404 });
     }
 
-    // Check if already connected
-    const existingLink = await prisma.leadTag.findUnique({
+    await prisma.leadTag.upsert({
       where: {
         leadId_tagId: {
           leadId,
           tagId,
         },
       },
+      create: {
+        leadId,
+        tagId,
+      },
+      update: {},
     });
-
-    if (!existingLink) {
-      // Create the link
-      await prisma.leadTag.create({
-        data: {
-          leadId,
-          tagId,
-        },
-      });
-    }
 
     // Get updated tags
     const leadTags = await prisma.leadTag.findMany({

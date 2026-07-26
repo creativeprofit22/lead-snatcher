@@ -3,12 +3,20 @@
 import { useState } from 'react';
 import { Plus, X, Pencil, Trash2, Check } from 'lucide-react';
 import { toast } from 'sonner';
+import {
+  createCrmTag,
+  CrmTagMutationError,
+  deleteCrmTag,
+  updateCrmTag,
+  type CrmTagMutation,
+} from '@/lib/crm-tags-client';
 import type { CrmTagsResource } from '@/lib/hooks/useCrmTags';
 import type { TagWithCount } from '@/types';
 
 // Predefined colors for quick selection
+const DEFAULT_TAG_COLOR = '#3b82f6';
 const TAG_COLORS = [
-  '#3b82f6', // Blue
+  DEFAULT_TAG_COLOR, // Blue
   '#22c55e', // Green
   '#f97316', // Orange
   '#ec4899', // Pink
@@ -19,16 +27,11 @@ const TAG_COLORS = [
   '#6b7280', // Gray
 ];
 
-export type TagMutationResult =
-  | { type: 'created'; tag: TagWithCount }
-  | { type: 'updated'; tag: TagWithCount }
-  | { type: 'deleted'; tagId: string };
-
 interface TagManagerProps {
   isOpen: boolean;
   onClose: () => void;
   tagCatalog: CrmTagsResource;
-  onMutation: (mutation: TagMutationResult) => Promise<void>;
+  onMutation: (mutation: CrmTagMutation) => Promise<void>;
 }
 
 export function TagManager({ isOpen, onClose, tagCatalog, onMutation }: TagManagerProps) {
@@ -39,9 +42,14 @@ export function TagManager({ isOpen, onClose, tagCatalog, onMutation }: TagManag
 
   // Form state
   const [newName, setNewName] = useState('');
-  const [newColor, setNewColor] = useState(TAG_COLORS[0]);
+  const [newColor, setNewColor] = useState(DEFAULT_TAG_COLOR);
   const [editName, setEditName] = useState('');
   const [editColor, setEditColor] = useState('');
+
+  const mutationErrorMessage = (caughtError: unknown, fallback: string) =>
+    caughtError instanceof CrmTagMutationError && caughtError.serverMessage
+      ? caughtError.serverMessage
+      : fallback;
 
   // Create tag
   const handleCreate = async () => {
@@ -52,25 +60,14 @@ export function TagManager({ isOpen, onClose, tagCatalog, onMutation }: TagManag
 
     setIsMutating(true);
     try {
-      const response = await fetch('/api/tags', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newName.trim(), color: newColor }),
-      });
-
-      if (response.ok) {
-        const data = (await response.json()) as { tag: TagWithCount };
-        setNewName('');
-        setNewColor(TAG_COLORS[0]);
-        setIsCreating(false);
-        await onMutation({ type: 'created', tag: data.tag });
-        toast.success('Tag created');
-      } else {
-        const mutationError = await response.json();
-        toast.error(mutationError.error || 'Failed to create tag');
-      }
-    } catch {
-      toast.error('Failed to create tag');
+      await createCrmTag({ name: newName.trim(), color: newColor });
+      setNewName('');
+      setNewColor(DEFAULT_TAG_COLOR);
+      setIsCreating(false);
+      await onMutation({ type: 'created' });
+      toast.success('Tag created');
+    } catch (caughtError) {
+      toast.error(mutationErrorMessage(caughtError, 'Failed to create tag'));
     } finally {
       setIsMutating(false);
     }
@@ -85,23 +82,12 @@ export function TagManager({ isOpen, onClose, tagCatalog, onMutation }: TagManag
 
     setIsMutating(true);
     try {
-      const response = await fetch(`/api/tags/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: editName.trim(), color: editColor }),
-      });
-
-      if (response.ok) {
-        const data = (await response.json()) as { tag: TagWithCount };
-        setEditingId(null);
-        await onMutation({ type: 'updated', tag: data.tag });
-        toast.success('Tag updated');
-      } else {
-        const mutationError = await response.json();
-        toast.error(mutationError.error || 'Failed to update tag');
-      }
-    } catch {
-      toast.error('Failed to update tag');
+      await updateCrmTag(id, { name: editName.trim(), color: editColor });
+      setEditingId(null);
+      await onMutation({ type: 'updated' });
+      toast.success('Tag updated');
+    } catch (caughtError) {
+      toast.error(mutationErrorMessage(caughtError, 'Failed to update tag'));
     } finally {
       setIsMutating(false);
     }
@@ -118,18 +104,11 @@ export function TagManager({ isOpen, onClose, tagCatalog, onMutation }: TagManag
 
     setIsMutating(true);
     try {
-      const response = await fetch(`/api/tags/${id}`, {
-        method: 'DELETE',
-      });
-
-      if (response.ok) {
-        await onMutation({ type: 'deleted', tagId: id });
-        toast.success('Tag deleted');
-      } else {
-        toast.error('Failed to delete tag');
-      }
-    } catch {
-      toast.error('Failed to delete tag');
+      await deleteCrmTag(id);
+      await onMutation({ type: 'deleted', tagId: id });
+      toast.success('Tag deleted');
+    } catch (caughtError) {
+      toast.error(mutationErrorMessage(caughtError, 'Failed to delete tag'));
     } finally {
       setIsMutating(false);
     }

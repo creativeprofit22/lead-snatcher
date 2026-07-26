@@ -1,6 +1,11 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
-import { parseRouteBody, requireRouteUserId, routeErrorResponse } from '@/lib/route-utils';
+import {
+  isPrismaKnownRequestError,
+  parseRouteBody,
+  requireRouteUserId,
+  routeErrorResponse,
+} from '@/lib/route-utils';
 import { createTagSchema } from '@/lib/validations';
 import type { TagsResponse } from '@/types';
 
@@ -41,20 +46,6 @@ export async function POST(request: Request) {
     const userId = await requireRouteUserId();
     const { name, color } = await parseRouteBody(request, createTagSchema);
 
-    // Check if tag with same name exists
-    const existing = await prisma.tag.findUnique({
-      where: {
-        userId_name: {
-          userId,
-          name,
-        },
-      },
-    });
-
-    if (existing) {
-      return NextResponse.json({ error: 'A tag with this name already exists' }, { status: 409 });
-    }
-
     const tag = await prisma.tag.create({
       data: {
         userId,
@@ -74,6 +65,10 @@ export async function POST(request: Request) {
       message: 'Tag created successfully',
     });
   } catch (error) {
+    if (isPrismaKnownRequestError(error, 'P2002')) {
+      return NextResponse.json({ error: 'A tag with this name already exists' }, { status: 409 });
+    }
+
     console.error('Create tag error:', error);
     return routeErrorResponse(error, 'Failed to create tag');
   }

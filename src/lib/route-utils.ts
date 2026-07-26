@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { ZodError, type ZodType } from 'zod';
+import { Prisma } from '@/generated/prisma/client';
 import { getCurrentUserId } from '@/lib/auth-utils';
 import { prisma } from '@/lib/db';
 
@@ -66,6 +67,13 @@ export function parseRouteQuery<T>(
     }
     throw error;
   }
+}
+
+export function isPrismaKnownRequestError<TCode extends string>(
+  error: unknown,
+  code: TCode
+): error is Prisma.PrismaClientKnownRequestError & { code: TCode } {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === code;
 }
 
 export function routeErrorResponse(error: unknown, fallbackMessage: string): NextResponse {

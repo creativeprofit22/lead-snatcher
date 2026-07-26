@@ -1,7 +1,12 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { updateTagSchema } from '@/lib/validations';
-import { parseRouteBody, requireRouteUserId, routeErrorResponse } from '@/lib/route-utils';
+import {
+  isPrismaKnownRequestError,
+  parseRouteBody,
+  requireRouteUserId,
+  routeErrorResponse,
+} from '@/lib/route-utils';
 
 interface RouteParams {
   params: Promise<{ id: string }>;
@@ -26,19 +31,6 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     const updateData: { name?: string; color?: string } = {};
 
     if (name !== undefined) {
-      // Check if another tag has this name
-      const existing = await prisma.tag.findFirst({
-        where: {
-          userId,
-          name,
-          id: { not: id },
-        },
-      });
-
-      if (existing) {
-        return NextResponse.json({ error: 'A tag with this name already exists' }, { status: 409 });
-      }
-
       updateData.name = name;
     }
 
@@ -66,6 +58,10 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       },
     });
   } catch (error) {
+    if (isPrismaKnownRequestError(error, 'P2002')) {
+      return NextResponse.json({ error: 'A tag with this name already exists' }, { status: 409 });
+    }
+
     console.error('Update tag error:', error);
     return routeErrorResponse(error, 'Failed to update tag');
   }

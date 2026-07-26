@@ -1,15 +1,24 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-const { getCurrentUserId, findLead, findTag, findLink, createLink, findLinks, deleteLinks } =
-  vi.hoisted(() => ({
-    getCurrentUserId: vi.fn(),
-    findLead: vi.fn(),
-    findTag: vi.fn(),
-    findLink: vi.fn(),
-    createLink: vi.fn(),
-    findLinks: vi.fn(),
-    deleteLinks: vi.fn(),
-  }));
+const {
+  getCurrentUserId,
+  findLead,
+  findTag,
+  findLink,
+  createLink,
+  upsertLink,
+  findLinks,
+  deleteLinks,
+} = vi.hoisted(() => ({
+  getCurrentUserId: vi.fn(),
+  findLead: vi.fn(),
+  findTag: vi.fn(),
+  findLink: vi.fn(),
+  createLink: vi.fn(),
+  upsertLink: vi.fn(),
+  findLinks: vi.fn(),
+  deleteLinks: vi.fn(),
+}));
 
 vi.mock('@/lib/auth-utils', () => ({ getCurrentUserId }));
 vi.mock('@/lib/db', () => ({
@@ -19,6 +28,7 @@ vi.mock('@/lib/db', () => ({
     leadTag: {
       findUnique: findLink,
       create: createLink,
+      upsert: upsertLink,
       findMany: findLinks,
       deleteMany: deleteLinks,
     },
@@ -62,6 +72,7 @@ beforeEach(() => {
   findTag.mockResolvedValue(tag);
   findLink.mockResolvedValue(null);
   createLink.mockResolvedValue({ leadId: 'lead-1', tagId: 'tag-1' });
+  upsertLink.mockResolvedValue({ id: 'link-1', leadId: 'lead-1', tagId: 'tag-1' });
   findLinks.mockResolvedValue([{ tag }]);
   deleteLinks.mockResolvedValue({ count: 1 });
 });
@@ -107,9 +118,44 @@ describe('POST /api/leads/[id]/tags', () => {
     expect(response.status).toBe(200);
     expect(findLead).toHaveBeenCalledWith({ where: { id: 'lead-1', userId: 'user-1' } });
     expect(findTag).toHaveBeenCalledWith({ where: { id: 'tag-1', userId: 'user-1' } });
-    expect(createLink).toHaveBeenCalledWith({
-      data: { leadId: 'lead-1', tagId: 'tag-1' },
+    expect(upsertLink).toHaveBeenCalledOnce();
+    expect(upsertLink).toHaveBeenCalledWith({
+      where: { leadId_tagId: { leadId: 'lead-1', tagId: 'tag-1' } },
+      create: { leadId: 'lead-1', tagId: 'tag-1' },
+      update: {},
     });
+    expect(findLink).not.toHaveBeenCalled();
+    expect(createLink).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toEqual({
+      tags: [
+        {
+          id: 'tag-1',
+          name: 'Priority',
+          color: '#3b82f6',
+          createdAt: createdAt.toISOString(),
+        },
+      ],
+    });
+  });
+
+  test('returns the current tags when the equivalent link is already attached', async () => {
+    upsertLink.mockResolvedValue({
+      id: 'existing-link',
+      leadId: 'lead-1',
+      tagId: 'tag-1',
+    });
+
+    const response = await post(JSON.stringify({ tagId: 'tag-1' }));
+
+    expect(response.status).toBe(200);
+    expect(upsertLink).toHaveBeenCalledOnce();
+    expect(upsertLink).toHaveBeenCalledWith({
+      where: { leadId_tagId: { leadId: 'lead-1', tagId: 'tag-1' } },
+      create: { leadId: 'lead-1', tagId: 'tag-1' },
+      update: {},
+    });
+    expect(findLink).not.toHaveBeenCalled();
+    expect(createLink).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toEqual({
       tags: [
         {
@@ -129,7 +175,7 @@ describe('POST /api/leads/[id]/tags', () => {
 
     expect(response.status).toBe(404);
     await expect(response.json()).resolves.toEqual({ error: 'Tag not found' });
-    expect(createLink).not.toHaveBeenCalled();
+    expect(upsertLink).not.toHaveBeenCalled();
   });
 
   test('returns 404 for a foreign or missing lead before looking up the tag', async () => {

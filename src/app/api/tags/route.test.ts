@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { Prisma } from '@/generated/prisma/client';
 
 const { getCurrentUserId, findTags, findTag, createTag } = vi.hoisted(() => ({
   getCurrentUserId: vi.fn(),
@@ -24,6 +25,14 @@ const storedTag = {
   color: '#3b82f6',
   createdAt,
 };
+
+function uniqueTagNameError() {
+  return new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+    code: 'P2002',
+    clientVersion: Prisma.prismaVersion.client,
+    meta: { modelName: 'Tag', target: ['userId', 'name'] },
+  });
+}
 
 function post(body: BodyInit) {
   return POST(
@@ -75,6 +84,7 @@ describe('/api/tags', () => {
     expect(createTag).toHaveBeenCalledWith({
       data: { userId: 'user-1', name: 'Priority', color: '#3b82f6' },
     });
+    expect(findTag).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toEqual({
       tag: {
         id: 'tag-1',
@@ -87,23 +97,24 @@ describe('/api/tags', () => {
     });
   });
 
-  test('returns 409 when the normalized name duplicates an existing tag', async () => {
-    findTag.mockResolvedValue({ id: 'tag-1' });
+  test('returns 409 when the unique tag-name write loses a race', async () => {
+    createTag.mockRejectedValue(uniqueTagNameError());
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     const response = await post(JSON.stringify({ name: '  Priority  ', color: '#3b82f6' }));
 
     expect(response.status).toBe(409);
-    expect(findTag).toHaveBeenCalledWith({
-      where: { userId_name: { userId: 'user-1', name: 'Priority' } },
+    expect(findTag).not.toHaveBeenCalled();
+    expect(createTag).toHaveBeenCalledWith({
+      data: { userId: 'user-1', name: 'Priority', color: '#3b82f6' },
     });
-    expect(createTag).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toEqual({
       error: 'A tag with this name already exists',
     });
   });
 
   test('returns only the fallback message for unexpected database errors', async () => {
-    findTag.mockRejectedValue(new Error('SQLite connection details'));
+    createTag.mockRejectedValue(new Error('SQLite connection details'));
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     const response = await post(JSON.stringify({ name: 'Priority', color: '#3b82f6' }));
