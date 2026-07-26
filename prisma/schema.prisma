@@ -47,10 +47,10 @@ model UrlAnalysisCache {
   @@index([expiresAt])
 }
 
-// Per-user "resume your last search" snapshot. One row per user — a
-// new search overwrites the existing row. Cleared when the user
-// dismisses the resume card. Payload holds the durable SearchSnapshot
-// (results, zones, density, etc.) as serialized JSON.
+// Per-user "resume your last search" snapshot. One row per user; a
+// newer search replaces the existing row. Dismissing the resume card
+// only hides that snapshot in the current browser tab. Payload holds the
+// durable SearchSnapshot (results, zones, density, etc.) as serialized JSON.
 model LastSearchSession {
   id        String   @id @default(cuid())
   userId    String   @unique

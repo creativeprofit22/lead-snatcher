@@ -22,6 +22,7 @@ export interface SearchResultSnapshot {
   zoneBbox: ZoneBbox | null;
   singleZone: boolean;
   focusedZoneId: string | null;
+  queryIdentity: Pick<SearchSnapshot, 'businessType' | 'industry' | 'city' | 'country'> | null;
 }
 
 export interface SearchBannerError {
@@ -62,8 +63,14 @@ interface ControllerState {
   searchBannerError: SearchBannerError | null;
 }
 
+export type SearchSessionReplacementKind = 'loaded' | 'new-search';
+
 type ControllerAction =
-  | { type: 'hydrate'; snapshot: SearchResultSnapshot }
+  | {
+      type: 'replace-session';
+      snapshot: SearchResultSnapshot;
+      kind: SearchSessionReplacementKind;
+    }
   | { type: 'initial-started' }
   | { type: 'initial-succeeded'; result: AppliedBusinessSearch }
   | { type: 'initial-failed'; error: BusinessSearchError }
@@ -83,6 +90,7 @@ export const EMPTY_SEARCH_RESULT_SNAPSHOT: SearchResultSnapshot = {
   zoneBbox: null,
   singleZone: false,
   focusedZoneId: null,
+  queryIdentity: null,
 };
 
 const INITIAL_STATE: ControllerState = {
@@ -103,6 +111,12 @@ function snapshotFromStoredSearch(snapshot: SearchSnapshot): SearchResultSnapsho
     zoneBbox: snapshot.zoneBbox ?? null,
     singleZone: snapshot.singleZone ?? false,
     focusedZoneId: snapshot.focusedZoneId ?? null,
+    queryIdentity: {
+      businessType: snapshot.businessType,
+      industry: snapshot.industry,
+      city: snapshot.city,
+      country: snapshot.country,
+    },
   };
 }
 
@@ -115,13 +129,27 @@ function snapshotFromSearchResult(result: AppliedBusinessSearch): SearchResultSn
     zoneBbox: result.zoneBbox,
     singleZone: result.singleZone,
     focusedZoneId: result.focusedZoneId,
+    queryIdentity: {
+      businessType: result.cachePayload.businessType,
+      industry: result.cachePayload.industry,
+      city: result.cachePayload.city,
+      country: result.cachePayload.country,
+    },
   };
 }
 
 function controllerReducer(state: ControllerState, action: ControllerAction): ControllerState {
   switch (action.type) {
-    case 'hydrate':
-      return { ...state, viewMode: 'results', snapshot: action.snapshot };
+    case 'replace-session':
+      return {
+        ...state,
+        viewMode: action.kind === 'loaded' ? 'results' : 'search',
+        snapshot: action.snapshot,
+        isSearching: false,
+        radarPhase: action.kind === 'new-search' ? 'revealing' : 'off',
+        rescanningZoneId: null,
+        searchBannerError: null,
+      };
     case 'initial-started':
       return {
         ...state,
@@ -164,12 +192,7 @@ function controllerReducer(state: ControllerState, action: ControllerAction): Co
     case 'radar-completed':
       return { ...state, radarPhase: 'off', viewMode: 'results' };
     case 'reset':
-      return {
-        ...state,
-        viewMode: 'search',
-        snapshot: EMPTY_SEARCH_RESULT_SNAPSHOT,
-        rescanningZoneId: null,
-      };
+      return { ...INITIAL_STATE };
     case 'banner-dismissed':
       return { ...state, searchBannerError: null };
   }
@@ -194,17 +217,31 @@ export function useBusinessSearchController({
   const [state, dispatch] = useReducer(controllerReducer, INITIAL_STATE);
   const initialPendingRef = useRef(false);
   const zonePendingRef = useRef(false);
+  const initialRequestRef = useRef(0);
+  const zoneRequestRef = useRef(0);
 
-  const hydrateSnapshot = useCallback((snapshot: SearchSnapshot) => {
-    dispatch({ type: 'hydrate', snapshot: snapshotFromStoredSearch(snapshot) });
-  }, []);
+  const replaceSnapshot = useCallback(
+    (snapshot: SearchSnapshot, kind: SearchSessionReplacementKind = 'loaded') => {
+      initialRequestRef.current += 1;
+      zoneRequestRef.current += 1;
+      initialPendingRef.current = false;
+      zonePendingRef.current = false;
+      dispatch({ type: 'replace-session', snapshot: snapshotFromStoredSearch(snapshot), kind });
+    },
+    []
+  );
 
   const runInitialSearch = useCallback(
-    async (persistSearch: PersistSearch): Promise<void> => {
+    async (
+      persistSearch: PersistSearch,
+      replaceCommittedSession?: (snapshot: SearchSnapshot) => void
+    ): Promise<void> => {
       const businessType = query.businessType?.trim();
       const city = query.city.trim();
       if (!businessType || !city || initialPendingRef.current) return;
 
+      const requestId = initialRequestRef.current + 1;
+      initialRequestRef.current = requestId;
       initialPendingRef.current = true;
       dispatch({ type: 'initial-started' });
       try {
@@ -216,10 +253,19 @@ export function useBusinessSearchController({
           deepAnalysis: query.deepAnalysis,
           mode: { kind: 'initial' },
         });
-        dispatch({ type: 'initial-succeeded', result });
-        if (result.shouldPersist) persistSearch(result.cachePayload);
-        notify(result.notification);
+        if (initialRequestRef.current !== requestId) return;
+
+        if (result.shouldPersist && replaceCommittedSession) {
+          persistSearch(result.cachePayload);
+          notify(result.notification);
+          replaceCommittedSession(result.cachePayload);
+        } else {
+          dispatch({ type: 'initial-succeeded', result });
+          if (result.shouldPersist) persistSearch(result.cachePayload);
+          notify(result.notification);
+        }
       } catch (error) {
+        if (initialRequestRef.current !== requestId) return;
         const searchError = normalizeInitialError(error);
         notify({
           type: 'error',
@@ -228,8 +274,10 @@ export function useBusinessSearchController({
         });
         dispatch({ type: 'initial-failed', error: searchError });
       } finally {
-        initialPendingRef.current = false;
-        dispatch({ type: 'initial-settled' });
+        if (initialRequestRef.current === requestId) {
+          initialPendingRef.current = false;
+          dispatch({ type: 'initial-settled' });
+        }
       }
     },
     [notify, query, runSearch]
@@ -237,19 +285,22 @@ export function useBusinessSearchController({
 
   const rescanZone = useCallback(
     async (zone: Zone, persistSearch: PersistSearch): Promise<void> => {
-      const businessType = query.businessType?.trim();
+      const identity = state.snapshot.queryIdentity;
+      const businessType = identity?.businessType ?? query.businessType?.trim();
       if (!businessType || zonePendingRef.current || state.snapshot.focusedZoneId === zone.id) {
         return;
       }
 
+      const requestId = zoneRequestRef.current + 1;
+      zoneRequestRef.current = requestId;
       zonePendingRef.current = true;
       dispatch({ type: 'zone-started', zoneId: zone.id });
       try {
         const result = await runSearch({
           businessType,
-          cacheIndustry: query.cacheIndustry,
-          city: query.city.trim(),
-          country: query.country,
+          cacheIndustry: identity?.industry ?? query.cacheIndustry,
+          city: identity?.city ?? query.city.trim(),
+          country: identity?.country ?? query.country,
           deepAnalysis: query.deepAnalysis,
           mode: {
             kind: 'zone',
@@ -259,24 +310,34 @@ export function useBusinessSearchController({
             currentSingleZone: state.snapshot.singleZone,
           },
         });
+        if (zoneRequestRef.current !== requestId) return;
         dispatch({ type: 'zone-succeeded', result });
         if (result.shouldPersist) persistSearch(result.cachePayload);
         notify(result.notification);
       } catch (error) {
+        if (zoneRequestRef.current !== requestId) return;
         notify({
           type: 'error',
           message: error instanceof BusinessSearchError ? error.message : 'Zone rescan failed',
         });
       } finally {
-        zonePendingRef.current = false;
-        dispatch({ type: 'zone-settled' });
+        if (zoneRequestRef.current === requestId) {
+          zonePendingRef.current = false;
+          dispatch({ type: 'zone-settled' });
+        }
       }
     },
     [notify, query, runSearch, state.snapshot]
   );
 
   const completeRadar = useCallback(() => dispatch({ type: 'radar-completed' }), []);
-  const resetSearch = useCallback(() => dispatch({ type: 'reset' }), []);
+  const resetSearch = useCallback(() => {
+    initialRequestRef.current += 1;
+    zoneRequestRef.current += 1;
+    initialPendingRef.current = false;
+    zonePendingRef.current = false;
+    dispatch({ type: 'reset' });
+  }, []);
   const dismissSearchBanner = useCallback(() => dispatch({ type: 'banner-dismissed' }), []);
 
   return {
@@ -288,7 +349,7 @@ export function useBusinessSearchController({
     radarPhase: state.radarPhase,
     rescanningZoneId: state.rescanningZoneId,
     searchBannerError: state.searchBannerError,
-    hydrateSnapshot,
+    replaceSnapshot,
     runInitialSearch,
     rescanZone,
     completeRadar,

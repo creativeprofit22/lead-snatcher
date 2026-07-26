@@ -1,11 +1,10 @@
 'use client';
 
 import { RotateCcw, X, MapPin } from 'lucide-react';
-import type { IndustryType } from '@/types';
-import { INDUSTRY_TYPES } from '@/lib/constants';
+import { getBusinessTypeLabel } from '@/lib/constants';
 
 interface Props {
-  industry: IndustryType;
+  businessType: string;
   city: string;
   resultCount: number;
   updatedAt: string; // ISO string from the API
@@ -15,19 +14,18 @@ interface Props {
 
 /**
  * Small banner shown on the home screen when the user has a persisted
- * last search (stored server-side, survives browser restarts). Only
- * renders when there's something to resume — sits above the search
- * form so it's the first thing they see without taking over the page.
+ * last search. Dismissing hides only this snapshot in the current browser
+ * tab; the durable snapshot remains available in other tabs and devices.
  */
 export function ResumeSearchCard({
-  industry,
+  businessType,
   city,
   resultCount,
   updatedAt,
   onResume,
   onDismiss,
 }: Props) {
-  const industryLabel = INDUSTRY_TYPES.find((t) => t.id === industry)?.label ?? industry;
+  const businessTypeLabel = getBusinessTypeLabel(businessType);
   const timeAgo = formatTimeAgo(updatedAt);
 
   return (
@@ -43,7 +41,7 @@ export function ResumeSearchCard({
 
         <div className="flex-1 min-w-0">
           <div className="text-sm font-medium text-white truncate">
-            Resume: {industryLabel} in {city}
+            Resume: {businessTypeLabel} in {city}
           </div>
           <div className="text-[11px] text-gray-400 flex items-center gap-1.5">
             <MapPin className="w-3 h-3" />
@@ -64,8 +62,8 @@ export function ResumeSearchCard({
         <button
           type="button"
           onClick={onDismiss}
-          aria-label="Dismiss resume card"
-          title="Hide for this browser tab — session stays cached"
+          aria-label="Hide this search for this browser tab"
+          title="Hide this search for this browser tab; it stays available"
           className="inline-flex items-center justify-center w-8 h-8 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition-colors"
         >
           <X className="w-4 h-4" />

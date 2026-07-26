@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState, Suspense } from 'react';
+import { useCallback, useEffect, useRef, useState, Suspense } from 'react';
 import Link from 'next/link';
 import { Settings, Gauge } from 'lucide-react';
 import { toast } from 'sonner';
@@ -19,17 +19,19 @@ import { PreLoader } from '@/components/preloader';
 import { BatchEnrichBar } from '@/components/leads/BatchEnrichBar';
 import { EnrichmentExplainer, shouldShowExplainer } from '@/components/leads/EnrichmentExplainer';
 import { useEnrichmentStream } from '@/lib/hooks/useEnrichmentStream';
-import { useBusinessSearchController } from '@/lib/hooks/useBusinessSearchController';
+import {
+  useBusinessSearchController,
+  type SearchSessionReplacementKind,
+} from '@/lib/hooks/useBusinessSearchController';
 import { SettingsModal } from '@/components/settings';
 import { UserMenu } from '@/components/auth';
-import {
-  useSearchSessionPersistence,
-  type SearchSessionPayload,
-} from '@/lib/business/search-session-client';
+import { useSearchSessionPersistence } from '@/lib/business/search-session-client';
 import {
   SEARCH_SNAPSHOT_VERSION,
   type PersistedSearchPayload,
+  type SearchSnapshot,
 } from '@/lib/business/search-snapshot';
+import { decodeSearchCacheBrowserState, type SearchCacheBrowserState } from '@/lib/search-cache';
 import {
   filterAndSortResults,
   mergeEnrichmentResults,
@@ -37,9 +39,19 @@ import {
   type SearchResultFilters,
   type SearchResultSort,
 } from '@/lib/business/derive-search-results';
-import { DEFAULT_COUNTRY_CODE, INDUSTRY_TYPES } from '@/lib/constants';
+import { DEFAULT_COUNTRY_CODE, getBusinessTypeLabel } from '@/lib/constants';
 import type { IndustryType, BusinessSearchResult } from '@/types';
 import type { Zone } from '@/lib/business/zone-contract';
+
+const EMPTY_RESULT_FILTERS: SearchResultFilters = {
+  hasEmail: false,
+  hasPhone: false,
+  hasSocial: false,
+  hasAds: false,
+  minBudget: 0,
+};
+
+type SearchSessionReplacement = SearchSnapshot & SearchCacheBrowserState;
 
 export default function Home() {
   return (
@@ -71,9 +83,10 @@ function HomeInner() {
     zoneBbox,
     singleZone,
     focusedZoneId,
+    queryIdentity,
     rescanningZoneId,
     searchBannerError,
-    hydrateSnapshot,
+    replaceSnapshot,
     runInitialSearch,
     rescanZone,
     completeRadar,
@@ -92,13 +105,7 @@ function HomeInner() {
   const focusedZone = focusedZoneId ? zones.find((zone) => zone.id === focusedZoneId) : undefined;
   // Filter & sort state
   const [sortBy, setSortBy] = useState<SearchResultSort>('fit');
-  const [filters, setFilters] = useState<SearchResultFilters>({
-    hasEmail: false,
-    hasPhone: false,
-    hasSocial: false,
-    hasAds: false,
-    minBudget: 0,
-  });
+  const [filters, setFilters] = useState<SearchResultFilters>(EMPTY_RESULT_FILTERS);
 
   // Count-up for "N businesses found"
   const [resultsCount, setResultsCount] = useState(0);
@@ -118,30 +125,44 @@ function HomeInner() {
     statusMap: enrichStatusMap,
     resultMap: enrichResultMap,
     enrichLeads,
-    hydrate: hydrateEnrichment,
+    replaceSession: replaceEnrichmentSession,
     bannerError: enrichBannerError,
     clearBannerError: clearEnrichBannerError,
   } = useEnrichmentStream();
   const [selectedForEnrich, setSelectedForEnrich] = useState<Set<string>>(new Set());
   const [explainerOpen, setExplainerOpen] = useState(false);
   const [pendingEnrichAction, setPendingEnrichAction] = useState<(() => void) | null>(null);
+  const [savingLeadIds, setSavingLeadIds] = useState<Set<string>>(new Set());
+  const [savedLeadModal, setSavedLeadModal] = useState<{ isOpen: boolean; businessName: string }>({
+    isOpen: false,
+    businessName: '',
+  });
+  const sessionEpochRef = useRef(0);
 
-  // The controller hydrates result data atomically; this adapter keeps form and
-  // enrichment persistence concerns in the page.
-  const hydrateSearchSession = useCallback(
-    (payload: SearchSessionPayload) => {
-      hydrateSnapshot(payload);
-      setSelectedIndustry(payload.industry);
+  // Every actual session transition uses this clobbering command. The enrichment
+  // hook's one-shot hydrate command remains separate for non-clobbering cache seeds.
+  const replaceSearchSession = useCallback(
+    (payload: SearchSessionReplacement, kind: SearchSessionReplacementKind = 'loaded') => {
+      const browserState = decodeSearchCacheBrowserState(payload);
+      const isPresetQuery = payload.businessType === payload.industry;
+
+      sessionEpochRef.current += 1;
+      replaceSnapshot(payload, kind);
+      setSelectedIndustry(isPresetQuery ? payload.industry : null);
+      setCustomIndustry(isPresetQuery ? '' : payload.businessType);
       setCity(payload.city);
       setCountry(payload.country);
-      if (payload.enrichStatusMap || payload.enrichResultMap) {
-        hydrateEnrichment(payload.enrichStatusMap, payload.enrichResultMap);
-      }
-      if (payload.selectedForEnrich?.length) {
-        setSelectedForEnrich(new Set(payload.selectedForEnrich));
-      }
+      setDeepAnalysis(false);
+      replaceEnrichmentSession(browserState.enrichStatusMap, browserState.enrichResultMap);
+      setSelectedForEnrich(new Set(browserState.selectedForEnrich ?? []));
+      setExplainerOpen(false);
+      setPendingEnrichAction(null);
+      setSavingLeadIds(new Set());
+      setSavedLeadModal({ isOpen: false, businessName: '' });
+      setSortBy('fit');
+      setFilters(EMPTY_RESULT_FILTERS);
     },
-    [hydrateEnrichment, hydrateSnapshot]
+    [replaceEnrichmentSession, replaceSnapshot]
   );
 
   const handleLocalResumeFound = useCallback(() => setShowPreLoader(false), []);
@@ -155,35 +176,32 @@ function HomeInner() {
     persistEnrichment,
   } = useSearchSessionPersistence({
     isSearchView: viewMode === 'search',
-    onHydrate: hydrateSearchSession,
+    onReplaceSession: replaceSearchSession,
     onLocalResumeFound: handleLocalResumeFound,
   });
 
   const handleSearch = () => {
-    void runInitialSearch(persistSearch);
+    void runInitialSearch(persistSearch, (snapshot) =>
+      replaceSearchSession(snapshot, 'new-search')
+    );
   };
 
   // Persist enrichment state to the search cache whenever it changes so
   // navigating away and back preserves which leads have been enriched.
   useEffect(() => {
+    if (viewMode !== 'results') return;
     persistEnrichment({
       enrichStatusMap,
       enrichResultMap,
       selectedForEnrich: Array.from(selectedForEnrich),
     });
-  }, [enrichStatusMap, enrichResultMap, persistEnrichment, selectedForEnrich]);
-
-  // Saving leads
-  const [savingLeadIds, setSavingLeadIds] = useState<Set<string>>(new Set());
-  const [savedLeadModal, setSavedLeadModal] = useState<{ isOpen: boolean; businessName: string }>({
-    isOpen: false,
-    businessName: '',
-  });
+  }, [enrichStatusMap, enrichResultMap, persistEnrichment, selectedForEnrich, viewMode]);
 
   // Save lead
   const handleSaveLead = async (business: BusinessSearchResult) => {
     if (savingLeadIds.has(business.placeId)) return;
 
+    const sessionEpoch = sessionEpochRef.current;
     setSavingLeadIds((prev) => new Set(prev).add(business.placeId));
     try {
       const response = await fetch('/api/leads', {
@@ -193,6 +211,7 @@ function HomeInner() {
       });
 
       const data = await response.json();
+      if (sessionEpochRef.current !== sessionEpoch) return;
 
       if (response.ok) {
         setSavedLeadModal({ isOpen: true, businessName: business.name });
@@ -202,13 +221,15 @@ function HomeInner() {
         toast.error(data.error || 'Failed to save');
       }
     } catch {
-      toast.error('Failed to save lead');
+      if (sessionEpochRef.current === sessionEpoch) toast.error('Failed to save lead');
     } finally {
-      setSavingLeadIds((prev) => {
-        const next = new Set(prev);
-        next.delete(business.placeId);
-        return next;
-      });
+      if (sessionEpochRef.current === sessionEpoch) {
+        setSavingLeadIds((prev) => {
+          const next = new Set(prev);
+          next.delete(business.placeId);
+          return next;
+        });
+      }
     }
   };
 
@@ -239,10 +260,11 @@ function HomeInner() {
 
   const handleBatchEnrich = () => {
     if (selectedEnrichedResults.length === 0) return;
+    const sessionEpoch = sessionEpochRef.current;
     void enrichLeads(selectedEnrichedResults, city.trim(), country).then(() => {
-      // Clear selection after the stream closes — keep selection
-      // while rows are still coming in so the bar reflects progress.
-      setSelectedForEnrich(new Set());
+      // An old stream may resolve after a replacement; only its owning session
+      // is allowed to clear selection.
+      if (sessionEpochRef.current === sessionEpoch) setSelectedForEnrich(new Set());
     });
   };
 
@@ -258,18 +280,18 @@ function HomeInner() {
   // Filter and sort results
   const filteredResults = filterAndSortResults(enrichedResults, filters, sortBy);
 
-  const resultsIndustryLabel =
-    customIndustry.trim() ||
-    INDUSTRY_TYPES.find((type) => type.id === selectedIndustry)?.label ||
-    selectedIndustry ||
-    'Session';
-  const resultsTitle = `${resultsIndustryLabel} in ${city}`;
+  const activeBusinessType = queryIdentity?.businessType ?? effectiveIndustry ?? 'other';
+  const activeIndustry = queryIdentity?.industry ?? selectedIndustry ?? 'other';
+  const activeCity = queryIdentity?.city ?? city.trim();
+  const activeCountry = queryIdentity?.country ?? country;
+  const resultsTitle = `${getBusinessTypeLabel(activeBusinessType)} in ${activeCity}`;
   const getSessionPayload = (): PersistedSearchPayload => ({
     version: SEARCH_SNAPSHOT_VERSION,
     results: searchResults,
-    industry: (selectedIndustry ?? 'other') as IndustryType,
-    city: city.trim(),
-    country,
+    businessType: activeBusinessType,
+    industry: activeIndustry,
+    city: activeCity,
+    country: activeCountry,
     timestamp: Date.now(),
     zones,
     zoneBbox,
@@ -279,7 +301,23 @@ function HomeInner() {
     marketDensity,
   });
 
-  const handleBackToSearch = resetSearch;
+  const handleBackToSearch = () => {
+    sessionEpochRef.current += 1;
+    resetSearch();
+    replaceEnrichmentSession(undefined, undefined);
+    setSelectedForEnrich(new Set());
+    setExplainerOpen(false);
+    setPendingEnrichAction(null);
+    setSavingLeadIds(new Set());
+    setSavedLeadModal({ isOpen: false, businessName: '' });
+    setSelectedIndustry(null);
+    setCustomIndustry('');
+    setCity('');
+    setCountry(DEFAULT_COUNTRY_CODE);
+    setDeepAnalysis(false);
+    setSortBy('fit');
+    setFilters(EMPTY_RESULT_FILTERS);
+  };
 
   // Tap-to-rescan a different zone without leaving the results page.
   const handleZoneSwitch = (zone: Zone) => {
@@ -414,7 +452,7 @@ function HomeInner() {
 
           {resumeCard && !resumeDismissed && (
             <ResumeSearchCard
-              industry={resumeCard.industry}
+              businessType={resumeCard.businessType}
               city={resumeCard.city}
               resultCount={resumeCard.resultCount}
               updatedAt={resumeCard.updatedAt}

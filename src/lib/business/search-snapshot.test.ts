@@ -2,7 +2,12 @@ import { describe, expect, test } from 'vitest';
 import type { BusinessSearchResult } from '@/types';
 import { createScoreBreakdown } from './score-breakdown-contract';
 import type { PersistedSearchPayload } from './search-snapshot';
-import { SEARCH_SNAPSHOT_VERSION, parsePersistedSearchPayload } from './search-snapshot';
+import {
+  SEARCH_SNAPSHOT_RESULT_LIMIT,
+  SEARCH_SNAPSHOT_VERSION,
+  decodePersistedSearchPayload,
+  parsePersistedSearchPayload,
+} from './search-snapshot';
 
 const currentScoreBreakdown = createScoreBreakdown({
   noWebsite: 20,
@@ -63,6 +68,7 @@ const currentZone: NonNullable<PersistedSearchPayload['zones']>[number] = {
 const currentPayload: PersistedSearchPayload = {
   version: SEARCH_SNAPSHOT_VERSION,
   results: [result],
+  businessType: 'retail',
   industry: 'retail',
   city: 'Leeds',
   country: 'gb',
@@ -104,7 +110,7 @@ const preV2Zone = {
 };
 
 describe('parsePersistedSearchPayload', () => {
-  test('round-trips every current v2 zone and amenity field', () => {
+  test('round-trips every current v3 query, zone, and amenity field', () => {
     expect(parsePersistedSearchPayload(JSON.stringify(currentPayload))).toEqual(currentPayload);
   });
 
@@ -189,26 +195,32 @@ describe('parsePersistedSearchPayload', () => {
     expect(parsed).not.toHaveProperty('focusedZoneId');
   });
 
-  test('discards malformed zone analysis without dropping unrelated passthrough data', () => {
+  test('rejects malformed zone analysis in a current payload', () => {
     const malformedPayload = {
       ...currentPayload,
-      browserEnrichment: { completedPlaceIds: ['place-1'] },
       zones: [{ ...currentZone, archetype: 'residential' }],
     };
 
-    const parsed = parsePersistedSearchPayload(JSON.stringify(malformedPayload));
+    expect(parsePersistedSearchPayload(JSON.stringify(malformedPayload))).toBeNull();
+  });
 
-    expect(parsed?.results).toEqual(currentPayload.results);
-    expect(parsed?.city).toBe(currentPayload.city);
-    expect(parsed).toHaveProperty('browserEnrichment', { completedPlaceIds: ['place-1'] });
-    expect(parsed).not.toHaveProperty('zones');
-    expect(parsed).not.toHaveProperty('marketDensity');
-    expect(parsed).not.toHaveProperty('zoneBbox');
-    expect(parsed).not.toHaveProperty('focusedZoneId');
+  test('strips browser-only and unknown top-level fields', () => {
+    const parsed = decodePersistedSearchPayload({
+      ...currentPayload,
+      enrichStatusMap: { 'place-1': 'complete' },
+      selectedForEnrich: ['place-1'],
+      futureTopLevelField: true,
+    });
+
+    expect(parsed).toEqual(currentPayload);
+    expect(parsed).not.toHaveProperty('enrichStatusMap');
+    expect(parsed).not.toHaveProperty('selectedForEnrich');
+    expect(parsed).not.toHaveProperty('futureTopLevelField');
   });
 
   test('keeps a legacy payload with no zone analysis valid', () => {
     const legacyPayload = {
+      version: 2,
       results: currentPayload.results,
       industry: currentPayload.industry,
       city: currentPayload.city,
@@ -218,8 +230,16 @@ describe('parsePersistedSearchPayload', () => {
 
     expect(parsePersistedSearchPayload(JSON.stringify(legacyPayload))).toEqual({
       ...legacyPayload,
+      businessType: 'retail',
       version: SEARCH_SNAPSHOT_VERSION,
     });
+  });
+
+  test('rejects a current snapshot missing its canonical business type', () => {
+    const missingBusinessType: Partial<PersistedSearchPayload> = { ...currentPayload };
+    delete missingBusinessType.businessType;
+
+    expect(decodePersistedSearchPayload(missingBusinessType)).toBeNull();
   });
 
   test('returns null for malformed stored JSON', () => {
@@ -230,5 +250,85 @@ describe('parsePersistedSearchPayload', () => {
     const parsed = parsePersistedSearchPayload(JSON.stringify(currentPayload));
 
     expect(parsed?.timestamp).toBe(1_725_000_123_456);
+  });
+
+  test('round-trips a current object through the canonical codec', () => {
+    expect(decodePersistedSearchPayload(currentPayload)).toEqual(currentPayload);
+  });
+
+  test('rejects an invalid industry', () => {
+    expect(
+      decodePersistedSearchPayload({ ...currentPayload, industry: 'not-an-industry' })
+    ).toBeNull();
+  });
+
+  test('rejects malformed nested search results', () => {
+    expect(
+      decodePersistedSearchPayload({
+        ...currentPayload,
+        results: [{ ...result, types: ['store', 42] }],
+      })
+    ).toBeNull();
+  });
+
+  test('rejects malformed nested zone amenities', () => {
+    expect(
+      decodePersistedSearchPayload({
+        ...currentPayload,
+        zones: [
+          {
+            ...currentZone,
+            amenities: { ...currentZone.amenities, banks: 'two' },
+          },
+        ],
+      })
+    ).toBeNull();
+  });
+
+  test('rejects payloads from a future snapshot version', () => {
+    expect(
+      decodePersistedSearchPayload({
+        ...currentPayload,
+        version: SEARCH_SNAPSHOT_VERSION + 1,
+      })
+    ).toBeNull();
+  });
+
+  test('accepts timestamps within normal clock skew', () => {
+    const timestamp = Date.now() + 60_000;
+
+    expect(decodePersistedSearchPayload({ ...currentPayload, timestamp })?.timestamp).toBe(timestamp);
+  });
+
+  test.each([
+    ['NaN', Number.NaN],
+    ['positive infinity', Number.POSITIVE_INFINITY],
+    ['negative', -1],
+    ['fractional', currentPayload.timestamp + 0.5],
+    ['future', Date.now() + 86_400_000],
+    ['outside the Date range', 8_640_000_000_000_001],
+  ])('rejects a %s timestamp', (_label, timestamp) => {
+    expect(decodePersistedSearchPayload({ ...currentPayload, timestamp })).toBeNull();
+  });
+
+  test('rejects result arrays over the search limit', () => {
+    const results = Array.from({ length: SEARCH_SNAPSHOT_RESULT_LIMIT + 1 }, (_, index) => ({
+      ...result,
+      placeId: `place-${index}`,
+    }));
+
+    expect(decodePersistedSearchPayload({ ...currentPayload, results })).toBeNull();
+  });
+
+  test('can apply an API timestamp only when the field is absent', () => {
+    const withoutTimestamp: Partial<PersistedSearchPayload> = { ...currentPayload };
+    delete withoutTimestamp.timestamp;
+
+    expect(decodePersistedSearchPayload(withoutTimestamp, 1_725_000_999_000)?.timestamp).toBe(
+      1_725_000_999_000
+    );
+    expect(
+      decodePersistedSearchPayload({ ...withoutTimestamp, timestamp: null }, Date.now())
+    ).toBeNull();
   });
 });

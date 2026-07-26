@@ -326,8 +326,9 @@ function createProps(overrides: Partial<SearchResultsViewProps> = {}): SearchRes
     defaultSessionName: 'Plumbers in Leeds',
     getSessionPayload: vi.fn(
       (): PersistedSearchPayload => ({
-        version: 2,
+        version: 3,
         results: rawResults,
+        businessType: 'Plumbers',
         industry: 'other',
         city: 'Leeds',
         country: 'gb',
@@ -507,8 +508,9 @@ describe('SearchResultsView', () => {
     vi.setSystemTime(100);
     const getSessionPayload = vi.fn(
       (): PersistedSearchPayload => ({
-        version: 2,
+        version: 3,
         results: rawResults,
+        businessType: 'Plumbers',
         industry: 'other',
         city: 'Leeds',
         country: 'gb',

@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/db';
 import {
+  decodePersistedSearchPayload,
   parsePersistedSearchPayload,
   type PersistedSearchPayload,
 } from '@/lib/business/search-snapshot';
@@ -12,34 +13,54 @@ import {
  * state is dropped from the payload — cheap to re-derive via the
  * BusinessEnrichmentCache on reload, and keeps each saved row lean.
  */
-export interface SavedSessionSummary {
+interface SavedSessionBase {
   id: string;
   name: string;
-  industry: string;
-  city: string;
-  country: string;
-  resultCount: number;
   createdAt: string;
   updatedAt: string;
 }
 
-export interface SavedSessionRecord extends SavedSessionSummary {
+export interface SavedSessionReadySummary extends SavedSessionBase {
+  status: 'ready';
+  businessType: string;
+  industry: string;
+  city: string;
+  country: string;
+  resultCount: number;
+}
+
+export interface SavedSessionCorruptSummary extends SavedSessionBase {
+  status: 'corrupt';
+  message: string;
+}
+
+export type SavedSessionSummary = SavedSessionReadySummary | SavedSessionCorruptSummary;
+
+export interface SavedSessionRecord extends SavedSessionReadySummary {
   payload: PersistedSearchPayload;
 }
+
+export type SavedSessionMember = SavedSessionRecord | SavedSessionCorruptSummary;
+
+export const CORRUPT_SAVED_SESSION_MESSAGE =
+  'Saved session data is corrupted and cannot be loaded.';
 
 export async function createSavedSession(
   userId: string,
   name: string,
   payload: PersistedSearchPayload
 ): Promise<SavedSessionRecord> {
+  const canonicalPayload = decodePersistedSearchPayload(payload);
+  if (!canonicalPayload) throw new TypeError('Invalid persisted search payload');
+
   const row = await prisma.savedSearchSession.create({
     data: {
       userId,
       name: name.trim().slice(0, 120) || 'Untitled session',
-      payload: JSON.stringify(payload),
+      payload: JSON.stringify(canonicalPayload),
     },
   });
-  return toRecord(row, payload);
+  return toRecord(row, canonicalPayload);
 }
 
 export async function listSavedSessions(userId: string): Promise<SavedSessionSummary[]> {
@@ -56,13 +77,13 @@ export async function listSavedSessions(userId: string): Promise<SavedSessionSum
 export async function getSavedSession(
   userId: string,
   id: string
-): Promise<SavedSessionRecord | null> {
+): Promise<SavedSessionMember | null> {
   const row = await prisma.savedSearchSession.findFirst({
     where: { id, userId },
   });
   if (!row) return null;
   const payload = parsePersistedSearchPayload(row.payload);
-  if (!payload) return null;
+  if (!payload) return toCorruptSummary(row);
   return toRecord(row, payload);
 }
 
@@ -87,13 +108,34 @@ type Row = {
 };
 
 function toSummary(row: Row, payload: PersistedSearchPayload | null): SavedSessionSummary {
+  if (!payload) return toCorruptSummary(row);
+  return toReadySummary(row, payload);
+}
+
+function toReadySummary(row: Row, payload: PersistedSearchPayload): SavedSessionReadySummary {
+  return {
+    ...toBase(row),
+    status: 'ready',
+    businessType: payload.businessType,
+    industry: payload.industry,
+    city: payload.city,
+    country: payload.country,
+    resultCount: payload.results.length,
+  };
+}
+
+function toCorruptSummary(row: Row): SavedSessionCorruptSummary {
+  return {
+    ...toBase(row),
+    status: 'corrupt',
+    message: CORRUPT_SAVED_SESSION_MESSAGE,
+  };
+}
+
+function toBase(row: Row): SavedSessionBase {
   return {
     id: row.id,
     name: row.name,
-    industry: payload?.industry ?? 'other',
-    city: payload?.city ?? '',
-    country: payload?.country ?? 'us',
-    resultCount: payload?.results?.length ?? 0,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -101,7 +143,7 @@ function toSummary(row: Row, payload: PersistedSearchPayload | null): SavedSessi
 
 function toRecord(row: Row, payload: PersistedSearchPayload): SavedSessionRecord {
   return {
-    ...toSummary(row, payload),
+    ...toReadySummary(row, payload),
     payload,
   };
 }

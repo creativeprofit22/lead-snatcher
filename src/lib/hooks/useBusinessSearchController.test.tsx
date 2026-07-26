@@ -62,6 +62,7 @@ function applied(overrides: Partial<AppliedBusinessSearch> = {}): AppliedBusines
   const cachePayload: SearchSnapshot = {
     version: SEARCH_SNAPSHOT_VERSION,
     results: [result],
+    businessType: 'retail',
     industry: 'retail',
     city: 'London',
     country: 'gb',
@@ -153,6 +154,57 @@ describe('useBusinessSearchController', () => {
     expect(harness.result.current).toMatchObject({ viewMode: 'results', radarPhase: 'off' });
   });
 
+  test('routes a newly committed search through the explicit replacement command', async () => {
+    const harness = setup(vi.fn<typeof runBusinessSearch>().mockResolvedValue(applied()));
+    const replaceCommittedSession = vi.fn((snapshot: SearchSnapshot) => {
+      harness.result.current.replaceSnapshot(snapshot, 'new-search');
+    });
+
+    await act(async () =>
+      harness.result.current.runInitialSearch(harness.persistSearch, replaceCommittedSession)
+    );
+
+    expect(replaceCommittedSession).toHaveBeenCalledOnce();
+    expect(replaceCommittedSession).toHaveBeenCalledWith(applied().cachePayload);
+    expect(harness.result.current).toMatchObject({
+      viewMode: 'search',
+      radarPhase: 'revealing',
+      searchResults: [result],
+      queryIdentity: {
+        businessType: 'retail',
+        industry: 'retail',
+        city: 'London',
+        country: 'gb',
+      },
+    });
+  });
+
+  test('a loaded replacement fences off an older pending search result', async () => {
+    const pending = deferred<AppliedBusinessSearch>();
+    const harness = setup(vi.fn<typeof runBusinessSearch>().mockReturnValue(pending.promise));
+    let search!: Promise<void>;
+    act(() => {
+      search = harness.result.current.runInitialSearch(harness.persistSearch);
+    });
+
+    act(() =>
+      harness.result.current.replaceSnapshot(
+        { ...applied().cachePayload, city: 'York', results: [] },
+        'loaded'
+      )
+    );
+    pending.resolve(applied());
+    await act(async () => search);
+
+    expect(harness.result.current).toMatchObject({
+      viewMode: 'results',
+      isSearching: false,
+      searchResults: [],
+      queryIdentity: expect.objectContaining({ city: 'York' }),
+    });
+    expect(harness.persistSearch).not.toHaveBeenCalled();
+  });
+
   test('keeps an empty initial response on search view and does not persist it', async () => {
     const empty = applied({
       results: [],
@@ -222,7 +274,7 @@ describe('useBusinessSearchController', () => {
       notification: { type: 'success', message: 'Scanning West End — 1 found' },
     });
     const harness = setup(vi.fn<typeof runBusinessSearch>().mockReturnValue(pending.promise));
-    act(() => harness.result.current.hydrateSnapshot(applied().cachePayload));
+    act(() => harness.result.current.replaceSnapshot(applied().cachePayload));
 
     const west = { ...zone, id: 'west', label: 'West End' };
     let rescan!: Promise<void>;
@@ -257,13 +309,39 @@ describe('useBusinessSearchController', () => {
     });
   });
 
+  test('uses a resumed custom query identity for the next zone rescan', async () => {
+    const harness = setup(vi.fn<typeof runBusinessSearch>().mockResolvedValue(applied()));
+    act(() =>
+      harness.result.current.replaceSnapshot({
+        ...applied().cachePayload,
+        businessType: 'HVAC contractors',
+        industry: 'other',
+        city: 'Austin',
+        country: 'us',
+      })
+    );
+
+    const west = { ...zone, id: 'west', label: 'West End' };
+    await act(async () => harness.result.current.rescanZone(west, harness.persistSearch));
+
+    expect(harness.runSearch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessType: 'HVAC contractors',
+        cacheIndustry: 'other',
+        city: 'Austin',
+        country: 'us',
+        mode: expect.objectContaining({ kind: 'zone', zone: west }),
+      })
+    );
+  });
+
   test('zone failures only toast and always clear the zone busy state', async () => {
     const harness = setup(
       vi
         .fn<typeof runBusinessSearch>()
         .mockRejectedValue(new BusinessSearchError('Zone rescan failed', 500, 'http'))
     );
-    act(() => harness.result.current.hydrateSnapshot(applied().cachePayload));
+    act(() => harness.result.current.replaceSnapshot(applied().cachePayload));
 
     await act(async () =>
       harness.result.current.rescanZone(
@@ -291,12 +369,13 @@ describe('useBusinessSearchController', () => {
 
   test('hydrates legacy snapshots with absent optional fields into coherent defaults', () => {
     const harness = setup();
-    act(() => harness.result.current.hydrateSnapshot(applied().cachePayload));
+    act(() => harness.result.current.replaceSnapshot(applied().cachePayload));
 
     act(() =>
-      harness.result.current.hydrateSnapshot({
+      harness.result.current.replaceSnapshot({
         version: SEARCH_SNAPSHOT_VERSION,
         results: [],
+        businessType: 'retail',
         industry: 'retail',
         city: 'Leeds',
         country: 'gb',
@@ -322,7 +401,7 @@ describe('useBusinessSearchController', () => {
       shouldPersist: false,
     });
     const harness = setup(vi.fn<typeof runBusinessSearch>().mockResolvedValue(emptyWithBanner));
-    act(() => harness.result.current.hydrateSnapshot(applied().cachePayload));
+    act(() => harness.result.current.replaceSnapshot(applied().cachePayload));
     await act(async () => harness.result.current.runInitialSearch(harness.persistSearch));
 
     act(() => harness.result.current.resetSearch());
@@ -330,12 +409,10 @@ describe('useBusinessSearchController', () => {
     expect(harness.result.current).toMatchObject({
       viewMode: 'search',
       ...EMPTY_SEARCH_RESULT_SNAPSHOT,
+      isSearching: false,
+      radarPhase: 'off',
       rescanningZoneId: null,
-      searchBannerError: {
-        message: 'No businesses returned',
-        severity: 'error',
-        isAuthError: false,
-      },
+      searchBannerError: null,
     });
   });
 });

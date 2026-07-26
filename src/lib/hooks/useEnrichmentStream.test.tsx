@@ -141,6 +141,42 @@ describe('useEnrichmentStream protocol state', () => {
     await act(async () => enrichment);
   });
 
+  test('session replacement aborts A and ignores its late row for an overlapping B place ID', async () => {
+    let resolveFetch!: (response: Response) => void;
+    let signal!: AbortSignal;
+    vi.mocked(fetch).mockImplementation((_input, init) => {
+      signal = init?.signal as AbortSignal;
+      return new Promise<Response>((resolve) => {
+        resolveFetch = resolve;
+      });
+    });
+    const { result } = renderHook(() => useEnrichmentStream());
+
+    let enrichment!: Promise<void>;
+    act(() => {
+      enrichment = result.current.enrichLeads([lead('shared')], 'London', 'GB');
+    });
+    await waitFor(() => expect(result.current.statusMap.shared).toBe('enriching'));
+
+    act(() => {
+      result.current.replaceSession(
+        { shared: 'enriched', onlyB: 'rate_limited' },
+        { shared: { website: 'https://b.example' } }
+      );
+    });
+    expect(signal.aborted).toBe(true);
+
+    resolveFetch(
+      responseFromRows([{ businessId: 'shared', status: 'ok', website: 'https://late-a.example' }])
+    );
+    await act(async () => enrichment);
+
+    expect(result.current.statusMap).toEqual({ shared: 'enriched', onlyB: 'rate_limited' });
+    expect(result.current.resultMap).toEqual({
+      shared: { website: 'https://b.example' },
+    });
+  });
+
   test('aborts the previous global stream when a new enrichment starts', async () => {
     const signals: AbortSignal[] = [];
     vi.mocked(fetch)

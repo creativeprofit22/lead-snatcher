@@ -133,6 +133,23 @@ describe('runBusinessSearch', () => {
     expect(initialRequest.signal).toBeInstanceOf(AbortSignal);
   });
 
+  test('persists a custom query separately from its scoring category', () => {
+    const applied = applyBusinessSearchResponse(response([zone('central', 'Central')]), {
+      businessType: 'HVAC contractors',
+      cacheIndustry: 'other',
+      city: 'Austin',
+      country: 'us',
+      deepAnalysis: false,
+      mode: { kind: 'initial' },
+    });
+
+    expect(applied.cachePayload).toMatchObject({
+      businessType: 'HVAC contractors',
+      industry: 'other',
+      city: 'Austin',
+    });
+  });
+
   test('accepts and preserves a complete current score breakdown', () => {
     const applied = applyBusinessSearchResponse(response([zone('central', 'Central')]), {
       businessType: 'retail',

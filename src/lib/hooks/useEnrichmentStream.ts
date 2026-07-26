@@ -47,12 +47,18 @@ export interface UseEnrichmentStream {
   /** Clear a lead's ephemeral enriched/error state back to idle. */
   clearStatus: (businessId: string) => void;
   /**
-   * Rehydrate the hook's maps from persisted state (localStorage / DB).
-   * Used on mount so tab-navigation doesn't wipe the progress UI.
-   * Skips rehydration when the hook already has state to avoid
-   * clobbering an in-flight stream.
+   * Seed the maps from a late initial cache read without clobbering state
+   * already owned by a request, replacement, or earlier seed.
    */
   hydrate: (
+    status: Record<string, EnrichmentStatus> | undefined,
+    result: Record<string, EnrichmentResult> | undefined
+  ) => void;
+  /**
+   * Replace session-owned enrichment state, cancelling and fencing off
+   * every stream from the previous session. Missing maps become empty maps.
+   */
+  replaceSession: (
     status: Record<string, EnrichmentStatus> | undefined,
     result: Record<string, EnrichmentResult> | undefined
   ) => void;
@@ -68,6 +74,7 @@ export function useEnrichmentStream(): UseEnrichmentStream {
   const [resultMap, setResultMap] = useState<Record<string, EnrichmentResult>>({});
   const [bannerError, setBannerError] = useState<EnrichmentBannerError | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const streamEpochRef = useRef(0);
   const hasStateRef = useRef(false);
 
   const clearBannerError = useCallback(() => setBannerError(null), []);
@@ -93,6 +100,14 @@ export function useEnrichmentStream(): UseEnrichmentStream {
     return () => timers.forEach((timer) => window.clearTimeout(timer));
   }, [clearStatus, statusMap]);
 
+  useEffect(
+    () => () => {
+      streamEpochRef.current += 1;
+      abortRef.current?.abort();
+    },
+    []
+  );
+
   const applyRow = useCallback((row: EnrichmentStreamRow) => {
     if (row.status === 'ok' || row.status === 'cached') setBannerError(null);
 
@@ -113,6 +128,9 @@ export function useEnrichmentStream(): UseEnrichmentStream {
 
   const enrichLeads = useCallback(
     async (leads: BusinessSearchResult[], city: string, country: string): Promise<void> => {
+      abortRef.current?.abort();
+      const requestEpoch = streamEpochRef.current + 1;
+      streamEpochRef.current = requestEpoch;
       const requestedIds = leads.map((lead) => lead.placeId);
       hasStateRef.current = true;
       setStatusMap((previous) => {
@@ -136,16 +154,17 @@ export function useEnrichmentStream(): UseEnrichmentStream {
         return;
       }
 
-      // Global cancellation is intentional: starting any enrichment aborts the
-      // prior stream, matching the existing single-controller semantics.
-      abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
 
       const outcome = await streamEnrichment(request, {
         signal: controller.signal,
-        onRow: applyRow,
+        onRow: (row) => {
+          if (streamEpochRef.current === requestEpoch) applyRow(row);
+        },
       });
+      if (streamEpochRef.current !== requestEpoch) return;
+      if (abortRef.current === controller) abortRef.current = null;
       if (outcome.type !== 'failure') return;
 
       applyFailureStatuses(outcome.failure, request.leads, setStatusMap);
@@ -159,7 +178,7 @@ export function useEnrichmentStream(): UseEnrichmentStream {
       status: Record<string, EnrichmentStatus> | undefined,
       result: Record<string, EnrichmentResult> | undefined
     ) => {
-      // Treat both maps as one snapshot. Once a request or prior hydration owns
+      // Treat both maps as one snapshot. Once a request or replacement owns
       // either map, a late persistence read cannot seed the other half.
       if (hasStateRef.current) return;
       if (!status && !result) return;
@@ -170,12 +189,29 @@ export function useEnrichmentStream(): UseEnrichmentStream {
     []
   );
 
+  const replaceSession = useCallback(
+    (
+      status: Record<string, EnrichmentStatus> | undefined,
+      result: Record<string, EnrichmentResult> | undefined
+    ) => {
+      streamEpochRef.current += 1;
+      abortRef.current?.abort();
+      abortRef.current = null;
+      hasStateRef.current = true;
+      setStatusMap(status ?? {});
+      setResultMap(result ?? {});
+      setBannerError(null);
+    },
+    []
+  );
+
   return {
     statusMap,
     resultMap,
     enrichLeads,
     clearStatus,
     hydrate,
+    replaceSession,
     bannerError,
     clearBannerError,
   };

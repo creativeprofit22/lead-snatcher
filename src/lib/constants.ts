@@ -25,6 +25,11 @@ export const INDUSTRY_TYPES: IndustryTypeConfig[] = [
   { id: 'other', label: 'Other', icon: 'building', color: '#78716c' },
 ];
 
+/** Human-readable label for a persisted query while preserving custom business types verbatim. */
+export function getBusinessTypeLabel(businessType: string): string {
+  return INDUSTRY_TYPES.find((type) => type.id === businessType)?.label ?? businessType;
+}
+
 /**
  * Search queries for each industry type by country
  * Maps API works best with specific, localized search terms

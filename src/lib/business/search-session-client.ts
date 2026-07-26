@@ -2,20 +2,33 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import {
+  acknowledgeLastSearchSync,
+  decodeSearchCacheBrowserState,
   getLastSearch,
+  getPendingLastSearch,
+  markLastSearchPending,
   saveLastSearch,
   updateLastSearchEnrichment,
   type SearchCacheBrowserState,
 } from '@/lib/search-cache';
-import type { PersistedSearchPayload, SearchSnapshot } from './search-snapshot';
+import {
+  comparePersistedSearchPayloads,
+  decodePersistedSearchPayload,
+  hasSameSearchSnapshotIdentity,
+  parsePersistedSearchPayload,
+  timestampToISOString,
+  type PersistedSearchPayload,
+  type SearchSnapshot,
+} from './search-snapshot';
 
 const LAST_SEARCH_ENDPOINT = '/api/business/last-search';
 const RESUME_DISMISSED_KEY = 'lead-snatcher-resume-dismissed';
+const MAX_CONSECUTIVE_PENDING_WRITES = 5;
 
-export type SearchSessionPayload = SearchSnapshot & SearchCacheBrowserState;
+export type SearchSessionPayload = PersistedSearchPayload & SearchCacheBrowserState;
 
 export interface SearchResumeCardData {
-  industry: SearchSnapshot['industry'];
+  businessType: SearchSnapshot['businessType'];
   city: string;
   country: string;
   resultCount: number;
@@ -27,6 +40,9 @@ interface SearchSessionCache {
   get: typeof getLastSearch;
   save: typeof saveLastSearch;
   updateEnrichment: typeof updateLastSearchEnrichment;
+  getPending: typeof getPendingLastSearch;
+  markPending: typeof markLastSearchPending;
+  acknowledge: typeof acknowledgeLastSearchSync;
 }
 
 interface SearchSessionClientDependencies {
@@ -37,12 +53,16 @@ interface SearchSessionClientDependencies {
 
 export interface SearchSessionClient {
   readLocalResume(): SearchResumeCardData | null;
-  fetchServerResumeIfLocalMissing(): Promise<SearchResumeCardData | null>;
-  isResumeDismissed(): boolean;
-  dismissResume(): void;
-  applySnapshot(
+  reconcileServerResume(): Promise<SearchResumeCardData | null>;
+  isResumeDismissed(payload: PersistedSearchPayload): boolean;
+  dismissResume(payload: PersistedSearchPayload): void;
+  replaceSession(
     payload: SearchSessionPayload,
-    hydrate: (payload: SearchSessionPayload) => void
+    replace: (payload: SearchSessionPayload) => void
+  ): void;
+  loadSavedSession(
+    payload: PersistedSearchPayload,
+    replace: (payload: SearchSessionPayload) => void
   ): void;
   persistSearch(payload: SearchSnapshot): void;
   updateEnrichment(patch: SearchCacheBrowserState): void;
@@ -52,17 +72,42 @@ const defaultCache: SearchSessionCache = {
   get: getLastSearch,
   save: saveLastSearch,
   updateEnrichment: updateLastSearchEnrichment,
+  getPending: getPendingLastSearch,
+  markPending: markLastSearchPending,
+  acknowledge: acknowledgeLastSearchSync,
 };
 
-function toResumeCard(payload: SearchSessionPayload, updatedAt: string): SearchResumeCardData {
+function toResumeCard(payload: SearchSessionPayload): SearchResumeCardData | null {
+  const updatedAt = timestampToISOString(payload.timestamp);
+  if (!updatedAt) return null;
+
   return {
-    industry: payload.industry,
+    businessType: payload.businessType,
     city: payload.city,
     country: payload.country,
     resultCount: payload.results.length,
     updatedAt,
     payload,
   };
+}
+
+function durableSnapshot(payload: SearchSessionPayload): PersistedSearchPayload | null {
+  return decodePersistedSearchPayload(payload);
+}
+
+function browserStateForMatchingSnapshot(
+  accepted: PersistedSearchPayload,
+  local: SearchSessionPayload | null
+): SearchCacheBrowserState {
+  const localSnapshot = local ? durableSnapshot(local) : null;
+  if (!localSnapshot || !hasSameSearchSnapshotIdentity(accepted, localSnapshot)) return {};
+  return decodeSearchCacheBrowserState(local);
+}
+
+function decodeServerResponse(value: unknown): PersistedSearchPayload | null {
+  if (!value || typeof value !== 'object' || !('data' in value)) return null;
+  const data = (value as { data?: unknown }).data;
+  return data ? decodePersistedSearchPayload(data) : null;
 }
 
 export function createSearchSessionClient(
@@ -76,53 +121,154 @@ export function createSearchSessionClient(
     return window.sessionStorage;
   };
 
+  const acceptServerSnapshot = (accepted: PersistedSearchPayload): SearchSessionPayload => {
+    const local = cache.get();
+    const localSnapshot = local ? durableSnapshot(local) : null;
+    cache.acknowledge(accepted);
+
+    if (!local || !localSnapshot) {
+      cache.save(accepted);
+      return accepted;
+    }
+
+    const order = comparePersistedSearchPayloads(accepted, localSnapshot);
+    if (order < 0) {
+      cache.markPending(localSnapshot);
+      return local;
+    }
+    if (order === 0) return local;
+
+    const reconciled = {
+      ...accepted,
+      ...browserStateForMatchingSnapshot(accepted, local),
+    };
+    cache.save(reconciled);
+    return reconciled;
+  };
+
+  const postSnapshot = async (snapshot: PersistedSearchPayload) => {
+    try {
+      const response = await fetcher(LAST_SEARCH_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(snapshot),
+      });
+      if (!response.ok) return null;
+      return decodeServerResponse(await response.json());
+    } catch {
+      return null;
+    }
+  };
+
+  const flushPendingWrite = async (): Promise<SearchSessionPayload | null> => {
+    let lastReconciled: SearchSessionPayload | null = null;
+
+    for (let attempt = 0; attempt < MAX_CONSECUTIVE_PENDING_WRITES; attempt += 1) {
+      const pending = cache.getPending();
+      if (!pending) return lastReconciled;
+
+      const accepted = await postSnapshot(pending);
+      if (!accepted) return lastReconciled;
+      lastReconciled = acceptServerSnapshot(accepted);
+
+      const nextPending = cache.getPending();
+      if (
+        nextPending &&
+        hasSameSearchSnapshotIdentity(nextPending, pending) &&
+        comparePersistedSearchPayloads(accepted, pending) < 0
+      ) {
+        return lastReconciled;
+      }
+    }
+
+    return lastReconciled;
+  };
+
+  const queueDurableWrite = (payload: PersistedSearchPayload) => {
+    cache.save(payload);
+    cache.markPending(payload);
+    void flushPendingWrite();
+  };
+
   return {
     readLocalResume() {
       const cached = cache.get();
-      if (!cached) return null;
-      return toResumeCard(cached, new Date(cached.timestamp).toISOString());
+      return cached ? toResumeCard(cached) : null;
     },
 
-    async fetchServerResumeIfLocalMissing() {
-      if (cache.get()) return null;
+    async reconcileServerResume() {
+      const pendingResult = await flushPendingWrite();
+      if (pendingResult && !cache.getPending()) return toResumeCard(pendingResult);
 
+      let serverSnapshot: PersistedSearchPayload | null = null;
+      let serverReachable = false;
       try {
         const response = await fetcher(LAST_SEARCH_ENDPOINT);
-        if (!response.ok) return null;
-        const { data } = (await response.json()) as {
-          data: (PersistedSearchPayload & { updatedAt: string }) | null;
-        };
-        if (!data) return null;
-        return toResumeCard(data, data.updatedAt);
+        if (response.ok) {
+          serverReachable = true;
+          serverSnapshot = decodeServerResponse(await response.json());
+        }
       } catch {
-        return null;
+        // The validated browser snapshot remains resumable while offline.
       }
+
+      const local = cache.get();
+      const localSnapshot = local ? durableSnapshot(local) : null;
+      if (!serverReachable) return local ? toResumeCard(local) : null;
+
+      if (!serverSnapshot) {
+        if (!localSnapshot || !local) return null;
+        cache.markPending(localSnapshot);
+        const accepted = await flushPendingWrite();
+        return toResumeCard(accepted ?? local);
+      }
+
+      if (!localSnapshot || !local) {
+        return toResumeCard(acceptServerSnapshot(serverSnapshot));
+      }
+
+      const order = comparePersistedSearchPayloads(localSnapshot, serverSnapshot);
+      if (order <= 0) {
+        return toResumeCard(acceptServerSnapshot(serverSnapshot));
+      }
+
+      cache.markPending(localSnapshot);
+      const accepted = await flushPendingWrite();
+      return toResumeCard(accepted ?? local);
     },
 
-    isResumeDismissed() {
-      return getTabStorage()?.getItem(RESUME_DISMISSED_KEY) === '1';
+    isResumeDismissed(payload) {
+      const dismissedSnapshot = parsePersistedSearchPayload(
+        getTabStorage()?.getItem(RESUME_DISMISSED_KEY) ?? ''
+      );
+      const currentSnapshot = decodePersistedSearchPayload(payload);
+      return dismissedSnapshot && currentSnapshot
+        ? hasSameSearchSnapshotIdentity(dismissedSnapshot, currentSnapshot)
+        : false;
     },
 
-    dismissResume() {
-      getTabStorage()?.setItem(RESUME_DISMISSED_KEY, '1');
+    dismissResume(payload) {
+      const canonicalPayload = decodePersistedSearchPayload(payload);
+      if (!canonicalPayload) return;
+      getTabStorage()?.setItem(RESUME_DISMISSED_KEY, JSON.stringify(canonicalPayload));
     },
 
-    applySnapshot(payload, hydrate) {
+    replaceSession(payload, replace) {
       cache.save(payload);
-      hydrate(payload);
+      replace(payload);
+    },
+
+    loadSavedSession(payload, replace) {
+      const promoted = decodePersistedSearchPayload({ ...payload, timestamp: Date.now() });
+      if (!promoted) return;
+      queueDurableWrite(promoted);
+      replace(promoted);
     },
 
     persistSearch(payload) {
-      cache.save(payload);
-      try {
-        void fetcher(LAST_SEARCH_ENDPOINT, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        }).catch(() => {});
-      } catch {
-        // Local persistence is authoritative for this tab; server sync is best effort.
-      }
+      const persistedPayload = decodePersistedSearchPayload({ ...payload, timestamp: Date.now() });
+      if (!persistedPayload) return;
+      queueDurableWrite(persistedPayload);
     },
 
     updateEnrichment(patch) {
@@ -135,19 +281,18 @@ const browserSearchSessionClient = createSearchSessionClient();
 
 interface UseSearchSessionPersistenceOptions {
   isSearchView: boolean;
-  onHydrate: (payload: SearchSessionPayload) => void;
+  onReplaceSession: (payload: SearchSessionPayload) => void;
   onLocalResumeFound: () => void;
   client?: SearchSessionClient;
 }
 
 export function useSearchSessionPersistence({
   isSearchView,
-  onHydrate,
+  onReplaceSession,
   onLocalResumeFound,
   client = browserSearchSessionClient,
 }: UseSearchSessionPersistenceOptions) {
   const [resumeCard, setResumeCard] = useState<SearchResumeCardData | null>(null);
-  const [resumeDismissed, setResumeDismissed] = useState(() => client.isResumeDismissed());
   useEffect(() => {
     const localResume = client.readLocalResume();
     if (!localResume) return;
@@ -168,8 +313,8 @@ export function useSearchSessionPersistence({
     if (!isSearchView) return;
     let cancelled = false;
 
-    void client.fetchServerResumeIfLocalMissing().then((serverResume) => {
-      if (!cancelled && serverResume) setResumeCard(serverResume);
+    void client.reconcileServerResume().then((reconciledResume) => {
+      if (!cancelled && reconciledResume) setResumeCard(reconciledResume);
     });
 
     return () => {
@@ -177,23 +322,33 @@ export function useSearchSessionPersistence({
     };
   }, [client, isSearchView]);
 
-  const applySnapshot = useCallback(
+  const resumeDismissed = resumeCard ? client.isResumeDismissed(resumeCard.payload) : false;
+
+  const replaceSession = useCallback(
     (payload: SearchSessionPayload) => {
-      client.applySnapshot(payload, onHydrate);
+      client.replaceSession(payload, onReplaceSession);
       setResumeCard(null);
     },
-    [client, onHydrate]
+    [client, onReplaceSession]
   );
 
   const resumeLastSearch = useCallback(() => {
-    if (resumeCard) applySnapshot(resumeCard.payload);
-  }, [applySnapshot, resumeCard]);
+    if (resumeCard) replaceSession(resumeCard.payload);
+  }, [replaceSession, resumeCard]);
+
+  const loadSavedSession = useCallback(
+    (payload: PersistedSearchPayload) => {
+      client.loadSavedSession(payload, onReplaceSession);
+      setResumeCard(null);
+    },
+    [client, onReplaceSession]
+  );
 
   const dismissResume = useCallback(() => {
-    client.dismissResume();
-    setResumeDismissed(true);
+    if (!resumeCard) return;
+    client.dismissResume(resumeCard.payload);
     setResumeCard(null);
-  }, [client]);
+  }, [client, resumeCard]);
 
   const persistSearch = useCallback(
     (payload: SearchSnapshot) => client.persistSearch(payload),
@@ -209,7 +364,7 @@ export function useSearchSessionPersistence({
     resumeCard,
     resumeDismissed,
     resumeLastSearch,
-    loadSavedSession: applySnapshot,
+    loadSavedSession,
     dismissResume,
     persistSearch,
     persistEnrichment,

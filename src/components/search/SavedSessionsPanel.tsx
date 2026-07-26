@@ -1,21 +1,20 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { BookmarkCheck, Loader2, MapPin, Play, Trash2, X, Library } from 'lucide-react';
+import {
+  BookmarkCheck,
+  CircleAlert,
+  Library,
+  Loader2,
+  MapPin,
+  Play,
+  Trash2,
+  X,
+} from 'lucide-react';
 import { toast } from 'sonner';
-import { INDUSTRY_TYPES } from '@/lib/constants';
+import type { SavedSessionMember, SavedSessionSummary } from '@/lib/business/saved-sessions-store';
+import { getBusinessTypeLabel } from '@/lib/constants';
 import type { PersistedSearchPayload } from '@/lib/business/search-snapshot';
-
-interface SavedSessionSummary {
-  id: string;
-  name: string;
-  industry: string;
-  city: string;
-  country: string;
-  resultCount: number;
-  createdAt: string;
-  updatedAt: string;
-}
 
 interface Props {
   /** Called with the durable search payload once a session is loaded. */
@@ -65,16 +64,18 @@ export function SavedSessionsPanel({ onLoad }: Props) {
         toast.error(`Couldn't load "${name}"`);
         return;
       }
-      const data = (await res.json()) as {
-        session?: {
-          payload: PersistedSearchPayload;
-        };
-      };
-      if (!data.session?.payload) {
-        toast.error(`"${name}" is empty or corrupted`);
+      const data = (await res.json()) as { session?: SavedSessionMember };
+      const session = data.session;
+      if (!session) {
+        toast.error(`Couldn't load "${name}"`);
         return;
       }
-      onLoad(data.session.payload);
+      if (session.status === 'corrupt') {
+        setItems((previous) => previous.map((item) => (item.id === id ? session : item)));
+        toast.error(`"${name}" is unavailable because its saved data is corrupted`);
+        return;
+      }
+      onLoad(session.payload);
       setOpen(false);
       toast.success(`Loaded "${name}"`);
     } catch {
@@ -109,7 +110,7 @@ export function SavedSessionsPanel({ onLoad }: Props) {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="inline-flex items-center gap-2 rounded-lg border border-border-bright/50 bg-surface/60 px-3 py-1.5 text-xs font-medium text-white/75 backdrop-blur-sm transition-all hover:border-sky-400/50 hover:bg-surface-hover/60 hover:text-white"
+        className="inline-flex items-center gap-2 rounded-lg border border-border-bright/50 bg-surface/60 px-3 py-1.5 text-xs font-medium text-white/75 backdrop-blur-sm transition-colors hover:border-sky-400/50 hover:bg-surface-hover/60 hover:text-white"
         title="Open your saved sessions library"
       >
         <Library className="h-3.5 w-3.5" />
@@ -158,50 +159,64 @@ export function SavedSessionsPanel({ onLoad }: Props) {
                 </div>
               ) : (
                 <ul className="divide-y divide-border-bright/30">
-                  {items.map((s) => {
-                    const industryLabel =
-                      INDUSTRY_TYPES.find((t) => t.id === s.industry)?.label ?? s.industry;
-                    const isBusy = busyId === s.id;
+                  {items.map((session) => {
+                    const isBusy = busyId === session.id;
+                    const isCorrupt = session.status === 'corrupt';
                     return (
                       <li
-                        key={s.id}
+                        key={session.id}
                         className="flex items-center gap-3 px-5 py-3 transition-colors hover:bg-surface-hover/30"
                       >
                         <div className="min-w-0 flex-1">
                           <div className="mb-0.5 truncate text-sm font-semibold text-white">
-                            {s.name}
+                            {session.name}
                           </div>
-                          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px] text-white/55">
-                            <span className="inline-flex items-center gap-1">
-                              <MapPin className="h-3 w-3" />
-                              {industryLabel} · {s.city}
-                            </span>
-                            <span className="text-white/30">·</span>
-                            <span>
-                              {s.resultCount} lead{s.resultCount === 1 ? '' : 's'}
-                            </span>
-                            <span className="text-white/30">·</span>
-                            <span>{formatTimeAgo(s.updatedAt)}</span>
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => handleLoad(s.id, s.name)}
-                          disabled={isBusy}
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-sky-400/60 bg-sky-500/20 px-3 py-1.5 text-xs font-medium text-sky-100 transition-colors hover:bg-sky-500/30 disabled:opacity-50"
-                        >
-                          {isBusy ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
+                          {isCorrupt ? (
+                            <div className="space-y-1 text-[11px] text-amber-200/80">
+                              <div className="inline-flex items-center gap-1.5 font-medium">
+                                <CircleAlert className="h-3 w-3" aria-hidden="true" />
+                                Unavailable
+                              </div>
+                              <p className="text-white/55">
+                                {session.message} Delete it, then run and save the search again.
+                              </p>
+                            </div>
                           ) : (
-                            <Play className="h-3 w-3" />
+                            <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[11px] text-white/55">
+                              <span className="inline-flex items-center gap-1">
+                                <MapPin className="h-3 w-3" aria-hidden="true" />
+                                {getBusinessTypeLabel(session.businessType)} · {session.city}
+                              </span>
+                              <span className="text-white/30">·</span>
+                              <span>
+                                {session.resultCount} lead{session.resultCount === 1 ? '' : 's'}
+                              </span>
+                              <span className="text-white/30">·</span>
+                              <span>{formatTimeAgo(session.updatedAt)}</span>
+                            </div>
                           )}
-                          Load
-                        </button>
+                        </div>
+                        {!isCorrupt && (
+                          <button
+                            type="button"
+                            onClick={() => handleLoad(session.id, session.name)}
+                            disabled={isBusy}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-sky-400/60 bg-sky-500/20 px-3 py-1.5 text-xs font-medium text-sky-100 transition-colors hover:bg-sky-500/30 disabled:opacity-50"
+                          >
+                            {isBusy ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Play className="h-3 w-3" />
+                            )}
+                            Load
+                          </button>
+                        )}
                         <button
                           type="button"
-                          onClick={() => handleDelete(s.id, s.name)}
+                          onClick={() => handleDelete(session.id, session.name)}
                           disabled={isBusy}
                           className="inline-flex items-center rounded-lg border border-rose-500/30 bg-rose-500/[0.06] p-2 text-rose-300/80 transition-colors hover:border-rose-500/50 hover:bg-rose-500/[0.12] disabled:opacity-50"
+                          aria-label={`Delete "${session.name}"`}
                           title="Delete"
                         >
                           <Trash2 className="h-3.5 w-3.5" />

@@ -1,6 +1,5 @@
-import { NextRequest } from 'next/server';
-import { auth } from '@/lib/auth';
 import { deleteSavedSession, getSavedSession } from '@/lib/business/saved-sessions-store';
+import { requireRouteUserId, routeErrorResponse } from '@/lib/route-utils';
 
 /**
  * /api/business/saved-sessions/[id] — single-session endpoints.
@@ -16,40 +15,34 @@ interface Params {
   params: Promise<{ id: string }>;
 }
 
-export async function GET(_request: NextRequest, { params }: Params) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-      status: 401,
-      headers: { 'Content-Type': 'application/json' },
-    });
+export async function GET(_request: Request, { params }: Params) {
+  try {
+    const userId = await requireRouteUserId();
+    const { id } = await params;
+    const record = await getSavedSession(userId, id);
+
+    if (!record) {
+      return Response.json({ error: 'Not found' }, { status: 404 });
+    }
+
+    return Response.json({ session: record });
+  } catch (error) {
+    return routeErrorResponse(error, 'Failed to fetch saved session');
   }
-  const { id } = await params;
-  const record = await getSavedSession(session.user.id, id);
-  if (!record) {
-    return new Response(JSON.stringify({ error: 'Not found' }), {
-      status: 404,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }
-  return Response.json({ session: record });
 }
 
-export async function DELETE(_request: NextRequest, { params }: Params) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-      status: 401,
-      headers: { 'Content-Type': 'application/json' },
-    });
+export async function DELETE(_request: Request, { params }: Params) {
+  try {
+    const userId = await requireRouteUserId();
+    const { id } = await params;
+    const deleted = await deleteSavedSession(userId, id);
+
+    if (!deleted) {
+      return Response.json({ error: 'Not found' }, { status: 404 });
+    }
+
+    return Response.json({ ok: true });
+  } catch (error) {
+    return routeErrorResponse(error, 'Failed to delete saved session');
   }
-  const { id } = await params;
-  const ok = await deleteSavedSession(session.user.id, id);
-  if (!ok) {
-    return new Response(JSON.stringify({ error: 'Not found' }), {
-      status: 404,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }
-  return Response.json({ ok: true });
 }

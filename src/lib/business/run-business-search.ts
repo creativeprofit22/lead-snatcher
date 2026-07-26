@@ -107,6 +107,7 @@ export function applyBusinessSearchResponse(
   const cachePayload: SearchSnapshot = {
     version: SEARCH_SNAPSHOT_VERSION,
     results,
+    businessType: input.businessType,
     industry: input.cacheIndustry,
     city: input.city,
     country: input.country,
