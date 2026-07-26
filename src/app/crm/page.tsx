@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { useState, useSyncExternalStore, useCallback, useMemo } from 'react';
 import { Filter } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -13,20 +13,58 @@ import {
   LeadsTable,
   KanbanBoard,
   FilterSidebar,
-  defaultFilters,
   TagManager,
   BulkActions,
 } from '@/components/crm';
-import type { TabValue, FilterState, ViewMode } from '@/components/crm';
+import type { TabValue, ViewMode } from '@/components/crm';
 import type { TagMutationResult } from '@/components/crm/TagManager';
 import { LeadDetailModal } from '@/components/leads';
+import { patchLeadEditableFields } from '@/components/leads/LeadDetailModal.client';
 import { TaskSlideOver } from '@/components/tasks';
 import { useCrmTags } from '@/lib/hooks/useCrmTags';
+import { useCrmLeadsController } from '@/lib/hooks/useCrmLeadsController';
 import { CrmTasksProvider } from '@/lib/hooks/useCrmTasks';
-import type { Lead, PipelineStats, LeadStatus } from '@/types';
+import { useVisibleLeadSelection } from '@/lib/hooks/useVisibleLeadSelection';
+import { LEAD_STATUS_METADATA, PIPELINE_LEAD_STATUS_VALUES } from '@/lib/lead-status';
+import {
+  defaultLeadListQuery,
+  type LeadListFilters,
+  type LeadListUiSortField,
+} from '@/lib/crm-lead-query';
+import type { Lead, LeadStatus } from '@/types';
 
 // LocalStorage key for view preference
 const VIEW_MODE_KEY = 'crm-view-mode';
+const VIEW_MODE_CHANGE_EVENT = 'crm-view-mode-change';
+
+function getStoredViewMode(): ViewMode {
+  if (typeof window === 'undefined') return 'list';
+
+  const savedViewMode = localStorage.getItem(VIEW_MODE_KEY);
+  return savedViewMode === 'kanban' ? 'kanban' : 'list';
+}
+
+function subscribeToStoredViewMode(onStoreChange: () => void): () => void {
+  window.addEventListener('storage', onStoreChange);
+  window.addEventListener(VIEW_MODE_CHANGE_EVENT, onStoreChange);
+
+  return () => {
+    window.removeEventListener('storage', onStoreChange);
+    window.removeEventListener(VIEW_MODE_CHANGE_EVENT, onStoreChange);
+  };
+}
+
+const TAB_STATUS_SCOPES: Partial<Record<TabValue, { label: string; statuses: LeadStatus[] }>> = {
+  won: { label: 'Won', statuses: ['won'] },
+  lost: { label: 'Lost', statuses: ['lost'] },
+  pipeline: { label: 'Pipeline', statuses: PIPELINE_LEAD_STATUS_VALUES },
+};
+
+function getEffectiveLeadListQuery(filters: LeadListFilters, activeTab: TabValue): LeadListFilters {
+  const statusScope = TAB_STATUS_SCOPES[activeTab];
+
+  return statusScope ? { ...filters, statuses: [...statusScope.statuses] } : filters;
+}
 
 export default function CRMPage() {
   return (
@@ -42,125 +80,51 @@ function CRMPageContent() {
   const [searchQuery, setSearchQuery] = useState('');
 
   // View mode state with LocalStorage persistence
-  const [viewMode, setViewMode] = useState<ViewMode>('list');
+  const viewMode = useSyncExternalStore<ViewMode>(
+    subscribeToStoredViewMode,
+    getStoredViewMode,
+    () => 'list'
+  );
 
-  // Data state
-  const [leads, setLeads] = useState<Lead[]>([]);
-  const [stats, setStats] = useState<PipelineStats | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const leadsRequestVersion = useRef(0);
   const tagCatalog = useCrmTags();
 
   // Filter state
-  const [filters, setFilters] = useState<FilterState>(defaultFilters);
+  const [filters, setFilters] = useState<LeadListFilters>(defaultLeadListQuery);
   const [isFilterSidebarOpen, setIsFilterSidebarOpen] = useState(false);
+  const statusScope = TAB_STATUS_SCOPES[activeTab];
+  const effectiveQuery = useMemo(
+    () => getEffectiveLeadListQuery(filters, activeTab),
+    [activeTab, filters]
+  );
+  const {
+    leads,
+    leadsLoading: isLoading,
+    leadsError,
+    stats,
+    statsLoading,
+    statsError,
+    refreshLeads: fetchLeads,
+    refreshLeadsForQuery: fetchLeadsForQuery,
+    refreshStats: fetchStats,
+    replaceLead,
+    setLeadStatus,
+    removeLeadIds,
+  } = useCrmLeadsController(effectiveQuery);
+  const hasActiveFilters =
+    filters.statuses.length > 0 ||
+    filters.industries.length > 0 ||
+    filters.tags.length > 0 ||
+    filters.minScore > 0 ||
+    filters.maxScore < 100 ||
+    filters.followUp !== 'all';
 
   // Modal state
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [isTagManagerOpen, setIsTagManagerOpen] = useState(false);
   const [isTaskSlideOverOpen, setIsTaskSlideOverOpen] = useState(false);
-
-  // Bulk selection state
-  const [selectedLeadIds, setSelectedLeadIds] = useState<Set<string>>(new Set());
-
-  // Load view mode from LocalStorage on mount
-  useEffect(() => {
-    const savedViewMode = localStorage.getItem(VIEW_MODE_KEY) as ViewMode | null;
-    if (savedViewMode && (savedViewMode === 'list' || savedViewMode === 'kanban')) {
-      setViewMode(savedViewMode);
-    }
-  }, []);
-
-  // Handle view mode change with LocalStorage persistence
-  const handleViewModeChange = useCallback((mode: ViewMode) => {
-    setViewMode(mode);
-    localStorage.setItem(VIEW_MODE_KEY, mode);
-  }, []);
-
-  // Fetch leads with an explicit filter snapshot so mutations cannot reuse a deleted tag ID.
-  const fetchLeadsForFilters = useCallback(
-    async (requestedFilters: FilterState) => {
-      const requestVersion = ++leadsRequestVersion.current;
-      setIsLoading(true);
-      try {
-        const params = new URLSearchParams();
-
-        // Tab-based status filtering
-        if (activeTab === 'won') {
-          params.set('statuses', 'won');
-        } else if (activeTab === 'lost') {
-          params.set('statuses', 'lost');
-        } else if (activeTab === 'pipeline') {
-          params.set('statuses', 'contacted,called,proposal_sent,negotiating');
-        } else if (requestedFilters.statuses.length > 0) {
-          params.set('statuses', requestedFilters.statuses.join(','));
-        }
-
-        if (requestedFilters.scoreRange.min > 0) {
-          params.set('minScore', requestedFilters.scoreRange.min.toString());
-        }
-        if (requestedFilters.scoreRange.max < 100) {
-          params.set('maxScore', requestedFilters.scoreRange.max.toString());
-        }
-        if (requestedFilters.industries.length > 0) {
-          params.set('industries', requestedFilters.industries.join(','));
-        }
-        if (requestedFilters.tags.length > 0) {
-          params.set('tags', requestedFilters.tags.join(','));
-        }
-        if (requestedFilters.followUp !== 'all') {
-          params.set('followUp', requestedFilters.followUp);
-        }
-
-        params.set('sortBy', requestedFilters.sortBy);
-        params.set('sortOrder', requestedFilters.sortOrder);
-
-        const response = await fetch(`/api/leads?${params}`);
-        if (response.ok && requestVersion === leadsRequestVersion.current) {
-          const data = await response.json();
-          const nextLeads = data.leads || [];
-          setLeads(nextLeads);
-          setSelectedLead((current) => {
-            if (!current) return null;
-            return nextLeads.find((lead: Lead) => lead.id === current.id) || current;
-          });
-        }
-      } catch {
-        if (requestVersion === leadsRequestVersion.current) {
-          toast.error('Failed to load leads');
-        }
-      } finally {
-        if (requestVersion === leadsRequestVersion.current) {
-          setIsLoading(false);
-        }
-      }
-    },
-    [activeTab]
-  );
-
-  const fetchLeads = useCallback(
-    () => fetchLeadsForFilters(filters),
-    [fetchLeadsForFilters, filters]
-  );
-
-  // Fetch stats
-  const fetchStats = useCallback(async () => {
-    try {
-      const response = await fetch('/api/leads/stats');
-      if (response.ok) {
-        const data = await response.json();
-        setStats(data.stats);
-      }
-    } catch {
-      console.error('Failed to fetch stats');
-    }
-  }, []);
-
-  // Load data on mount and when filters change
-  useEffect(() => {
-    fetchLeads();
-    fetchStats();
-  }, [fetchLeads, fetchStats]);
+  const displayedSelectedLead = selectedLead
+    ? (leads.find((lead) => lead.id === selectedLead.id) ?? selectedLead)
+    : null;
 
   // Filter leads by search query
   const filteredLeads = useMemo(() => {
@@ -175,16 +139,48 @@ function CRMPageContent() {
         lead.notes?.toLowerCase().includes(query)
     );
   }, [leads, searchQuery]);
+  const visibleLeadIds = useMemo(() => filteredLeads.map((lead) => lead.id), [filteredLeads]);
+  const selection = useVisibleLeadSelection(visibleLeadIds, viewMode === 'list' && !isLoading);
+
+  // View, tab, and server-filter changes create a new result scope.
+  const handleViewModeChange = useCallback(
+    (mode: ViewMode) => {
+      if (mode !== viewMode) selection.clearAll();
+      localStorage.setItem(VIEW_MODE_KEY, mode);
+      window.dispatchEvent(new Event(VIEW_MODE_CHANGE_EVENT));
+    },
+    [selection, viewMode]
+  );
+
+  const handleTabChange = useCallback(
+    (tab: TabValue) => {
+      selection.clearAll();
+      setActiveTab(tab);
+      if (TAB_STATUS_SCOPES[tab]) {
+        setFilters((currentFilters) =>
+          currentFilters.statuses.length > 0 ? { ...currentFilters, statuses: [] } : currentFilters
+        );
+      }
+    },
+    [selection]
+  );
+
+  const handleFiltersChange = useCallback(
+    (nextFilters: LeadListFilters) => {
+      selection.clearAll();
+      setFilters(nextFilters);
+    },
+    [selection]
+  );
 
   // Calculate metrics
   const metrics = useMemo(() => {
     const total = stats?.total || 0;
     const won = stats?.byStatus?.won || 0;
-    const inProgress =
-      (stats?.byStatus?.contacted || 0) +
-      (stats?.byStatus?.called || 0) +
-      (stats?.byStatus?.proposal_sent || 0) +
-      (stats?.byStatus?.negotiating || 0);
+    const inProgress = PIPELINE_LEAD_STATUS_VALUES.reduce(
+      (count, status) => count + (stats?.byStatus?.[status] || 0),
+      0
+    );
     const conversionRate = stats?.conversionRate || 0;
     return { total, won, inProgress, conversionRate };
   }, [stats]);
@@ -197,7 +193,8 @@ function CRMPageContent() {
       });
 
       if (response.ok) {
-        setLeads((prev) => prev.filter((lead) => lead.id !== leadId));
+        selection.removeIds([leadId]);
+        removeLeadIds([leadId]);
         await Promise.all([fetchStats(), tagCatalog.refetch()]);
         toast.success('Lead deleted');
       } else {
@@ -215,38 +212,19 @@ function CRMPageContent() {
 
   // Update lead from modal
   const handleLeadUpdate = (updatedLead: Lead) => {
-    setLeads((prev) => prev.map((lead) => (lead.id === updatedLead.id ? updatedLead : lead)));
+    const currentLead =
+      displayedSelectedLead?.id === updatedLead.id
+        ? displayedSelectedLead
+        : leads.find((lead) => lead.id === updatedLead.id);
+    const statusChanged = currentLead?.status !== updatedLead.status;
+
+    replaceLead(updatedLead);
     setSelectedLead(updatedLead);
-    fetchStats();
+
+    if (statusChanged) {
+      void Promise.all([fetchLeads(), fetchStats()]);
+    }
   };
-
-  // Bulk selection handlers
-  const handleToggleSelect = useCallback((leadId: string) => {
-    setSelectedLeadIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(leadId)) {
-        next.delete(leadId);
-      } else {
-        next.add(leadId);
-      }
-      return next;
-    });
-  }, []);
-
-  const handleSelectAll = useCallback(() => {
-    setSelectedLeadIds((prev) => {
-      const allSelected = filteredLeads.every((l) => prev.has(l.id));
-      if (allSelected) {
-        return new Set();
-      } else {
-        return new Set(filteredLeads.map((l) => l.id));
-      }
-    });
-  }, [filteredLeads]);
-
-  const handleClearSelection = useCallback(() => {
-    setSelectedLeadIds(new Set());
-  }, []);
 
   const handleBulkUpdate = useCallback(async () => {
     await Promise.all([fetchLeads(), fetchStats(), tagCatalog.refetch()]);
@@ -261,55 +239,68 @@ function CRMPageContent() {
 
       // Commit filter cleanup before issuing the authoritative leads refresh.
       if (nextFilters !== filters) {
+        selection.clearAll();
         setFilters(nextFilters);
       }
 
-      await Promise.all([tagCatalog.refetch(), fetchLeadsForFilters(nextFilters)]);
+      await Promise.all([
+        tagCatalog.refetch(),
+        fetchLeadsForQuery(getEffectiveLeadListQuery(nextFilters, activeTab)),
+      ]);
     },
-    [fetchLeadsForFilters, filters, tagCatalog]
+    [activeTab, fetchLeadsForQuery, filters, selection, tagCatalog]
   );
 
   // Handle sort change from table header
   const handleSortChange = useCallback(
-    (field: 'savedAt' | 'leadScore' | 'name' | 'nextFollowUpAt') => {
+    (field: LeadListUiSortField) => {
+      selection.clearAll();
       setFilters((prev) => ({
         ...prev,
         sortBy: field,
         sortOrder: prev.sortBy === field && prev.sortOrder === 'desc' ? 'asc' : 'desc',
       }));
     },
-    []
+    [selection]
   );
 
-  // Get selected leads for BulkActions
+  // Bulk actions can only receive records from the current visible list result.
   const selectedLeads = useMemo(() => {
-    return leads.filter((l) => selectedLeadIds.has(l.id));
-  }, [leads, selectedLeadIds]);
+    return filteredLeads.filter((lead) => selection.selectedIds.has(lead.id));
+  }, [filteredLeads, selection.selectedIds]);
+
+  const handleBulkDelete = useCallback(
+    (deletedLeadIds: readonly string[]) => {
+      selection.removeIds(deletedLeadIds);
+      removeLeadIds(deletedLeadIds);
+    },
+    [removeLeadIds, selection]
+  );
 
   // Handle status change from Kanban drag & drop
   const handleStatusChange = async (leadId: string, newStatus: LeadStatus) => {
-    // Optimistically update UI
-    setLeads((prev) =>
-      prev.map((lead) => (lead.id === leadId ? { ...lead, status: newStatus } : lead))
+    const previousLead = leads.find((lead) => lead.id === leadId);
+
+    // Optimistically update UI while retaining the previous DTO for rollback.
+    setLeadStatus(leadId, newStatus);
+    setSelectedLead((current) =>
+      current?.id === leadId ? { ...current, status: newStatus } : current
     );
 
     try {
-      const response = await fetch(`/api/leads/${leadId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: newStatus }),
-      });
+      const updatedLead = await patchLeadEditableFields(leadId, { status: newStatus });
+      replaceLead(updatedLead);
+      setSelectedLead((current) => (current?.id === leadId ? updatedLead : current));
 
-      if (response.ok) {
-        fetchStats();
-        toast.success(`Status updated to ${newStatus.replace('_', ' ')}`);
-      } else {
-        // Revert on failure
-        fetchLeads();
-        toast.error('Failed to update status');
-      }
+      await Promise.all([fetchLeads(), fetchStats()]);
+      toast.success(`Status updated to ${LEAD_STATUS_METADATA[newStatus].label}`);
     } catch {
-      fetchLeads();
+      if (previousLead) {
+        replaceLead(previousLead);
+        setSelectedLead((current) => (current?.id === leadId ? previousLead : current));
+      }
+
+      void fetchLeads();
       toast.error('Failed to update status');
     }
   };
@@ -327,16 +318,32 @@ function CRMPageContent() {
 
       {/* Tabs */}
       <div className="mt-6">
-        <CRMTabs activeTab={activeTab} onTabChange={setActiveTab}>
+        <CRMTabs activeTab={activeTab} onTabChange={handleTabChange}>
           <TabsContent value={activeTab} className="mt-6">
             {/* Metrics */}
-            <MetricsRow
-              total={metrics.total}
-              inProgress={metrics.inProgress}
-              won={metrics.won}
-              conversionRate={metrics.conversionRate}
-              isLoading={isLoading && !stats}
-            />
+            {statsError ? (
+              <div
+                role="alert"
+                className="mb-6 rounded-lg border border-white/15 bg-card p-4 text-sm text-gray-300"
+              >
+                <p>Couldn&apos;t load CRM metrics.</p>
+                <button
+                  type="button"
+                  onClick={() => void fetchStats()}
+                  className="mt-2 font-medium text-white underline underline-offset-4 hover:text-gray-200"
+                >
+                  Retry metrics
+                </button>
+              </div>
+            ) : (
+              <MetricsRow
+                total={metrics.total}
+                inProgress={metrics.inProgress}
+                won={metrics.won}
+                conversionRate={metrics.conversionRate}
+                isLoading={statsLoading && !stats}
+              />
+            )}
 
             {/* Tasks Widget - Due Today */}
             <TasksWidget onOpenSlideOver={() => setIsTaskSlideOverOpen(true)} />
@@ -344,85 +351,86 @@ function CRMPageContent() {
             {/* Mobile Filter Button */}
             <div className="lg:hidden mb-4">
               <button
+                type="button"
                 onClick={() => setIsFilterSidebarOpen(true)}
+                aria-expanded={isFilterSidebarOpen}
+                aria-controls="crm-filter-sidebar"
                 className="flex items-center gap-2 px-4 py-2 bg-white/5 border border-white/10 rounded-lg text-sm text-white hover:bg-white/10 transition-colors"
               >
                 <Filter className="w-4 h-4" />
                 Filters
-                {(filters.statuses.length > 0 ||
-                  filters.industries.length > 0 ||
-                  filters.tags.length > 0 ||
-                  filters.scoreRange.min > 0 ||
-                  filters.scoreRange.max < 100 ||
-                  filters.followUp !== 'all') && (
-                  <span className="w-2 h-2 rounded-full bg-white/50" />
-                )}
+                {hasActiveFilters && <span className="w-2 h-2 rounded-full bg-white/50" />}
               </button>
             </div>
 
             {/* Content with Sidebar */}
-            {viewMode === 'kanban' ? (
-              /* Kanban View - Full width */
-              <div>
+            <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+              <div className="lg:col-span-3">
                 {searchQuery && (
                   <div className="text-sm text-gray-500 mb-4">
                     Showing {filteredLeads.length} of {leads.length} leads
                   </div>
                 )}
-                <KanbanBoard
-                  leads={filteredLeads}
-                  isLoading={isLoading}
-                  onLeadClick={handleLeadClick}
-                  onDelete={handleDeleteLead}
-                  onStatusChange={handleStatusChange}
-                />
-              </div>
-            ) : (
-              /* List View with Sidebar */
-              <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-                {/* Main Content */}
-                <div className="lg:col-span-3">
-                  {searchQuery && (
-                    <div className="text-sm text-gray-500 mb-4">
-                      Showing {filteredLeads.length} of {leads.length} leads
-                    </div>
-                  )}
+                {leadsError ? (
+                  <div
+                    role="alert"
+                    className="rounded-lg border border-white/15 bg-card p-5 text-sm text-gray-300"
+                  >
+                    <p>Couldn&apos;t load leads for these filters.</p>
+                    <button
+                      type="button"
+                      onClick={() => void fetchLeads()}
+                      className="mt-2 font-medium text-white underline underline-offset-4 hover:text-gray-200"
+                    >
+                      Retry leads
+                    </button>
+                  </div>
+                ) : viewMode === 'kanban' ? (
+                  <KanbanBoard
+                    leads={filteredLeads}
+                    isLoading={isLoading}
+                    onLeadClick={handleLeadClick}
+                    onDelete={handleDeleteLead}
+                    onStatusChange={handleStatusChange}
+                  />
+                ) : (
                   <LeadsTable
                     leads={filteredLeads}
                     isLoading={isLoading}
                     onLeadClick={handleLeadClick}
                     onDelete={handleDeleteLead}
-                    selectedLeadIds={selectedLeadIds}
-                    onToggleSelect={handleToggleSelect}
-                    onSelectAll={handleSelectAll}
+                    selectedLeadIds={selection.selectedIds}
+                    onToggleSelect={selection.toggle}
+                    onSelectAllVisible={selection.selectAllVisible}
+                    onDeselectVisible={selection.deselectVisible}
                     sortBy={filters.sortBy}
                     sortOrder={filters.sortOrder}
                     onSortChange={handleSortChange}
                   />
-                </div>
-
-                {/* Sidebar */}
-                <div className="lg:col-span-1">
-                  <FilterSidebar
-                    filters={filters}
-                    onFiltersChange={setFilters}
-                    isOpen={isFilterSidebarOpen}
-                    onClose={() => setIsFilterSidebarOpen(false)}
-                    leadCount={filteredLeads.length}
-                    onOpenTagManager={() => setIsTagManagerOpen(true)}
-                    tagCatalog={tagCatalog}
-                  />
-                </div>
+                )}
               </div>
-            )}
+
+              <div className="lg:col-span-1">
+                <FilterSidebar
+                  filters={filters}
+                  onFiltersChange={handleFiltersChange}
+                  isOpen={isFilterSidebarOpen}
+                  onClose={() => setIsFilterSidebarOpen(false)}
+                  leadCount={filteredLeads.length}
+                  statusScopeLabel={statusScope?.label}
+                  onOpenTagManager={() => setIsTagManagerOpen(true)}
+                  tagCatalog={tagCatalog}
+                />
+              </div>
+            </div>
           </TabsContent>
         </CRMTabs>
       </div>
 
       {/* Lead Detail Modal */}
       <LeadDetailModal
-        lead={selectedLead}
-        isOpen={!!selectedLead}
+        lead={displayedSelectedLead}
+        isOpen={!!displayedSelectedLead}
         onClose={() => setSelectedLead(null)}
         onUpdate={handleLeadUpdate}
       />
@@ -442,8 +450,9 @@ function CRMPageContent() {
       {selectedLeads.length > 0 && (
         <BulkActions
           selectedLeads={selectedLeads}
-          onClearSelection={handleClearSelection}
+          onClearSelection={selection.clearAll}
           onBulkUpdate={handleBulkUpdate}
+          onBulkDelete={handleBulkDelete}
           tagCatalog={tagCatalog}
         />
       )}

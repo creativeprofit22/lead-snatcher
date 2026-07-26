@@ -1,7 +1,7 @@
 'use client';
 
-import type { LeadResultTier } from '@/components/leads/LeadResultCard';
 import type { SearchResultFilters, SearchResultSort } from '@/lib/business/derive-search-results';
+import { getLeadScoreBand } from '@/lib/business/lead-score-band';
 import type { BusinessSearchResult } from '@/types';
 
 interface SearchResultsControlsProps {
@@ -12,11 +12,6 @@ interface SearchResultsControlsProps {
   onSortChange: (sort: SearchResultSort) => void;
   onFiltersChange: (filters: SearchResultFilters) => void;
 }
-
-export function getLeadResultTier(leadScore: number): LeadResultTier {
-  return leadScore >= 55 ? 'hot' : leadScore >= 35 ? 'mid' : 'cold';
-}
-
 export function SearchResultsControls({
   sortBy,
   filters,
@@ -121,7 +116,7 @@ function TierDistribution({
   results: readonly BusinessSearchResult[];
   total: number;
 }) {
-  const tiers = results.map((result) => getLeadResultTier(result.leadScore));
+  const tiers = results.map((result) => getLeadScoreBand(result.leadScore));
   const hot = tiers.filter((tier) => tier === 'hot').length;
   const mid = tiers.filter((tier) => tier === 'mid').length;
   const cold = tiers.filter((tier) => tier === 'cold').length;

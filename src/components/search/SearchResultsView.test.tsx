@@ -32,7 +32,6 @@ vi.mock('@/components/motion-primitives/sliding-number', () => ({
 }));
 
 vi.mock('./SearchResultsControls', () => ({
-  getLeadResultTier: (score: number) => (score >= 55 ? 'hot' : score >= 35 ? 'mid' : 'cold'),
   SearchResultsControls: ({
     filteredResults,
     totalResults,

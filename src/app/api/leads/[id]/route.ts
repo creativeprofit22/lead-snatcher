@@ -8,7 +8,7 @@ interface RouteContext {
   params: Promise<{ id: string }>;
 }
 
-// GET - Get single lead with contact logs
+// GET - Get a single lead in { lead }; use /api/leads/[id]/contact for contact history
 export async function GET(request: Request, context: RouteContext) {
   try {
     const session = await auth();
@@ -24,9 +24,6 @@ export async function GET(request: Request, context: RouteContext) {
         userId: session.user.id,
       },
       include: {
-        contactLogs: {
-          orderBy: { createdAt: 'desc' },
-        },
         tags: { include: { tag: true } },
       },
     });

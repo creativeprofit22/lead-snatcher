@@ -1,3 +1,4 @@
+import { LEAD_STATUS_OPTIONS } from '@/lib/lead-status';
 import type {
   IndustryTypeConfig,
   LeadStatusConfig,
@@ -75,17 +76,8 @@ export function getAllSearchQueries(industryType: IndustryType, countryCode: str
   return INDUSTRY_SEARCH_QUERIES[lang]?.[industryType] || [industryType.replace('_', ' ')];
 }
 
-// Lead status configuration - monochrome design
-export const LEAD_STATUSES: LeadStatusConfig[] = [
-  { id: 'new', label: 'New', color: '#9ca3af', bgColor: 'transparent' },
-  { id: 'contacted', label: 'Contacted', color: '#9ca3af', bgColor: 'transparent' },
-  { id: 'called', label: 'Called', color: '#9ca3af', bgColor: 'transparent' },
-  { id: 'proposal_sent', label: 'Proposal Sent', color: '#9ca3af', bgColor: 'transparent' },
-  { id: 'negotiating', label: 'Negotiating', color: '#9ca3af', bgColor: 'transparent' },
-  { id: 'won', label: 'Won', color: '#22c55e', bgColor: 'transparent' },
-  { id: 'lost', label: 'Lost', color: '#6b7280', bgColor: 'transparent' },
-  { id: 'not_interested', label: 'Not Interested', color: '#6b7280', bgColor: 'transparent' },
-];
+// Lead status configuration is projected from the canonical status metadata.
+export const LEAD_STATUSES = LEAD_STATUS_OPTIONS satisfies readonly LeadStatusConfig[];
 
 // Canonical product default used by UI and request validation.
 export const DEFAULT_COUNTRY_CODE = 'us';

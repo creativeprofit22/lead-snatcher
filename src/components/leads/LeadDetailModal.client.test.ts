@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
-import type { ContactLogEntry, Task } from '@/types';
+import type { ContactLogEntry, Lead, Task } from '@/types';
 import {
   createLeadContactLog,
   deleteLeadTask,
@@ -29,6 +29,32 @@ const task: Task = {
   leadId: null,
   lead: null,
   createdAt: '2026-07-25T10:00:00.000Z',
+};
+
+const lead: Lead = {
+  id: 'lead-1',
+  placeId: 'place-1',
+  name: 'Acme Dental',
+  address: null,
+  phone: null,
+  website: null,
+  rating: null,
+  reviewCount: null,
+  industryType: 'medical',
+  photoUrl: null,
+  mapsUrl: null,
+  leadScore: 50,
+  scoreBreakdown: null,
+  status: 'contacted',
+  notes: 'Call next week',
+  opportunities: [],
+  lastContactedAt: '2026-07-25T12:00:00.000Z',
+  nextFollowUpAt: '2026-08-01T12:00:00.000Z',
+  savedAt: '2026-07-25T10:00:00.000Z',
+  updatedAt: '2026-07-25T12:00:00.000Z',
+  tags: [],
+  popularTimesData: null,
+  popularTimesScrapedAt: null,
 };
 
 function response(data: unknown, ok = true): Response {
@@ -85,9 +111,9 @@ describe('LeadDetailModal client request contracts', () => {
     });
   });
 
-  test('patches only the supplied editable lead fields and ignores the response body', async () => {
+  test('patches only supplied fields and returns the authoritative lead envelope', async () => {
     const { fetchMock, jsonMock } = stubResponse({
-      lead: { id: 'server-lead' },
+      lead,
       message: 'Lead updated successfully',
     });
     const fields = {
@@ -96,16 +122,13 @@ describe('LeadDetailModal client request contracts', () => {
       nextFollowUpAt: '2026-08-01T12:00:00.000Z',
     };
 
-    await expect(patchLeadEditableFields('lead-1', fields)).resolves.toEqual({
-      successful: true,
-      data: null,
-    });
+    await expect(patchLeadEditableFields('lead-1', fields)).resolves.toEqual(lead);
     expect(fetchMock).toHaveBeenCalledWith('/api/leads/lead-1', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(fields),
     });
-    expect(jsonMock).not.toHaveBeenCalled();
+    expect(jsonMock).toHaveBeenCalledOnce();
   });
 
   test('posts and decodes a contact log', async () => {
@@ -161,10 +184,9 @@ describe('LeadDetailModal client request contracts', () => {
 });
 
 describe('LeadDetailModal client failure contracts', () => {
-  const operations = [
+  const resultOperations = [
     ['fetch contact logs', () => fetchLeadContactLogs('lead-1')],
     ['fetch tasks', () => fetchAllLeadTasks('lead-1')],
-    ['patch a lead', () => patchLeadEditableFields('lead-1', { notes: 'Notes' })],
     [
       'create a contact log',
       () =>
@@ -177,7 +199,7 @@ describe('LeadDetailModal client failure contracts', () => {
     ['delete a task', () => deleteLeadTask('task-1')],
   ] as const;
 
-  test.each(operations)(
+  test.each(resultOperations)(
     'returns explicit no-data failure when %s is non-OK',
     async (_name, run) => {
       const { jsonMock } = stubResponse({ error: 'Request failed' }, false);
@@ -186,6 +208,28 @@ describe('LeadDetailModal client failure contracts', () => {
       expect(jsonMock).not.toHaveBeenCalled();
     }
   );
+
+  test('throws one consistent client error for non-OK and malformed lead responses', async () => {
+    const { jsonMock } = stubResponse({ error: 'Request failed' }, false);
+
+    await expect(patchLeadEditableFields('lead-1', { notes: 'Notes' })).rejects.toThrow(
+      'Lead update request failed'
+    );
+    expect(jsonMock).not.toHaveBeenCalled();
+
+    stubResponse({ message: 'Missing lead envelope' });
+    await expect(patchLeadEditableFields('lead-1', { notes: 'Notes' })).rejects.toThrow(
+      'Lead update request failed'
+    );
+  });
+
+  test('rejects malformed lead DTOs inside an otherwise valid envelope', async () => {
+    stubResponse({ lead: { id: 'lead-1', status: 'contacted' } });
+
+    await expect(patchLeadEditableFields('lead-1', { status: 'contacted' })).rejects.toThrow(
+      'Lead update request failed'
+    );
+  });
 
   test('rejects task completion when the response is non-OK', async () => {
     const { jsonMock } = stubResponse({ error: 'Request failed' }, false);
@@ -197,7 +241,8 @@ describe('LeadDetailModal client failure contracts', () => {
   });
 
   test.each([
-    ...operations,
+    ...resultOperations,
+    ['patch a lead', () => patchLeadEditableFields('lead-1', { notes: 'Notes' })] as const,
     ['set task completion', () => setLeadTaskCompletion('task-1', null)] as const,
   ])('rejects when %s has a network failure', async (_name, run) => {
     const networkError = new Error('Network unavailable');

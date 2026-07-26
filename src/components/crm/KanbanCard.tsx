@@ -8,8 +8,10 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { TagBadge } from './TagBadge';
+import { getLeadScoreBand } from '@/lib/business/lead-score-band';
+import { formatWebsiteHostname } from '@/lib/website-display';
 import type { Lead } from '@/types';
+import { TagBadge } from './TagBadge';
 
 interface KanbanCardProps {
   lead: Lead;
@@ -19,6 +21,9 @@ interface KanbanCardProps {
 }
 
 export function KanbanCard({ lead, index, onLeadClick, onDelete }: KanbanCardProps) {
+  const websiteHostname = formatWebsiteHostname(lead.website);
+  const leadScoreBand = getLeadScoreBand(lead.leadScore);
+
   return (
     <Draggable draggableId={lead.id} index={index}>
       {(provided, snapshot) => (
@@ -69,10 +74,11 @@ export function KanbanCard({ lead, index, onLeadClick, onDelete }: KanbanCardPro
           {/* Score badge */}
           <div className="mt-2 flex items-center gap-2">
             <span
+              data-lead-score-band={leadScoreBand}
               className={`text-xs font-mono px-1.5 py-0.5 rounded ${
-                lead.leadScore >= 70
+                leadScoreBand === 'hot'
                   ? 'bg-green-500/20 text-green-400'
-                  : lead.leadScore >= 40
+                  : leadScoreBand === 'mid'
                     ? 'bg-yellow-500/20 text-yellow-400'
                     : 'bg-gray-500/20 text-gray-400'
               }`}
@@ -92,10 +98,10 @@ export function KanbanCard({ lead, index, onLeadClick, onDelete }: KanbanCardPro
                 <span className="truncate">{lead.phone}</span>
               </div>
             )}
-            {lead.website && (
+            {websiteHostname && (
               <div className="flex items-center gap-1.5 text-xs text-gray-500">
                 <Globe className="w-3 h-3" />
-                <span className="truncate">{new URL(lead.website).hostname}</span>
+                <span className="truncate">{websiteHostname}</span>
               </div>
             )}
             {lead.address && (

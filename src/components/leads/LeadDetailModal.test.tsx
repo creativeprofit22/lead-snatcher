@@ -91,6 +91,7 @@ vi.mock('./StatusSelector', () => ({
       Lead status
       <select value={value} onChange={(event) => onChange(event.target.value as LeadStatus)}>
         <option value="new">New</option>
+        <option value="contacted">Contacted</option>
         <option value="won">Won</option>
       </select>
     </label>
@@ -167,6 +168,11 @@ function requestUrl(input: RequestInfo | URL): string {
   return input.url;
 }
 
+function requestBody(body: BodyInit | null | undefined): string {
+  if (typeof body !== 'string') throw new Error('Expected a JSON request body');
+  return body;
+}
+
 interface StubApiOptions {
   contactLogs?: ContactLogEntry[];
   tasks?: Task[];
@@ -185,6 +191,18 @@ function stubApi({ contactLogs = [], tasks = [], mutation }: StubApiOptions = {}
       return mockResponse({ tasks });
     }
     if (mutation) return mutation(url, init ?? {});
+    if (method === 'PATCH' && url === '/api/leads/lead-1') {
+      const fields = JSON.parse(requestBody(init?.body)) as Partial<Lead>;
+      return mockResponse({
+        lead: {
+          ...baseLead,
+          ...fields,
+          lastContactedAt:
+            fields.status === 'contacted' ? '2026-07-25T12:00:00.000Z' : baseLead.lastContactedAt,
+          updatedAt: '2026-07-25T12:00:00.000Z',
+        },
+      });
+    }
 
     return mockResponse();
   });
@@ -341,22 +359,27 @@ describe('LeadDetailModal characterization', () => {
     expect(screen.getByDisplayValue('Positive')).toBeTruthy();
   });
 
-  test('wires StatusSelector and saves exact status and notes payloads with current onUpdate values', async () => {
+  test('publishes authoritative status and notes DTOs, including server contact timestamps', async () => {
     const fetchMock = stubApi();
     const onUpdate = vi.fn();
     renderModal({ onUpdate });
 
     fireEvent.change(screen.getByRole('combobox', { name: 'Lead status' }), {
-      target: { value: 'won' },
+      target: { value: 'contacted' },
     });
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith('/api/leads/lead-1', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: 'won' }),
+        body: JSON.stringify({ status: 'contacted' }),
       });
     });
-    expect(onUpdate).toHaveBeenCalledWith({ ...baseLead, status: 'won' });
+    expect(onUpdate).toHaveBeenCalledWith({
+      ...baseLead,
+      status: 'contacted',
+      lastContactedAt: '2026-07-25T12:00:00.000Z',
+      updatedAt: '2026-07-25T12:00:00.000Z',
+    });
 
     fireEvent.click(screen.getByRole('button', { name: 'Notes' }));
     const notesInput = screen.getByPlaceholderText('Add notes about this lead...');
@@ -374,7 +397,11 @@ describe('LeadDetailModal characterization', () => {
         body: JSON.stringify({ notes: 'Updated notes' }),
       });
     });
-    expect(onUpdate).toHaveBeenCalledWith({ ...baseLead, notes: 'Updated notes' });
+    expect(onUpdate).toHaveBeenCalledWith({
+      ...baseLead,
+      notes: 'Updated notes',
+      updatedAt: '2026-07-25T12:00:00.000Z',
+    });
     expect(onUpdate).toHaveBeenCalledTimes(2);
   });
 
@@ -612,7 +639,10 @@ describe('LeadDetailModal characterization', () => {
         fetchMock.mock.calls.filter(([, init]) => init?.method && init.method !== 'GET')
       ).toHaveLength(6);
     });
-    expect(toastError).toHaveBeenCalledTimes(2);
+    expect(toastError).toHaveBeenCalledTimes(5);
+    expect(toastError).toHaveBeenCalledWith('Failed to update status');
+    expect(toastError).toHaveBeenCalledWith('Failed to save follow-up');
+    expect(toastError).toHaveBeenCalledWith('Failed to save notes');
     expect(toastError).toHaveBeenCalledWith('Failed to complete task');
     expect(toastError).toHaveBeenCalledWith('Failed to delete task');
     expect(toastSuccess).not.toHaveBeenCalled();
@@ -684,6 +714,55 @@ describe('LeadDetailModal characterization', () => {
       fetchMock.mock.calls.filter(([, init]) => init?.method && init.method !== 'GET')
     ).toHaveLength(6);
     expect(invalidateCrmTasks).not.toHaveBeenCalled();
+  });
+
+  test('keeps lead B contact logs when lead A resolves later', async () => {
+    let resolveLeadAContacts!: (response: Response) => void;
+    const leadAContactsResponse = new Promise<Response>((resolve) => {
+      resolveLeadAContacts = resolve;
+    });
+    let resolveLeadBContacts!: (response: Response) => void;
+    const leadBContactsResponse = new Promise<Response>((resolve) => {
+      resolveLeadBContacts = resolve;
+    });
+    const leadB = {
+      ...baseLead,
+      id: 'lead-2',
+      placeId: 'place-2',
+      name: 'Beta Dental',
+    };
+    const leadAContact = { ...contactLog, id: 'contact-a', summary: 'Lead A contact' };
+    const leadBContact = { ...contactLog, id: 'contact-b', summary: 'Lead B contact' };
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url === '/api/leads/lead-1/contact') return leadAContactsResponse;
+      if (url === '/api/leads/lead-2/contact') return leadBContactsResponse;
+      if (url.startsWith('/api/tasks?')) return mockResponse({ tasks: [] });
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { rerender, onClose, onUpdate } = renderModal();
+    fireEvent.click(screen.getByRole('button', { name: 'Contacts (0)' }));
+    rerender(<LeadDetailModal lead={leadB} isOpen onClose={onClose} onUpdate={onUpdate} />);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/leads/lead-2/contact');
+    });
+    await act(async () => {
+      resolveLeadBContacts(mockResponse({ contactLogs: [leadBContact] }));
+    });
+    expect(await screen.findByText(leadBContact.summary)).toBeTruthy();
+
+    await act(async () => {
+      resolveLeadAContacts(mockResponse({ contactLogs: [leadAContact] }));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(leadBContact.summary)).toBeTruthy();
+      expect(screen.queryByText(leadAContact.summary)).toBeNull();
+    });
   });
 
   test('ignores an older lead-task response after a modal save refresh', async () => {
@@ -769,9 +848,15 @@ describe('LeadDetailModal follow-up date safety', () => {
 
   test('saves a date-only follow-up as the agreed ISO timestamp', async () => {
     const fetchMock = vi.mocked(fetch);
-    fetchMock.mockImplementation((_input, init) =>
-      Promise.resolve({ ok: init?.method === 'PATCH' } as Response)
-    );
+    fetchMock.mockImplementation((_input, init) => {
+      const fields = JSON.parse(requestBody(init?.body)) as Partial<Lead>;
+      return Promise.resolve(
+        mockResponse(
+          { lead: { ...baseLead, ...fields, updatedAt: '2026-07-25T12:00:00.000Z' } },
+          init?.method === 'PATCH'
+        )
+      );
+    });
     const { getByRole, input, onUpdate } = renderFollowUpDate(null);
 
     fireEvent.change(input, { target: { value: '2026-07-19' } });
@@ -789,14 +874,21 @@ describe('LeadDetailModal follow-up date safety', () => {
     expect(onUpdate).toHaveBeenCalledWith({
       ...baseLead,
       nextFollowUpAt: '2026-07-19T12:00:00.000Z',
+      updatedAt: '2026-07-25T12:00:00.000Z',
     });
   });
 
   test('clears a follow-up with null', async () => {
     const fetchMock = vi.mocked(fetch);
-    fetchMock.mockImplementation((_input, init) =>
-      Promise.resolve({ ok: init?.method === 'PATCH' } as Response)
-    );
+    fetchMock.mockImplementation((_input, init) => {
+      const fields = JSON.parse(requestBody(init?.body)) as Partial<Lead>;
+      return Promise.resolve(
+        mockResponse(
+          { lead: { ...baseLead, ...fields, updatedAt: '2026-07-25T12:00:00.000Z' } },
+          init?.method === 'PATCH'
+        )
+      );
+    });
     const { getByRole, input, onUpdate } = renderFollowUpDate('2026-07-19T12:00:00.000Z');
 
     fireEvent.change(input, { target: { value: '' } });
@@ -811,6 +903,10 @@ describe('LeadDetailModal follow-up date safety', () => {
         })
       );
     });
-    expect(onUpdate).toHaveBeenCalledWith({ ...baseLead, nextFollowUpAt: null });
+    expect(onUpdate).toHaveBeenCalledWith({
+      ...baseLead,
+      nextFollowUpAt: null,
+      updatedAt: '2026-07-25T12:00:00.000Z',
+    });
   });
 });

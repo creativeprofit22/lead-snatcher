@@ -13,37 +13,17 @@ import {
   Settings,
 } from 'lucide-react';
 import { LEAD_STATUSES, INDUSTRY_TYPES } from '@/lib/constants';
+import { defaultLeadListQuery, type LeadListFilters } from '@/lib/crm-lead-query';
 import type { CrmTagsResource } from '@/lib/hooks/useCrmTags';
 import type { LeadStatus, IndustryType } from '@/types';
 
-// Filter state type
-export interface FilterState {
-  statuses: LeadStatus[];
-  industries: IndustryType[];
-  tags: string[]; // Tag IDs
-  scoreRange: { min: number; max: number };
-  followUp: 'all' | 'today' | 'overdue' | 'this_week';
-  sortBy: 'savedAt' | 'leadScore' | 'name' | 'nextFollowUpAt';
-  sortOrder: 'asc' | 'desc';
-}
-
-// Default filter state
-export const defaultFilters: FilterState = {
-  statuses: [],
-  industries: [],
-  tags: [],
-  scoreRange: { min: 0, max: 100 },
-  followUp: 'all',
-  sortBy: 'savedAt',
-  sortOrder: 'desc',
-};
-
 interface FilterSidebarProps {
-  filters: FilterState;
-  onFiltersChange: (filters: FilterState) => void;
+  filters: LeadListFilters;
+  onFiltersChange: (filters: LeadListFilters) => void;
   isOpen: boolean;
   onClose: () => void;
   leadCount: number;
+  statusScopeLabel?: string;
   onOpenTagManager?: () => void;
   tagCatalog: CrmTagsResource;
 }
@@ -54,6 +34,7 @@ export function FilterSidebar({
   isOpen,
   onClose,
   leadCount,
+  statusScopeLabel,
   onOpenTagManager,
   tagCatalog,
 }: FilterSidebarProps) {
@@ -77,13 +58,13 @@ export function FilterSidebar({
     filters.statuses.length > 0 ||
     filters.industries.length > 0 ||
     filters.tags.length > 0 ||
-    filters.scoreRange.min > 0 ||
-    filters.scoreRange.max < 100 ||
+    filters.minScore > 0 ||
+    filters.maxScore < 100 ||
     filters.followUp !== 'all';
 
   // Reset all filters
   const resetFilters = () => {
-    onFiltersChange(defaultFilters);
+    onFiltersChange(defaultLeadListQuery);
   };
 
   // Toggle status filter
@@ -111,16 +92,17 @@ export function FilterSidebar({
   };
 
   // Update score range
-  const updateScoreRange = (key: 'min' | 'max', value: number) => {
-    const newRange = { ...filters.scoreRange, [key]: value };
-    // Ensure min <= max
-    if (key === 'min' && value > filters.scoreRange.max) {
-      newRange.max = value;
+  const updateScoreRange = (key: 'minScore' | 'maxScore', value: number) => {
+    const clampedValue = Math.min(100, Math.max(0, value));
+    const nextFilters = { ...filters, [key]: clampedValue };
+    // Keep the UI state inside the same range contract enforced by the API.
+    if (key === 'minScore' && clampedValue > filters.maxScore) {
+      nextFilters.maxScore = clampedValue;
     }
-    if (key === 'max' && value < filters.scoreRange.min) {
-      newRange.min = value;
+    if (key === 'maxScore' && clampedValue < filters.minScore) {
+      nextFilters.minScore = clampedValue;
     }
-    onFiltersChange({ ...filters, scoreRange: newRange });
+    onFiltersChange(nextFilters);
   };
 
   // Follow-up options
@@ -142,10 +124,19 @@ export function FilterSidebar({
   return (
     <>
       {/* Mobile Overlay */}
-      {isOpen && <div className="fixed inset-0 bg-black/50 z-40 lg:hidden" onClick={onClose} />}
+      {isOpen && (
+        <button
+          type="button"
+          aria-label="Dismiss filters"
+          className="fixed inset-0 bg-black/50 z-40 lg:hidden"
+          onClick={onClose}
+        />
+      )}
 
       {/* Sidebar */}
       <aside
+        id="crm-filter-sidebar"
+        aria-label="Lead filters"
         className={`fixed lg:sticky top-0 lg:top-20 left-0 h-full lg:h-auto w-80 lg:w-72 bg-black lg:bg-transparent border-r lg:border-r-0 border-white/10 z-50 lg:z-0 transition-transform duration-300 ${
           isOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
         }`}
@@ -158,6 +149,8 @@ export function FilterSidebar({
               <h2 className="text-lg font-medium text-gray-200">Filters</h2>
             </div>
             <button
+              type="button"
+              aria-label="Close filters"
               onClick={onClose}
               className="p-1 rounded-lg text-gray-500 hover:text-white hover:bg-white/5"
             >
@@ -184,33 +177,45 @@ export function FilterSidebar({
           {/* Status Filter */}
           <div className="mb-4">
             <button
+              type="button"
+              disabled={Boolean(statusScopeLabel)}
+              aria-expanded={!statusScopeLabel && sections.status}
+              aria-controls="crm-status-filters"
               onClick={() => toggleSection('status')}
-              className="flex items-center justify-between w-full py-2 text-left"
+              className="flex items-center justify-between w-full py-2 text-left disabled:cursor-not-allowed"
             >
               <span className="text-sm font-medium text-gray-300">Status</span>
-              {sections.status ? (
+              {statusScopeLabel ? (
+                <span className="text-xs font-normal text-gray-500">{statusScopeLabel} tab</span>
+              ) : sections.status ? (
                 <ChevronUp className="w-4 h-4 text-gray-500" />
               ) : (
                 <ChevronDown className="w-4 h-4 text-gray-500" />
               )}
             </button>
-            {sections.status && (
-              <div className="space-y-1 mt-2">
-                {LEAD_STATUSES.map((status) => (
-                  <label
-                    key={status.id}
-                    className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-white/5 cursor-pointer"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={filters.statuses.includes(status.id)}
-                      onChange={() => toggleStatus(status.id)}
-                      className="w-4 h-4 rounded border-white/20 bg-white/5 text-white focus:ring-white/20 focus:ring-offset-black"
-                    />
-                    <span className="text-sm text-gray-400">{status.label}</span>
-                  </label>
-                ))}
-              </div>
+            {statusScopeLabel ? (
+              <p className="px-2 pb-1 text-xs leading-5 text-gray-500">
+                Statuses are set by the {statusScopeLabel} tab.
+              </p>
+            ) : (
+              sections.status && (
+                <div id="crm-status-filters" className="space-y-1 mt-2">
+                  {LEAD_STATUSES.map((status) => (
+                    <label
+                      key={status.id}
+                      className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-white/5 cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={filters.statuses.includes(status.id)}
+                        onChange={() => toggleStatus(status.id)}
+                        className="w-4 h-4 rounded border-white/20 bg-white/5 text-white focus:ring-white/20 focus:ring-offset-black"
+                      />
+                      <span className="text-sm text-gray-400">{status.label}</span>
+                    </label>
+                  ))}
+                </div>
+              )
             )}
           </div>
 
@@ -234,8 +239,16 @@ export function FilterSidebar({
                     type="number"
                     min={0}
                     max={100}
-                    value={filters.scoreRange.min}
-                    onChange={(e) => updateScoreRange('min', parseInt(e.target.value) || 0)}
+                    value={filters.minScore}
+                    aria-label="Minimum lead score"
+                    onChange={(e) =>
+                      updateScoreRange(
+                        'minScore',
+                        Number.isNaN(e.currentTarget.valueAsNumber)
+                          ? 0
+                          : e.currentTarget.valueAsNumber
+                      )
+                    }
                     className="w-16 px-2 py-1 text-sm bg-white/5 border border-white/10 rounded-lg text-gray-300 text-center focus:border-white/20 outline-none"
                   />
                   <span className="text-gray-600">to</span>
@@ -243,8 +256,16 @@ export function FilterSidebar({
                     type="number"
                     min={0}
                     max={100}
-                    value={filters.scoreRange.max}
-                    onChange={(e) => updateScoreRange('max', parseInt(e.target.value) || 100)}
+                    value={filters.maxScore}
+                    aria-label="Maximum lead score"
+                    onChange={(e) =>
+                      updateScoreRange(
+                        'maxScore',
+                        Number.isNaN(e.currentTarget.valueAsNumber)
+                          ? 100
+                          : e.currentTarget.valueAsNumber
+                      )
+                    }
                     className="w-16 px-2 py-1 text-sm bg-white/5 border border-white/10 rounded-lg text-gray-300 text-center focus:border-white/20 outline-none"
                   />
                 </div>
@@ -254,24 +275,26 @@ export function FilterSidebar({
                     type="range"
                     min={0}
                     max={100}
-                    value={filters.scoreRange.min}
-                    onChange={(e) => updateScoreRange('min', parseInt(e.target.value))}
+                    value={filters.minScore}
+                    aria-label="Minimum lead score slider"
+                    onChange={(e) => updateScoreRange('minScore', e.currentTarget.valueAsNumber)}
                     className="absolute w-full h-1 appearance-none bg-transparent pointer-events-none [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:cursor-pointer"
                   />
                   <input
                     type="range"
                     min={0}
                     max={100}
-                    value={filters.scoreRange.max}
-                    onChange={(e) => updateScoreRange('max', parseInt(e.target.value))}
+                    value={filters.maxScore}
+                    aria-label="Maximum lead score slider"
+                    onChange={(e) => updateScoreRange('maxScore', e.currentTarget.valueAsNumber)}
                     className="absolute w-full h-1 appearance-none bg-transparent pointer-events-none [&::-webkit-slider-thumb]:pointer-events-auto [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white [&::-webkit-slider-thumb]:cursor-pointer"
                   />
                   <div className="h-1 bg-white/10 rounded">
                     <div
                       className="h-full bg-white/30 rounded"
                       style={{
-                        marginLeft: `${filters.scoreRange.min}%`,
-                        width: `${filters.scoreRange.max - filters.scoreRange.min}%`,
+                        marginLeft: `${filters.minScore}%`,
+                        width: `${filters.maxScore - filters.minScore}%`,
                       }}
                     />
                   </div>
@@ -432,7 +455,7 @@ export function FilterSidebar({
                   onChange={(e) =>
                     onFiltersChange({
                       ...filters,
-                      sortBy: e.target.value as FilterState['sortBy'],
+                      sortBy: e.target.value as LeadListFilters['sortBy'],
                     })
                   }
                   className="w-full px-3 py-2 text-sm bg-white/5 border border-white/10 rounded-lg text-gray-300 outline-none focus:border-white/20"

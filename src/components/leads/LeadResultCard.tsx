@@ -21,13 +21,14 @@ import { motion } from 'motion/react';
 import { GlowEffect } from '@/components/motion-primitives/glow-effect';
 import { HoloCard } from '@/components/ui/HoloCard';
 import { isRealEmail, type SearchResultEnrichment } from '@/lib/business/derive-search-results';
+import type { LeadScoreBand } from '@/lib/business/lead-score-band';
 import type { BusinessSearchResult } from '@/types';
 
 import { EnrichButton, type EnrichmentStatus } from './EnrichButton';
 import { LeadScoreBadge } from './LeadScoreBadge';
 import { OpportunitiesList } from './OpportunitiesList';
 
-export type LeadResultTier = 'hot' | 'mid' | 'cold';
+export type LeadResultTier = LeadScoreBand;
 
 interface LeadResultCardProps {
   lead: BusinessSearchResult;

@@ -1,82 +1,42 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
-import { createLeadSchema, leadStatusSchema, industryTypeSchema } from '@/lib/validations';
-import { parseRouteBody, requireRouteUserId, routeErrorResponse } from '@/lib/route-utils';
+import { parseLeadListQuery } from '@/lib/crm-lead-query';
+import { createLeadSchema } from '@/lib/validations';
+import {
+  parseRouteBody,
+  parseRouteQuery,
+  requireRouteUserId,
+  routeErrorResponse,
+} from '@/lib/route-utils';
 import { toLeadDto } from '@/lib/lead-dto';
-import type { LeadStatus, IndustryType } from '@/types';
 
 // GET - Fetch user's leads with optional filters
 export async function GET(request: Request) {
   try {
     const userId = await requireRouteUserId();
     const { searchParams } = new URL(request.url);
-
-    // Single status (legacy) or multi-status
-    const status = searchParams.get('status') as LeadStatus | null;
-    const statuses = searchParams.get('statuses'); // comma-separated
-
-    // Score range
-    const minScore = searchParams.get('minScore');
-    const maxScore = searchParams.get('maxScore');
-
-    // Industry filter (single or multi)
-    const industry = searchParams.get('industry');
-    const industries = searchParams.get('industries'); // comma-separated
-
-    // Follow-up filter
-    const followUp = searchParams.get('followUp'); // 'today' | 'overdue' | 'this_week'
-
-    // Tags filter
-    const tags = searchParams.get('tags'); // comma-separated tag IDs
-
-    // Sorting - whitelist allowed fields to prevent injection
-    const ALLOWED_SORT_FIELDS = [
-      'savedAt',
-      'leadScore',
-      'name',
-      'status',
-      'lastContactedAt',
-      'nextFollowUpAt',
-      'updatedAt',
-    ];
-    const requestedSortBy = searchParams.get('sortBy') || 'savedAt';
-    const sortBy = ALLOWED_SORT_FIELDS.includes(requestedSortBy) ? requestedSortBy : 'savedAt';
-    const sortOrder = searchParams.get('sortOrder') === 'asc' ? 'asc' : 'desc';
+    const { statuses, industries, tags, minScore, maxScore, followUp, sortBy, sortOrder } =
+      parseRouteQuery(searchParams, parseLeadListQuery);
 
     // Build where clause
     const where: Record<string, unknown> = {
       userId,
     };
 
-    // Multi-status filter — validate each value against the enum
-    if (statuses) {
-      const statusList = statuses
-        .split(',')
-        .filter((s) => leadStatusSchema.safeParse(s).success) as LeadStatus[];
-      if (statusList.length > 0) where.status = { in: statusList };
-    } else if (status) {
-      if (leadStatusSchema.safeParse(status).success) where.status = status;
+    if (statuses.length > 0) {
+      where.status = { in: statuses };
     }
 
-    // Score range filter
-    if (minScore || maxScore) {
-      where.leadScore = {};
-      if (minScore) (where.leadScore as Record<string, number>).gte = parseInt(minScore);
-      if (maxScore) (where.leadScore as Record<string, number>).lte = parseInt(maxScore);
+    if (minScore > 0 || maxScore < 100) {
+      where.leadScore = { gte: minScore, lte: maxScore };
     }
 
-    // Multi-industry filter — validate each value against the enum
-    if (industries) {
-      const industryList = industries
-        .split(',')
-        .filter((s) => industryTypeSchema.safeParse(s).success) as IndustryType[];
-      if (industryList.length > 0) where.industryType = { in: industryList };
-    } else if (industry) {
-      if (industryTypeSchema.safeParse(industry).success) where.industryType = industry;
+    if (industries.length > 0) {
+      where.industryType = { in: industries };
     }
 
     // Follow-up filter
-    if (followUp) {
+    if (followUp !== 'all') {
       const now = new Date();
       const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
       const endOfDay = new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000 - 1);
@@ -105,11 +65,10 @@ export async function GET(request: Request) {
     }
 
     // Tags filter - leads must have at least one of the specified tags
-    if (tags) {
-      const tagIds = tags.split(',');
+    if (tags.length > 0) {
       where.tags = {
         some: {
-          tagId: { in: tagIds },
+          tagId: { in: tags },
         },
       };
     }
@@ -118,10 +77,6 @@ export async function GET(request: Request) {
       where,
       orderBy: { [sortBy]: sortOrder },
       include: {
-        contactLogs: {
-          orderBy: { createdAt: 'desc' },
-          take: 1,
-        },
         tags: {
           include: {
             tag: true,

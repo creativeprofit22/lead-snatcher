@@ -2,19 +2,9 @@
 
 import { useMemo } from 'react';
 import { DragDropContext, DropResult } from '@hello-pangea/dnd';
+import { KANBAN_LEAD_STATUSES, parseLeadStatus } from '@/lib/lead-status';
 import { KanbanColumn } from './KanbanColumn';
 import type { Lead, LeadStatus } from '@/types';
-
-// Define the pipeline stages for Kanban (excluding won/lost - those are end states)
-const KANBAN_STAGES: { status: LeadStatus; label: string }[] = [
-  { status: 'new', label: 'New' },
-  { status: 'contacted', label: 'Contacted' },
-  { status: 'called', label: 'Called' },
-  { status: 'proposal_sent', label: 'Proposal Sent' },
-  { status: 'negotiating', label: 'Negotiating' },
-  { status: 'won', label: 'Won' },
-  { status: 'lost', label: 'Lost' },
-];
 
 interface KanbanBoardProps {
   leads: Lead[];
@@ -33,21 +23,12 @@ export function KanbanBoard({
 }: KanbanBoardProps) {
   // Group leads by status
   const leadsByStatus = useMemo(() => {
-    const grouped: Record<LeadStatus, Lead[]> = {
-      new: [],
-      contacted: [],
-      called: [],
-      proposal_sent: [],
-      negotiating: [],
-      won: [],
-      lost: [],
-      not_interested: [],
-    };
+    const grouped = new Map<LeadStatus, Lead[]>(
+      KANBAN_LEAD_STATUSES.map((status) => [status.id, []])
+    );
 
     leads.forEach((lead) => {
-      if (grouped[lead.status]) {
-        grouped[lead.status].push(lead);
-      }
+      grouped.get(lead.status)?.push(lead);
     });
 
     return grouped;
@@ -66,7 +47,7 @@ export function KanbanBoard({
     }
 
     // Get the new status from the destination column
-    const newStatus = destination.droppableId as LeadStatus;
+    const newStatus = parseLeadStatus(destination.droppableId);
 
     // Update the lead status
     await onStatusChange(draggableId, newStatus);
@@ -75,9 +56,9 @@ export function KanbanBoard({
   if (isLoading) {
     return (
       <div className="flex gap-4 overflow-x-auto pb-4">
-        {KANBAN_STAGES.map((stage) => (
+        {KANBAN_LEAD_STATUSES.map((stage) => (
           <div
-            key={stage.status}
+            key={stage.id}
             className="flex flex-col w-72 min-w-[288px] bg-white/[0.02] rounded-xl border border-white/10"
           >
             <div className="px-4 py-3 border-b border-white/10">
@@ -97,12 +78,12 @@ export function KanbanBoard({
   return (
     <DragDropContext onDragEnd={handleDragEnd}>
       <div className="flex gap-4 overflow-x-auto pb-4 -mx-4 px-4">
-        {KANBAN_STAGES.map((stage) => (
+        {KANBAN_LEAD_STATUSES.map((stage) => (
           <KanbanColumn
-            key={stage.status}
-            status={stage.status}
+            key={stage.id}
+            status={stage.id}
             label={stage.label}
-            leads={leadsByStatus[stage.status] || []}
+            leads={leadsByStatus.get(stage.id) ?? []}
             onLeadClick={onLeadClick}
             onDelete={onDelete}
           />

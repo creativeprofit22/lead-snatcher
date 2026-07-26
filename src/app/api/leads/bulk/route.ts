@@ -1,7 +1,13 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/db';
 import { bulkUpdateLeadsSchema, bulkDeleteLeadsSchema } from '@/lib/validations';
-import { parseRouteBody, requireRouteUserId, routeErrorResponse } from '@/lib/route-utils';
+import {
+  HttpError,
+  parseRouteBody,
+  requireRouteUserId,
+  routeErrorResponse,
+} from '@/lib/route-utils';
+import type { BulkLeadMutationResponse } from '@/types';
 
 // PATCH - Bulk update leads (status change or add tag)
 export async function PATCH(request: Request) {
@@ -23,7 +29,7 @@ export async function PATCH(request: Request) {
     }
 
     if (update.action === 'status') {
-      await prisma.lead.updateMany({
+      const result = await prisma.lead.updateMany({
         where: {
           id: { in: update.leadIds },
           userId,
@@ -36,10 +42,8 @@ export async function PATCH(request: Request) {
         },
       });
 
-      return NextResponse.json({
-        message: `Updated ${leads.length} leads to "${update.status}"`,
-        updatedCount: leads.length,
-      });
+      const response: BulkLeadMutationResponse = { count: result.count };
+      return NextResponse.json(response);
     }
 
     const result = await prisma.$transaction(async (transaction) => {
@@ -101,18 +105,35 @@ export async function DELETE(request: Request) {
     const userId = await requireRouteUserId();
     const { leadIds } = await parseRouteBody(request, bulkDeleteLeadsSchema);
 
-    // Delete all leads (Prisma will cascade delete related records)
-    const result = await prisma.lead.deleteMany({
-      where: {
-        id: { in: leadIds },
-        userId: userId,
-      },
+    const result = await prisma.$transaction(async (transaction) => {
+      const leads = await transaction.lead.findMany({
+        where: {
+          id: { in: leadIds },
+          userId,
+        },
+        select: { id: true },
+      });
+
+      if (leads.length !== leadIds.length) {
+        throw new HttpError('Some leads not found', 404);
+      }
+
+      const deleted = await transaction.lead.deleteMany({
+        where: {
+          id: { in: leadIds },
+          userId,
+        },
+      });
+
+      if (deleted.count !== leadIds.length) {
+        throw new Error('Bulk delete count did not match the requested lead count');
+      }
+
+      return deleted;
     });
 
-    return NextResponse.json({
-      message: `Deleted ${result.count} leads`,
-      deletedCount: result.count,
-    });
+    const response: BulkLeadMutationResponse = { count: result.count };
+    return NextResponse.json(response);
   } catch (error) {
     console.error('Bulk delete error:', error);
     return routeErrorResponse(error, 'Failed to delete leads');

@@ -1,5 +1,8 @@
+import type { LeadStatus } from '@/lib/lead-status';
 import type { ZoneBbox } from '@/lib/business/zone-contract';
 import type { ScrapedWebsiteData } from './scraper';
+
+export type { LeadStatus } from '@/lib/lead-status';
 
 // Industry types for business categorization
 export type IndustryType =
@@ -12,17 +15,6 @@ export type IndustryType =
   | 'real_estate'
   | 'professional_services'
   | 'other';
-
-// Lead status for CRM tracking
-export type LeadStatus =
-  | 'new'
-  | 'contacted'
-  | 'called'
-  | 'proposal_sent'
-  | 'negotiating'
-  | 'won'
-  | 'lost'
-  | 'not_interested';
 
 // Score breakdown for transparency - Layer-based scoring system
 export interface ScoreBreakdown {
@@ -189,6 +181,11 @@ export interface Lead {
   tags: Tag[];
   popularTimesData: string | null;
   popularTimesScrapedAt: string | null;
+}
+
+// Count returned after a complete bulk status update or deletion
+export interface BulkLeadMutationResponse {
+  count: number;
 }
 
 // Contact log entry

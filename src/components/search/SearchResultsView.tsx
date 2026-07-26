@@ -14,6 +14,7 @@ import type {
   SearchResultFilters,
   SearchResultSort,
 } from '@/lib/business/derive-search-results';
+import { getLeadScoreBand } from '@/lib/business/lead-score-band';
 import type { PersistedSearchPayload, SearchMarketDensity } from '@/lib/business/search-snapshot';
 import type { Zone, ZoneScanStatus } from '@/lib/business/zone-contract';
 import type { EnrichmentBannerError } from '@/lib/hooks/useEnrichmentStream';
@@ -22,7 +23,7 @@ import type { BusinessSearchResult } from '@/types';
 
 import { AreaDensityMeter } from './AreaDensityMeter';
 import { SaveSessionButton } from './SaveSessionButton';
-import { SearchResultsControls, getLeadResultTier } from './SearchResultsControls';
+import { SearchResultsControls } from './SearchResultsControls';
 import { ZoneChipsStrip } from './ZoneChipsStrip';
 
 export interface SearchResultsViewProps {
@@ -211,7 +212,7 @@ export function SearchResultsView({
                 lead={business}
                 index={index}
                 rank={index + 1}
-                tier={getLeadResultTier(business.leadScore)}
+                tier={getLeadScoreBand(business.leadScore)}
                 selected={selectedForEnrich.has(business.placeId)}
                 onToggleSelection={() => onToggleSelection(business.placeId)}
                 enrichmentStatus={enrichStatusMap[business.placeId] ?? 'idle'}

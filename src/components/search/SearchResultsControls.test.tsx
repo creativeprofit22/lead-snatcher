@@ -4,7 +4,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import type { SearchResultFilters } from '@/lib/business/derive-search-results';
 import type { BusinessSearchResult, ScoreBreakdown } from '@/types';
 
-import { getLeadResultTier, SearchResultsControls } from './SearchResultsControls';
+import { SearchResultsControls } from './SearchResultsControls';
 
 const scoreBreakdown: ScoreBreakdown = {
   noWebsite: 0,
@@ -154,10 +154,6 @@ describe('SearchResultsControls', () => {
     const { container } = renderControls();
     const readout = container.querySelector('.tier-readout');
 
-    expect(getLeadResultTier(34)).toBe('cold');
-    expect(getLeadResultTier(35)).toBe('mid');
-    expect(getLeadResultTier(54)).toBe('mid');
-    expect(getLeadResultTier(55)).toBe('hot');
     expect(readout?.querySelector('.text-orange-300 .tabular-nums')?.textContent).toBe('1');
     expect(readout?.querySelector('.text-sky-300 .tabular-nums')?.textContent).toBe('2');
     expect(readout?.querySelector('.text-slate-400 .tabular-nums')?.textContent).toBe('1');

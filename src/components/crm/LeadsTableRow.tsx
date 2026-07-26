@@ -2,6 +2,7 @@
 
 import { Flame, Snowflake, Sparkles } from 'lucide-react';
 import { TableRow, TableCell } from '@/components/ui/Table';
+import { getLeadScoreBand } from '@/lib/business/lead-score-band';
 import { StatusBadge } from './StatusBadge';
 import { TagBadge } from './TagBadge';
 import { LeadsTableActions } from './LeadsTableActions';
@@ -22,6 +23,8 @@ export function LeadsTableRow({
   isSelected,
   onToggleSelect,
 }: LeadsTableRowProps) {
+  const leadScoreBand = getLeadScoreBand(lead.leadScore);
+
   return (
     <TableRow
       className={`border-white/10 hover:bg-white/[0.02] cursor-pointer ${isSelected ? 'bg-white/[0.04]' : ''}`}
@@ -33,6 +36,7 @@ export function LeadsTableRow({
             type="checkbox"
             checked={isSelected || false}
             onChange={() => onToggleSelect(lead.id)}
+            aria-label={`Select ${lead.name}`}
             className="w-4 h-4 rounded border-white/20 bg-transparent text-white focus:ring-0 focus:ring-offset-0 cursor-pointer"
           />
         </TableCell>
@@ -58,29 +62,30 @@ export function LeadsTableRow({
       <TableCell className="text-gray-400">{lead.address || '-'}</TableCell>
       <TableCell>
         <div className="flex items-center gap-2">
-          {lead.leadScore >= 55 && (
+          {leadScoreBand === 'hot' && (
             <div className="relative">
               <div className="absolute inset-0 blur-sm bg-orange-500/30 rounded-full" />
               <Flame className="relative w-4 h-4 text-orange-400" />
             </div>
           )}
-          {lead.leadScore >= 35 && lead.leadScore < 55 && (
+          {leadScoreBand === 'mid' && (
             <div className="relative">
               <div className="absolute inset-0 blur-sm bg-amber-500/20 rounded-full" />
               <Sparkles className="relative w-4 h-4 text-amber-400" />
             </div>
           )}
-          {lead.leadScore < 35 && (
+          {leadScoreBand === 'cold' && (
             <div className="relative">
               <div className="absolute inset-0 blur-sm bg-blue-500/20 rounded-full" />
               <Snowflake className="relative w-4 h-4 text-blue-400" />
             </div>
           )}
           <span
+            data-lead-score-band={leadScoreBand}
             className={`font-mono ${
-              lead.leadScore >= 55
+              leadScoreBand === 'hot'
                 ? 'text-orange-300'
-                : lead.leadScore >= 35
+                : leadScoreBand === 'mid'
                   ? 'text-amber-300'
                   : 'text-blue-300'
             }`}

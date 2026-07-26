@@ -1,15 +1,24 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
-const { findLeads, updateLeads, findTag, findLinks, createLinks, createLink, runTransaction } =
-  vi.hoisted(() => ({
-    findLeads: vi.fn(),
-    updateLeads: vi.fn(),
-    findTag: vi.fn(),
-    findLinks: vi.fn(),
-    createLinks: vi.fn(),
-    createLink: vi.fn(),
-    runTransaction: vi.fn(),
-  }));
+const {
+  findLeads,
+  updateLeads,
+  deleteLeads,
+  findTag,
+  findLinks,
+  createLinks,
+  createLink,
+  runTransaction,
+} = vi.hoisted(() => ({
+  findLeads: vi.fn(),
+  updateLeads: vi.fn(),
+  deleteLeads: vi.fn(),
+  findTag: vi.fn(),
+  findLinks: vi.fn(),
+  createLinks: vi.fn(),
+  createLink: vi.fn(),
+  runTransaction: vi.fn(),
+}));
 
 vi.mock('@/lib/auth-utils', () => ({ getCurrentUserId: vi.fn().mockResolvedValue('user-1') }));
 vi.mock('@/lib/db', () => ({
@@ -19,9 +28,10 @@ vi.mock('@/lib/db', () => ({
   },
 }));
 
-import { PATCH } from './route';
+import { DELETE, PATCH } from './route';
 
 const transactionClient = {
+  lead: { findMany: findLeads, updateMany: updateLeads, deleteMany: deleteLeads },
   tag: { findFirst: findTag },
   leadTag: { findMany: findLinks, createMany: createLinks, create: createLink },
 };
@@ -36,9 +46,21 @@ function patch(body: unknown) {
   );
 }
 
+function remove(body: unknown) {
+  return DELETE(
+    new Request('http://localhost/api/leads/bulk', {
+      method: 'DELETE',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  );
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   findLeads.mockResolvedValue([{ id: 'lead-1' }, { id: 'lead-2' }, { id: 'lead-3' }]);
+  updateLeads.mockResolvedValue({ count: 3 });
+  deleteLeads.mockResolvedValue({ count: 3 });
   findTag.mockResolvedValue({ name: 'Priority' });
   findLinks.mockResolvedValue([]);
   createLinks.mockResolvedValue({ count: 3 });
@@ -50,6 +72,29 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe('PATCH /api/leads/bulk status', () => {
+  test('updates every owned lead and records the contact timestamp', async () => {
+    const response = await patch({
+      action: 'status',
+      leadIds: ['lead-1', 'lead-2', 'lead-3'],
+      status: 'contacted',
+    });
+
+    expect(response.status).toBe(200);
+    expect(updateLeads).toHaveBeenCalledWith({
+      where: {
+        id: { in: ['lead-1', 'lead-2', 'lead-3'] },
+        userId: 'user-1',
+      },
+      data: {
+        status: 'contacted',
+        lastContactedAt: expect.any(Date),
+      },
+    });
+    await expect(response.json()).resolves.toEqual({ count: 3 });
+  });
 });
 
 describe('PATCH /api/leads/bulk add_tag', () => {
@@ -189,5 +234,62 @@ describe('PATCH /api/leads/bulk add_tag', () => {
       ],
     });
     expect(createLink).not.toHaveBeenCalled();
+  });
+});
+
+describe('DELETE /api/leads/bulk', () => {
+  test.each([
+    { leadIds: ['lead-1', '   '], error: 'Lead IDs cannot be empty' },
+    { leadIds: ['lead-1', 'lead-1'], error: 'Lead IDs must be unique' },
+  ])('rejects invalid lead IDs before starting a transaction', async ({ leadIds, error }) => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const response = await remove({ leadIds });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error });
+    expect(runTransaction).not.toHaveBeenCalled();
+    expect(deleteLeads).not.toHaveBeenCalled();
+  });
+
+  test('rejects missing or foreign leads without deleting owned matches', async () => {
+    findLeads.mockResolvedValue([{ id: 'lead-1' }]);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const response = await remove({ leadIds: ['lead-1', 'foreign-lead'] });
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({ error: 'Some leads not found' });
+    expect(findLeads).toHaveBeenCalledWith({
+      where: { id: { in: ['lead-1', 'foreign-lead'] }, userId: 'user-1' },
+      select: { id: true },
+    });
+    expect(deleteLeads).not.toHaveBeenCalled();
+  });
+
+  test('deletes every owned lead transactionally and returns the committed count', async () => {
+    const response = await remove({ leadIds: ['lead-1', 'lead-2', 'lead-3'] });
+
+    expect(response.status).toBe(200);
+    expect(runTransaction).toHaveBeenCalledTimes(1);
+    expect(deleteLeads).toHaveBeenCalledWith({
+      where: {
+        id: { in: ['lead-1', 'lead-2', 'lead-3'] },
+        userId: 'user-1',
+      },
+    });
+    await expect(response.json()).resolves.toEqual({ count: 3 });
+  });
+
+  test('reports a transaction failure without claiming any deletions', async () => {
+    deleteLeads.mockRejectedValue(new Error('Delete failed'));
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const response = await remove({ leadIds: ['lead-1', 'lead-2', 'lead-3'] });
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({ error: 'Failed to delete leads' });
+    expect(runTransaction).toHaveBeenCalledTimes(1);
+    expect(deleteLeads).toHaveBeenCalledTimes(1);
   });
 });

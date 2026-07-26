@@ -256,6 +256,8 @@ describe('CRM tag catalog flow', () => {
     fireEvent.click(screen.getByRole('checkbox', { name: 'Priority' }));
     await waitFor(() => expect(leadUrls.some((url) => url.includes('tags=tag-1'))).toBe(true));
 
+    // Server-filter changes intentionally clear the current visible-result selection.
+    fireEvent.click(screen.getByRole('button', { name: 'Select Acme Dental' }));
     fireEvent.click(screen.getByRole('button', { name: 'Add Tag' }));
     expect(screen.getByRole('button', { name: 'Priority' })).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Created' })).toBeTruthy();
@@ -275,6 +277,7 @@ describe('CRM tag catalog flow', () => {
     await waitFor(() => expect(screen.getByTestId('lead-tags-lead-1').textContent).toBe(''));
 
     fireEvent.click(screen.getByRole('button', { name: 'Close tag manager' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Select Acme Dental' }));
     fireEvent.click(screen.getByRole('button', { name: 'Add Tag' }));
     expect(screen.getByRole('button', { name: 'Created' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Priority' })).toBeNull();

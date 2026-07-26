@@ -1,7 +1,13 @@
 import { NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
+import { getLeadScoreBand } from '@/lib/business/lead-score-band';
 import { prisma } from '@/lib/db';
-import type { LeadStatus, PipelineStats } from '@/types';
+import {
+  createLeadStatusRecord,
+  parseLeadStatus,
+  TERMINAL_LEAD_STATUS_VALUES,
+} from '@/lib/lead-status';
+import type { PipelineStats } from '@/types';
 
 export async function GET() {
   try {
@@ -23,30 +29,26 @@ export async function GET() {
     const total = leads.length;
 
     // Count by status
-    const byStatus: Record<LeadStatus, number> = {
-      new: 0,
-      contacted: 0,
-      called: 0,
-      proposal_sent: 0,
-      negotiating: 0,
-      won: 0,
-      lost: 0,
-      not_interested: 0,
-    };
+    const byStatus = createLeadStatusRecord(() => 0);
 
     let totalScore = 0;
     let hotLeads = 0;
     let coldLeads = 0;
 
     leads.forEach((lead) => {
-      byStatus[lead.status as LeadStatus]++;
+      byStatus[parseLeadStatus(lead.status)]++;
       totalScore += lead.leadScore;
-      if (lead.leadScore >= 55) hotLeads++;
-      else if (lead.leadScore < 35) coldLeads++;
+
+      const scoreBand = getLeadScoreBand(lead.leadScore);
+      if (scoreBand === 'hot') hotLeads++;
+      else if (scoreBand === 'cold') coldLeads++;
     });
 
     // Calculate conversion rate (won / total closed)
-    const closedDeals = byStatus.won + byStatus.lost + byStatus.not_interested;
+    const closedDeals = TERMINAL_LEAD_STATUS_VALUES.reduce(
+      (count, status) => count + byStatus[status],
+      0
+    );
     const conversionRate = closedDeals > 0 ? (byStatus.won / closedDeals) * 100 : 0;
 
     // Average lead score

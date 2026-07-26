@@ -17,7 +17,8 @@ interface LeadsTableProps {
   onDelete: (leadId: string) => void;
   selectedLeadIds?: Set<string>;
   onToggleSelect?: (leadId: string) => void;
-  onSelectAll?: () => void;
+  onSelectAllVisible?: () => void;
+  onDeselectVisible?: () => void;
   sortBy?: SortField;
   sortOrder?: SortOrder;
   onSortChange?: (field: SortField) => void;
@@ -68,7 +69,8 @@ export function LeadsTable({
   onDelete,
   selectedLeadIds,
   onToggleSelect,
-  onSelectAll,
+  onSelectAllVisible,
+  onDeselectVisible,
   sortBy = 'savedAt',
   sortOrder = 'desc',
   onSortChange,
@@ -98,7 +100,11 @@ export function LeadsTable({
                 ref={(el) => {
                   if (el) el.indeterminate = someSelected && !allSelected;
                 }}
-                onChange={onSelectAll}
+                onChange={(event) => {
+                  if (event.currentTarget.checked) onSelectAllVisible?.();
+                  else onDeselectVisible?.();
+                }}
+                aria-label="Select all visible leads"
                 className="w-4 h-4 rounded border-white/20 bg-transparent text-white focus:ring-0 focus:ring-offset-0 cursor-pointer"
               />
             </TableHead>

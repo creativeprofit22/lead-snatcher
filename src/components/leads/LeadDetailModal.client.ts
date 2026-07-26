@@ -1,3 +1,4 @@
+import { isLeadStatus } from '@/lib/lead-status';
 import type { ContactLogEntry, Lead, LeadStatus, Task, TasksResponse } from '@/types';
 
 export type LeadDetailModalClientResult<T> =
@@ -21,8 +22,69 @@ interface ContactLogEnvelope {
   contactLog: ContactLogEntry;
 }
 
+interface LeadEnvelope {
+  lead: Lead;
+}
+
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
 const unsuccessfulResult = { successful: false, data: null } as const;
+const LEAD_UPDATE_ERROR_MESSAGE = 'Lead update request failed';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return typeof value === 'string' || value === null;
+}
+
+function isLeadEnvelope(value: unknown): value is LeadEnvelope {
+  if (!isRecord(value) || !isRecord(value.lead)) return false;
+
+  const lead = value.lead;
+  return (
+    typeof lead.id === 'string' &&
+    typeof lead.placeId === 'string' &&
+    typeof lead.name === 'string' &&
+    isNullableString(lead.address) &&
+    isNullableString(lead.phone) &&
+    isNullableString(lead.website) &&
+    (typeof lead.rating === 'number' || lead.rating === null) &&
+    (typeof lead.reviewCount === 'number' || lead.reviewCount === null) &&
+    typeof lead.industryType === 'string' &&
+    isNullableString(lead.photoUrl) &&
+    isNullableString(lead.mapsUrl) &&
+    typeof lead.leadScore === 'number' &&
+    (isRecord(lead.scoreBreakdown) || lead.scoreBreakdown === null) &&
+    typeof lead.status === 'string' &&
+    isLeadStatus(lead.status) &&
+    isNullableString(lead.notes) &&
+    Array.isArray(lead.opportunities) &&
+    lead.opportunities.every((opportunity) => typeof opportunity === 'string') &&
+    isNullableString(lead.lastContactedAt) &&
+    isNullableString(lead.nextFollowUpAt) &&
+    typeof lead.savedAt === 'string' &&
+    typeof lead.updatedAt === 'string' &&
+    Array.isArray(lead.tags) &&
+    lead.tags.every(
+      (tag) =>
+        isRecord(tag) &&
+        typeof tag.id === 'string' &&
+        typeof tag.name === 'string' &&
+        typeof tag.color === 'string' &&
+        typeof tag.createdAt === 'string'
+    ) &&
+    isNullableString(lead.popularTimesData) &&
+    isNullableString(lead.popularTimesScrapedAt)
+  );
+}
+
+export class LeadUpdateClientError extends Error {
+  constructor() {
+    super(LEAD_UPDATE_ERROR_MESSAGE);
+    this.name = 'LeadUpdateClientError';
+  }
+}
 
 export async function fetchLeadContactLogs(
   leadId: Lead['id']
@@ -47,14 +109,24 @@ export async function fetchAllLeadTasks(
 export async function patchLeadEditableFields(
   leadId: Lead['id'],
   fields: EditableLeadFields
-): Promise<LeadDetailModalClientResult<null>> {
+): Promise<Lead> {
   const response = await fetch(`/api/leads/${leadId}`, {
     method: 'PATCH',
     headers: JSON_HEADERS,
     body: JSON.stringify(fields),
   });
 
-  return response.ok ? { successful: true, data: null } : unsuccessfulResult;
+  if (!response.ok) throw new LeadUpdateClientError();
+
+  let data: unknown;
+  try {
+    data = await response.json();
+  } catch {
+    throw new LeadUpdateClientError();
+  }
+
+  if (!isLeadEnvelope(data)) throw new LeadUpdateClientError();
+  return data.lead;
 }
 
 export async function createLeadContactLog(

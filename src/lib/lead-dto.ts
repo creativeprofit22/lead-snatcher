@@ -1,5 +1,6 @@
 import type { Lead as PrismaLead, Tag as PrismaTag } from '@/generated/prisma/client';
-import type { IndustryType, Lead, LeadStatus, ScoreBreakdown, Tag } from '@/types';
+import { parseLeadStatus } from '@/lib/lead-status';
+import type { IndustryType, Lead, ScoreBreakdown, Tag } from '@/types';
 
 type PersistedLead = PrismaLead & {
   tags?: Array<{ tag: PrismaTag }>;
@@ -40,7 +41,7 @@ export function toLeadDto(lead: PersistedLead): Lead {
     mapsUrl: lead.mapsUrl,
     leadScore: lead.leadScore,
     scoreBreakdown: parseJson<ScoreBreakdown | null>(lead.scoreBreakdown, null),
-    status: lead.status as LeadStatus,
+    status: parseLeadStatus(lead.status),
     notes: lead.notes,
     opportunities: parseJson<string[]>(lead.opportunities, []),
     lastContactedAt: lead.lastContactedAt?.toISOString() ?? null,

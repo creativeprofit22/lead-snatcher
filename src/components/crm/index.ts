@@ -27,5 +27,6 @@ export { TagBadge } from './TagBadge';
 export { BulkActions } from './BulkActions';
 
 // Filter components
-export { FilterSidebar, defaultFilters } from './FilterSidebar';
-export type { FilterState } from './FilterSidebar';
+export { FilterSidebar } from './FilterSidebar';
+export { defaultLeadListQuery as defaultFilters } from '@/lib/crm-lead-query';
+export type { LeadListFilters as FilterState } from '@/lib/crm-lead-query';

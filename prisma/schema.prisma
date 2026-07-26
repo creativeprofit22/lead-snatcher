@@ -179,7 +179,7 @@ model Lead {
   scoreBreakdown String? // JSON object (was Json?)
 
   // CRM fields - status as string instead of enum for SQLite compatibility
-  // Values: new, contacted, called, proposal_sent, negotiating, won, lost, not_interested
+  // Generated evidence from src/lib/lead-status.ts: new, contacted, called, proposal_sent, negotiating, won, lost, not_interested
   status        String  @default("new")
   notes         String?
   opportunities String? // JSON array (was String[])

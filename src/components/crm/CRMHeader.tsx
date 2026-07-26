@@ -37,19 +37,20 @@ export function CRMHeader({
   return (
     <header className="sticky top-0 z-40 bg-black/95 backdrop-blur-sm border-b border-white/10">
       <div className="max-w-7xl mx-auto px-4 sm:px-6">
-        <div className="flex items-center justify-between h-16 gap-4">
+        <div className="flex min-h-16 flex-wrap items-center justify-between gap-2 py-2 sm:h-16 sm:flex-nowrap sm:gap-4 sm:py-0">
           {/* Left: Logo & Title */}
           <div className="flex items-center gap-4">
             <Link href="/" className="flex items-center gap-3 group">
               <span className="text-xl font-bold text-white font-orbitron tracking-wider group-hover:text-gray-200 transition-colors">
-                LEAD SNATCHER
+                <span className="sm:hidden">LS</span>
+                <span className="hidden sm:inline">LEAD SNATCHER</span>
               </span>
               <span className="hidden sm:block text-sm text-gray-500">CRM</span>
             </Link>
           </div>
 
           {/* Center: Search */}
-          <div className="flex-1 max-w-xl">
+          <div className="order-3 w-full max-w-xl sm:order-none sm:flex-1">
             <div
               className={`relative flex items-center transition-all ${
                 isSearchFocused ? 'ring-1 ring-white/20' : ''
@@ -77,12 +78,19 @@ export function CRMHeader({
           </div>
 
           {/* Right: View Toggle & Actions */}
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 sm:gap-2">
             {/* View Toggle */}
-            <div className="hidden sm:flex items-center border border-white/10 rounded-lg p-1">
+            <div
+              className="flex items-center border border-white/10 rounded-lg p-1"
+              role="group"
+              aria-label="CRM view"
+            >
               <button
+                type="button"
+                aria-label="List view"
+                aria-pressed={viewMode === 'list'}
                 onClick={() => onViewModeChange('list')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                className={`flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-md px-2 text-sm font-medium transition-colors lg:min-h-9 lg:min-w-9 lg:px-3 ${
                   viewMode === 'list'
                     ? 'bg-white/10 text-white'
                     : 'text-gray-500 hover:text-gray-300'
@@ -92,8 +100,11 @@ export function CRMHeader({
                 <span className="hidden lg:inline">List</span>
               </button>
               <button
+                type="button"
+                aria-label="Kanban view"
+                aria-pressed={viewMode === 'kanban'}
                 onClick={() => onViewModeChange('kanban')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                className={`flex min-h-11 min-w-11 items-center justify-center gap-1.5 rounded-md px-2 text-sm font-medium transition-colors lg:min-h-9 lg:min-w-9 lg:px-3 ${
                   viewMode === 'kanban'
                     ? 'bg-white/10 text-white'
                     : 'text-gray-500 hover:text-gray-300'

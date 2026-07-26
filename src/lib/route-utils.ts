@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import type { ZodType } from 'zod';
+import { ZodError, type ZodType } from 'zod';
 import { getCurrentUserId } from '@/lib/auth-utils';
 
 export class HttpError extends Error {
@@ -37,6 +37,20 @@ export async function parseRouteBody<T>(request: Request, schema: ZodType<T>): P
   }
 
   return result.data;
+}
+
+export function parseRouteQuery<T>(
+  searchParams: URLSearchParams,
+  parser: (searchParams: URLSearchParams) => T
+): T {
+  try {
+    return parser(searchParams);
+  } catch (error) {
+    if (error instanceof ZodError) {
+      throw new HttpError(error.issues[0]?.message ?? 'Invalid query parameters', 400);
+    }
+    throw error;
+  }
 }
 
 export function routeErrorResponse(error: unknown, fallbackMessage: string): NextResponse {

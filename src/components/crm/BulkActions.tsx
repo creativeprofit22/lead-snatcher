@@ -5,19 +5,42 @@ import { Trash2, Tag, RefreshCw, Download, X, Check, Loader2 } from 'lucide-reac
 import { toast } from 'sonner';
 import { LEAD_STATUSES } from '@/lib/constants';
 import type { CrmTagsResource } from '@/lib/hooks/useCrmTags';
-import type { Lead, LeadStatus } from '@/types';
+import type { BulkLeadMutationResponse, Lead, LeadStatus } from '@/types';
 
 interface BulkActionsProps {
   selectedLeads: Lead[];
   onClearSelection: () => void;
   onBulkUpdate: () => Promise<void>;
+  onBulkDelete: (deletedLeadIds: readonly string[]) => void;
   tagCatalog: CrmTagsResource;
+}
+
+function isBulkLeadMutationResponse(payload: unknown): payload is BulkLeadMutationResponse {
+  return (
+    typeof payload === 'object' &&
+    payload !== null &&
+    'count' in payload &&
+    typeof payload.count === 'number' &&
+    Number.isInteger(payload.count) &&
+    payload.count >= 0
+  );
+}
+
+async function readCompleteMutationCount(response: Response, expectedCount: number) {
+  const payload: unknown = await response.json();
+
+  if (!isBulkLeadMutationResponse(payload) || payload.count !== expectedCount) {
+    throw new Error('Bulk action did not update every selected lead');
+  }
+
+  return payload.count;
 }
 
 export function BulkActions({
   selectedLeads,
   onClearSelection,
   onBulkUpdate,
+  onBulkDelete,
   tagCatalog,
 }: BulkActionsProps) {
   const [isStatusOpen, setIsStatusOpen] = useState(false);
@@ -28,13 +51,14 @@ export function BulkActions({
   const { tags: availableTags, loading: tagsLoading, error: tagsError, refetch } = tagCatalog;
 
   const handleBulkStatusChange = async (status: LeadStatus) => {
+    const leadIds = selectedLeads.map((lead) => lead.id);
     setIsUpdating(true);
     try {
       const res = await fetch('/api/leads/bulk', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          leadIds: selectedLeads.map((l) => l.id),
+          leadIds,
           action: 'status',
           status,
         }),
@@ -42,7 +66,8 @@ export function BulkActions({
 
       if (!res.ok) throw new Error('Failed to update status');
 
-      toast.success(`Updated ${selectedLeads.length} leads to "${status}"`);
+      const updatedCount = await readCompleteMutationCount(res, leadIds.length);
+      toast.success(`Updated ${updatedCount} leads to "${status}"`);
       setIsStatusOpen(false);
       await onBulkUpdate();
       onClearSelection();
@@ -82,6 +107,7 @@ export function BulkActions({
   };
 
   const handleBulkDelete = async () => {
+    const deletedLeadIds = selectedLeads.map((lead) => lead.id);
     if (
       !confirm(
         `Are you sure you want to delete ${selectedLeads.length} leads? This action cannot be undone.`
@@ -96,13 +122,15 @@ export function BulkActions({
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          leadIds: selectedLeads.map((l) => l.id),
+          leadIds: deletedLeadIds,
         }),
       });
 
       if (!res.ok) throw new Error('Failed to delete leads');
 
-      toast.success(`Deleted ${selectedLeads.length} leads`);
+      const deletedCount = await readCompleteMutationCount(res, deletedLeadIds.length);
+      toast.success(`Deleted ${deletedCount} leads`);
+      onBulkDelete(deletedLeadIds);
       await onBulkUpdate();
       onClearSelection();
     } catch {
@@ -140,6 +168,7 @@ export function BulkActions({
         <span className="text-sm font-medium text-gray-200">{selectedLeads.length} selected</span>
         <button
           onClick={onClearSelection}
+          aria-label="Clear selection"
           className="p-1 hover:bg-white/10 rounded-lg transition-colors"
         >
           <X className="w-4 h-4 text-gray-400" />
@@ -156,6 +185,7 @@ export function BulkActions({
             setIsTagsOpen(false);
           }}
           disabled={isUpdating}
+          aria-expanded={isStatusOpen}
           className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-gray-200 text-sm transition-colors disabled:opacity-50"
         >
           <RefreshCw className="w-4 h-4" />

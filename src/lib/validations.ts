@@ -1,18 +1,10 @@
 import { z } from 'zod';
 import { DEFAULT_COUNTRY_CODE } from '@/lib/constants';
+import { LEAD_STATUS_VALUES } from '@/lib/lead-status';
 
 // ─── Shared enums ───────────────────────────────────────────────
 
-export const leadStatusSchema = z.enum([
-  'new',
-  'contacted',
-  'called',
-  'proposal_sent',
-  'negotiating',
-  'won',
-  'lost',
-  'not_interested',
-]);
+export const leadStatusSchema = z.enum(LEAD_STATUS_VALUES);
 
 export const industryTypeSchema = z.enum([
   'restaurant',
@@ -134,8 +126,8 @@ export const addTagToLeadSchema = z.object({
   ),
 });
 
-// PATCH /api/leads/bulk
-const bulkLeadIdsSchema = z
+// PATCH and DELETE /api/leads/bulk
+export const bulkLeadIdsSchema = z
   .array(z.string().trim().min(1, 'Lead IDs cannot be empty'))
   .min(1, 'At least one lead ID is required')
   .refine((leadIds) => new Set(leadIds).size === leadIds.length, {
@@ -157,9 +149,8 @@ export const bulkUpdateLeadsSchema = z.discriminatedUnion('action', [
   }),
 ]);
 
-// DELETE /api/leads/bulk
 export const bulkDeleteLeadsSchema = z.object({
-  leadIds: z.array(z.string()).min(1, 'At least one lead ID is required'),
+  leadIds: bulkLeadIdsSchema,
 });
 
 // POST /api/settings (API keys)

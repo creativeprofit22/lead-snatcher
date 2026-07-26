@@ -36,6 +36,7 @@ export function LeadDetailModal({ lead, isOpen, onClose, onUpdate }: LeadDetailM
   const [activeTab, setActiveTab] = useState<LeadDetailTabId>('details');
   const [contactLogs, setContactLogs] = useState<ContactLogEntry[]>([]);
   const [isLoadingLogs, setIsLoadingLogs] = useState(false);
+  const contactLogsRequestVersion = useRef(0);
   const [notes, setNotes] = useState('');
   const [isSavingNotes, setIsSavingNotes] = useState(false);
   const [followUpDate, setFollowUpDate] = useState('');
@@ -59,16 +60,22 @@ export function LeadDetailModal({ lead, isOpen, onClose, onUpdate }: LeadDetailM
   // Load contact logs
   const fetchContactLogs = useCallback(async () => {
     if (!lead) return;
+
+    const requestVersion = ++contactLogsRequestVersion.current;
     setIsLoadingLogs(true);
     try {
       const result = await fetchLeadContactLogs(lead.id);
-      if (result.successful) {
+      if (result.successful && requestVersion === contactLogsRequestVersion.current) {
         setContactLogs(result.data);
       }
     } catch {
-      console.error('Failed to fetch contact logs');
+      if (requestVersion === contactLogsRequestVersion.current) {
+        console.error('Failed to fetch contact logs');
+      }
     } finally {
-      setIsLoadingLogs(false);
+      if (requestVersion === contactLogsRequestVersion.current) {
+        setIsLoadingLogs(false);
+      }
     }
   }, [lead]);
 
@@ -104,6 +111,7 @@ export function LeadDetailModal({ lead, isOpen, onClose, onUpdate }: LeadDetailM
     }
 
     return () => {
+      contactLogsRequestVersion.current += 1;
       tasksRequestVersion.current += 1;
     };
   }, [lead, isOpen, fetchContactLogs, fetchTasks]);
@@ -126,11 +134,9 @@ export function LeadDetailModal({ lead, isOpen, onClose, onUpdate }: LeadDetailM
   // Update status
   const handleUpdateStatus = async (status: LeadStatus) => {
     try {
-      const result = await patchLeadEditableFields(lead.id, { status });
-      if (result.successful) {
-        onUpdate({ ...lead, status });
-        toast.success('Status updated');
-      }
+      const updatedLead = await patchLeadEditableFields(lead.id, { status });
+      onUpdate(updatedLead);
+      toast.success('Status updated');
     } catch {
       toast.error('Failed to update status');
     }
@@ -140,11 +146,9 @@ export function LeadDetailModal({ lead, isOpen, onClose, onUpdate }: LeadDetailM
   const handleSaveNotes = async () => {
     setIsSavingNotes(true);
     try {
-      const result = await patchLeadEditableFields(lead.id, { notes });
-      if (result.successful) {
-        onUpdate({ ...lead, notes });
-        toast.success('Notes saved');
-      }
+      const updatedLead = await patchLeadEditableFields(lead.id, { notes });
+      onUpdate(updatedLead);
+      toast.success('Notes saved');
     } catch {
       toast.error('Failed to save notes');
     } finally {
@@ -157,11 +161,9 @@ export function LeadDetailModal({ lead, isOpen, onClose, onUpdate }: LeadDetailM
     setIsSavingFollowUp(true);
     const nextFollowUpAt = serializeFollowUpInputToIso(followUpDate);
     try {
-      const result = await patchLeadEditableFields(lead.id, { nextFollowUpAt });
-      if (result.successful) {
-        onUpdate({ ...lead, nextFollowUpAt });
-        toast.success(followUpDate ? 'Follow-up set' : 'Follow-up cleared');
-      }
+      const updatedLead = await patchLeadEditableFields(lead.id, { nextFollowUpAt });
+      onUpdate(updatedLead);
+      toast.success(followUpDate ? 'Follow-up set' : 'Follow-up cleared');
     } catch {
       toast.error('Failed to save follow-up');
     } finally {
