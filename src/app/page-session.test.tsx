@@ -106,20 +106,30 @@ vi.mock('@/lib/business/search-session-client', async (importOriginal) => {
 
 vi.mock('@/components/search', () => ({
   WelcomeHeader: () => null,
+  formatLocationSelection: (location: { cityQuery: string; neighborhoodLabel: string | null }) =>
+    location.neighborhoodLabel
+      ? `${location.neighborhoodLabel}, ${location.cityQuery}`
+      : location.cityQuery,
   CityInput: ({
-    city,
-    onCityChange,
+    location,
+    onLocationChange,
     onSearch,
   }: {
-    city: string;
-    onCityChange: (city: string) => void;
+    location: { cityQuery: string; neighborhoodLabel: string | null };
+    onLocationChange: (location: { cityQuery: string; neighborhoodLabel: string | null }) => void;
     onSearch: () => void;
   }) => (
     <div>
       <input
         aria-label="City"
-        value={city}
-        onChange={(event) => onCityChange(event.currentTarget.value)}
+        value={
+          location.neighborhoodLabel
+            ? `${location.neighborhoodLabel}, ${location.cityQuery}`
+            : location.cityQuery
+        }
+        onChange={(event) =>
+          onLocationChange({ cityQuery: event.currentTarget.value, neighborhoodLabel: null })
+        }
       />
       <button onClick={onSearch}>Search now</button>
     </div>

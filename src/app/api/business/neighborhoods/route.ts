@@ -2,71 +2,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import { geocodeCity, scanCityZones } from '@/lib/business';
 import { checkRateLimit, getClientIp, RATE_LIMITS } from '@/lib/rate-limit';
-import type { Zone, ZoneArchetype } from '@/lib/business/zone-contract';
-import {
-  classifyRegion,
-  REGION_LABELS,
-  REGION_ORDER,
-  type RegionDirection,
-} from '@/lib/business/zone-regions';
+import { neighborhoodLookupResponseSchema } from '@/lib/business/neighborhood-contract';
+import { buildNeighborhoodLookup } from '@/lib/business/zone-neighborhoods';
 
-// Directional fallbacks used by zone-grid when no named place is nearby.
-// These are NOT real neighborhood names and should be hidden from suggestions.
-const DIRECTIONAL_FALLBACK_LABELS = new Set([
-  'SW Quadrant',
-  'South',
-  'SE Quadrant',
-  'West',
-  'Central',
-  'East',
-  'NW Quadrant',
-  'North',
-  'NE Quadrant',
-  'Zone',
-]);
-
-interface RegionSummary {
-  direction: RegionDirection;
-  label: string;
-  score: number; // max score of any zone inside this region (0 if none)
-  zoneCount: number;
-  topLabel: string | null; // the best-scoring neighborhood inside, for preview text
-}
-
-interface NeighborhoodOut {
-  label: string;
-  score: number;
-  /** Consumer-wealth axis — luxury retail, premium hotels, affluence. */
-  wealthScore: number;
-  /** Business-density axis — corporate offices, professional services. */
-  businessScore: number;
-  /** luxury | corporate | mixed | developing — the money-flavor label. */
-  archetype: ZoneArchetype;
-  level: Zone['level'];
-  latitude: number;
-  longitude: number;
-  region: RegionDirection;
-}
-
-function buildRegionSummaries(zones: NeighborhoodOut[]): RegionSummary[] {
-  const byRegion = new Map<RegionDirection, NeighborhoodOut[]>();
-  for (const z of zones) {
-    const list = byRegion.get(z.region) ?? [];
-    list.push(z);
-    byRegion.set(z.region, list);
-  }
-  return REGION_ORDER.map((direction) => {
-    const list = byRegion.get(direction) ?? [];
-    const sorted = list.sort((a, b) => b.score - a.score);
-    const top = sorted[0];
-    return {
-      direction,
-      label: REGION_LABELS[direction],
-      score: top?.score ?? 0,
-      zoneCount: list.length,
-      topLabel: top?.label ?? null,
-    };
-  });
+function jsonNeighborhoodLookup(payload: unknown) {
+  return NextResponse.json(neighborhoodLookupResponseSchema.parse(payload));
 }
 
 export async function GET(request: NextRequest) {
@@ -92,7 +32,7 @@ export async function GET(request: NextRequest) {
     const country = searchParams.get('country')?.trim() || 'us';
 
     if (!city || city.length < 2) {
-      return NextResponse.json({
+      return jsonNeighborhoodLookup({
         regions: [],
         zones: [],
         singleZone: true,
@@ -101,7 +41,7 @@ export async function GET(request: NextRequest) {
 
     const geocodeResult = await geocodeCity(city, country);
     if (!geocodeResult) {
-      return NextResponse.json({
+      return jsonNeighborhoodLookup({
         regions: [],
         zones: [],
         singleZone: true,
@@ -116,40 +56,14 @@ export async function GET(request: NextRequest) {
       geocodeResult.bbox
     );
 
-    // Filter out directional fallbacks + empty zones before region grouping.
-    const validZones = zoneGrid.zones.filter(
-      (z) => !DIRECTIONAL_FALLBACK_LABELS.has(z.label) && z.score > 0 && z.amenities.total > 0
-    );
+    const neighborhoodLookup = buildNeighborhoodLookup(zoneGrid);
 
-    // Annotate each zone with its region based on city bbox. Small-city
-    // single-zone fallback has no meaningful sub-regions, so everything
-    // lands in Central.
-    const cityBbox = zoneGrid.bbox;
-    const annotated: NeighborhoodOut[] = validZones.map((z) => ({
-      label: z.label,
-      score: z.score,
-      wealthScore: z.wealthScore,
-      businessScore: z.businessScore,
-      archetype: z.archetype,
-      level: z.level,
-      latitude: z.latitude,
-      longitude: z.longitude,
-      region: zoneGrid.singleZone ? 'central' : classifyRegion(z.latitude, z.longitude, cityBbox),
-    }));
-
-    const regions = buildRegionSummaries(annotated);
-
-    return NextResponse.json({
-      regions,
-      zones: annotated,
-      singleZone: zoneGrid.singleZone,
+    return jsonNeighborhoodLookup({
+      ...neighborhoodLookup,
       city: geocodeResult.displayName,
     });
   } catch (error) {
     console.error('Neighborhoods lookup error:', error);
-    return NextResponse.json(
-      { regions: [], zones: [], singleZone: true },
-      { status: 200 } // soft-fail: empty state is better UX than a red error
-    );
+    return jsonNeighborhoodLookup({ regions: [], zones: [], singleZone: true });
   }
 }

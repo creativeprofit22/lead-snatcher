@@ -21,10 +21,21 @@ const CITY_PLACEHOLDER_PHRASES = [
   'Dublin',
 ];
 
+export interface LocationSelection {
+  cityQuery: string;
+  neighborhoodLabel: string | null;
+}
+
+export function formatLocationSelection(location: LocationSelection): string {
+  return location.neighborhoodLabel
+    ? `${location.neighborhoodLabel}, ${location.cityQuery}`
+    : location.cityQuery;
+}
+
 interface CityInputProps {
-  city: string;
+  location: LocationSelection;
   country: string;
-  onCityChange: (city: string) => void;
+  onLocationChange: (location: LocationSelection) => void;
   onCountryChange: (country: string) => void;
   onSearch: () => void;
   isLoading?: boolean;
@@ -33,13 +44,14 @@ interface CityInputProps {
 const DROPDOWN_WIDTH = 192; // w-48
 
 export function CityInput({
-  city,
+  location,
   country,
-  onCityChange,
+  onLocationChange,
   onCountryChange,
   onSearch,
   isLoading,
 }: CityInputProps) {
+  const city = formatLocationSelection(location);
   const [isFocused, setIsFocused] = useState(false);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [dropdownPos, setDropdownPos] = useState<{ top: number; left: number } | null>(null);
@@ -104,7 +116,10 @@ export function CityInput({
   };
 
   const handleCountrySelect = (code: string) => {
-    onCountryChange(code);
+    if (code !== country) {
+      onLocationChange({ cityQuery: '', neighborhoodLabel: null });
+      onCountryChange(code);
+    }
     setIsDropdownOpen(false);
   };
 
@@ -171,11 +186,14 @@ export function CityInput({
         <input
           type="text"
           value={city}
-          onChange={(e) => onCityChange(e.target.value)}
+          onChange={(event) =>
+            onLocationChange({ cityQuery: event.target.value, neighborhoodLabel: null })
+          }
           onKeyDown={handleKeyDown}
           onFocus={() => setIsFocused(true)}
           onBlur={() => setIsFocused(false)}
           placeholder={placeholder}
+          aria-label="City"
           className="flex-1 bg-transparent text-base text-white outline-none placeholder:text-white/35"
         />
 
@@ -195,9 +213,12 @@ export function CityInput({
       {dropdown}
 
       <RegionPicker
-        city={city}
+        cityQuery={location.cityQuery}
         country={country}
-        onNeighborhoodSelect={onCityChange}
+        neighborhoodSelected={location.neighborhoodLabel !== null}
+        onNeighborhoodSelect={(neighborhoodLabel) =>
+          onLocationChange({ ...location, neighborhoodLabel })
+        }
         disabled={isLoading}
       />
 

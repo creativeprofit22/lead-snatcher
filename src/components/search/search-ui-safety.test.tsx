@@ -1,8 +1,10 @@
 import { act, cleanup, fireEvent, render, renderHook, screen } from '@testing-library/react';
+import { useState } from 'react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import type { Zone } from '@/lib/business/zone-contract';
 import { AreaDensityMeter } from './AreaDensityMeter';
+import { CityInput } from './CityInput';
 import { getIdleScore, IdleScoreDial } from './IdleScoreDial';
 import { RadarScan } from './RadarScan';
 import type { RadarPin, RadarZoneDot } from './radar-geometry';
@@ -68,6 +70,44 @@ async function runRegionDebounce() {
   await advanceTime(700);
 }
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
+
+function neighborhood(label: string, score: number, region = 'central') {
+  return {
+    label,
+    score,
+    wealthScore: score,
+    businessScore: score - 5,
+    archetype: 'mixed',
+    level: 'commercial',
+    latitude: 51.5,
+    longitude: -0.1,
+    region,
+  };
+}
+
+function regionPayload(primaryLabel: string, secondaryLabel: string) {
+  return {
+    regions: [
+      {
+        direction: 'central',
+        label: 'Central',
+        score: 88,
+        zoneCount: 1,
+        topLabel: primaryLabel,
+      },
+      { direction: 'n', label: 'North', score: 65, zoneCount: 1, topLabel: secondaryLabel },
+    ],
+    zones: [neighborhood(primaryLabel, 88), neighborhood(secondaryLabel, 65, 'n')],
+    singleZone: false,
+  };
+}
 function useFakeAnimationFrames() {
   vi.useFakeTimers();
   vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) =>
@@ -124,7 +164,7 @@ describe('RegionPicker', () => {
     });
     vi.stubGlobal('fetch', fetchMock);
 
-    render(<RegionPicker city="London" country="GB" onNeighborhoodSelect={vi.fn()} />);
+    render(<RegionPicker cityQuery="London" country="GB" onNeighborhoodSelect={vi.fn()} />);
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(screen.getByText('Scanning London…')).toBeTruthy();
@@ -136,19 +176,44 @@ describe('RegionPicker', () => {
     expect(screen.getByText('Mayfair')).toBeTruthy();
   });
 
-  test('treats a malformed response body as empty data', async () => {
+  test('uses the full comma-qualified city query for neighborhood discovery', async () => {
     vi.useFakeTimers();
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({ ok: true, json: async () => 'not-an-object' })
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ regions: [], zones: [], singleZone: false }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<RegionPicker cityQuery="Phoenix, AZ" country="us" onNeighborhoodSelect={vi.fn()} />);
+    await runRegionDebounce();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/business/neighborhoods?city=Phoenix%2C%20AZ&country=us',
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
     );
+  });
+
+  test.each([
+    ['a scalar body', 'not-an-object'],
+    [
+      'malformed array members',
+      {
+        regions: [{}],
+        zones: [{ ...neighborhood('Mayfair', 88), archetype: 'unknown' }],
+        singleZone: false,
+      },
+    ],
+  ])('treats %s as empty data without rendering controls', async (_case, payload) => {
+    vi.useFakeTimers();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => payload }));
 
     const { container } = render(
-      <RegionPicker city="London" country="GB" onNeighborhoodSelect={vi.fn()} />
+      <RegionPicker cityQuery="London" country="GB" onNeighborhoodSelect={vi.fn()} />
     );
     await runRegionDebounce();
 
     expect(container.childElementCount).toBe(0);
+    expect(screen.queryAllByRole('button')).toHaveLength(0);
   });
 
   test('aborts an in-flight request when the city changes', async () => {
@@ -163,18 +228,251 @@ describe('RegionPicker', () => {
     );
 
     const { rerender, unmount } = render(
-      <RegionPicker city="London" country="GB" onNeighborhoodSelect={vi.fn()} />
+      <RegionPicker cityQuery="London" country="GB" onNeighborhoodSelect={vi.fn()} />
     );
     await runRegionDebounce();
     expect(signals[0]?.aborted).toBe(false);
 
-    rerender(<RegionPicker city="Manchester" country="GB" onNeighborhoodSelect={vi.fn()} />);
+    rerender(<RegionPicker cityQuery="Manchester" country="GB" onNeighborhoodSelect={vi.fn()} />);
     expect(signals[0]?.aborted).toBe(true);
 
     await runRegionDebounce();
     expect(signals[1]?.aborted).toBe(false);
     unmount();
     expect(signals[1]?.aborted).toBe(true);
+  });
+
+  test('removes resolved London controls immediately while Manchester is deferred', async () => {
+    vi.useFakeTimers();
+    const manchesterResponse = deferred<{ ok: boolean; json: () => Promise<unknown> }>();
+    const signals: AbortSignal[] = [];
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      signals.push(init?.signal as AbortSignal);
+      if (url.includes('city=London')) {
+        return Promise.resolve({ ok: true, json: async () => regionPayload('Mayfair', 'Camden') });
+      }
+      return manchesterResponse.promise;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const onNeighborhoodSelect = vi.fn();
+    const { rerender } = render(
+      <RegionPicker cityQuery="London" country="GB" onNeighborhoodSelect={onNeighborhoodSelect} />
+    );
+    await runRegionDebounce();
+
+    expect(screen.getByText('Mayfair')).toBeTruthy();
+    rerender(
+      <RegionPicker
+        cityQuery="Manchester"
+        country="GB"
+        onNeighborhoodSelect={onNeighborhoodSelect}
+      />
+    );
+
+    expect(signals[0]?.aborted).toBe(true);
+    expect(screen.queryByText('Mayfair')).toBeNull();
+    expect(screen.getByText('Scanning Manchester…')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /Mayfair/i })).toBeNull();
+
+    await runRegionDebounce();
+    expect(signals[1]?.aborted).toBe(false);
+    await act(async () => {
+      manchesterResponse.resolve({
+        ok: true,
+        json: async () => regionPayload('Northern Quarter', 'Ancoats'),
+      });
+    });
+
+    expect(screen.getByText('Northern Quarter')).toBeTruthy();
+    expect(screen.queryByText('Mayfair')).toBeNull();
+  });
+
+  test('ignores a late Paris FR response after switching the same city to US', async () => {
+    vi.useFakeTimers();
+    const frenchJson = deferred<unknown>();
+    const usResponse = deferred<{ ok: boolean; json: () => Promise<unknown> }>();
+    const signals: AbortSignal[] = [];
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      signals.push(init?.signal as AbortSignal);
+      if (url.includes('country=FR')) {
+        return Promise.resolve({ ok: true, json: () => frenchJson.promise });
+      }
+      return usResponse.promise;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { rerender } = render(
+      <RegionPicker cityQuery="Paris" country="FR" onNeighborhoodSelect={vi.fn()} />
+    );
+    await runRegionDebounce();
+    expect(signals[0]?.aborted).toBe(false);
+
+    rerender(<RegionPicker cityQuery="Paris" country="US" onNeighborhoodSelect={vi.fn()} />);
+    expect(signals[0]?.aborted).toBe(true);
+    expect(screen.queryByText('French Quarter')).toBeNull();
+
+    await runRegionDebounce();
+    await act(async () => {
+      frenchJson.resolve(regionPayload('French Quarter', 'Montmartre'));
+      await Promise.resolve();
+    });
+    expect(screen.queryByText('French Quarter')).toBeNull();
+
+    await act(async () => {
+      usResponse.resolve({
+        ok: true,
+        json: async () => regionPayload('Paris Downtown', 'North Paris'),
+      });
+    });
+    expect(screen.getByText('Paris Downtown')).toBeTruthy();
+    expect(screen.queryByText('French Quarter')).toBeNull();
+  });
+
+  test('resets a region drill-in when only the country changes', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => regionPayload('Le Marais', 'Montmartre'),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => regionPayload('Paris Downtown', 'North Paris'),
+        })
+    );
+
+    const { rerender } = render(
+      <RegionPicker cityQuery="Paris" country="FR" onNeighborhoodSelect={vi.fn()} />
+    );
+    await runRegionDebounce();
+    fireEvent.click(screen.getByRole('button', { name: /Central/i }));
+    expect(screen.getByRole('button', { name: /Le Marais/i })).toBeTruthy();
+
+    rerender(<RegionPicker cityQuery="Paris" country="US" onNeighborhoodSelect={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: /Le Marais/i })).toBeNull();
+    await runRegionDebounce();
+
+    expect(screen.getByText('Browse Paris by region')).toBeTruthy();
+    expect(screen.getByText('Paris Downtown')).toBeTruthy();
+  });
+
+  test('sorts frozen fallback zones without changing source order', async () => {
+    vi.useFakeTimers();
+    const sourceZones = Object.freeze([
+      Object.freeze(neighborhood('Lower Score', 40)),
+      Object.freeze(neighborhood('Higher Score', 90)),
+    ]);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          regions: [
+            {
+              direction: 'central',
+              label: 'Central',
+              score: 90,
+              zoneCount: 2,
+              topLabel: 'Higher Score',
+            },
+          ],
+          zones: sourceZones,
+          singleZone: true,
+        }),
+      })
+    );
+
+    render(<RegionPicker cityQuery="York" country="GB" onNeighborhoodSelect={vi.fn()} />);
+    await runRegionDebounce();
+
+    const buttons = screen.getAllByRole('button');
+    expect(buttons[0]?.textContent).toContain('Higher Score');
+    expect(buttons[1]?.textContent).toContain('Lower Score');
+    expect(sourceZones.map(({ label }) => label)).toEqual(['Lower Score', 'Higher Score']);
+  });
+});
+
+describe('CityInput', () => {
+  test('collapses an explicit neighborhood selection and re-enables lookup after manual editing', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        regions: [
+          {
+            direction: 'central',
+            label: 'Central',
+            score: 88,
+            zoneCount: 1,
+            topLabel: 'Mayfair',
+          },
+        ],
+        zones: [neighborhood('Mayfair', 88)],
+        singleZone: true,
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    function CityInputHarness() {
+      const [location, setLocation] = useState({
+        cityQuery: 'London',
+        neighborhoodLabel: null as string | null,
+      });
+      return (
+        <CityInput
+          location={location}
+          country="gb"
+          onLocationChange={setLocation}
+          onCountryChange={vi.fn()}
+          onSearch={vi.fn()}
+        />
+      );
+    }
+
+    render(<CityInputHarness />);
+    await runRegionDebounce();
+    fireEvent.click(screen.getByTitle(/Wealth 88/));
+
+    const cityInput = screen.getByRole('textbox', { name: 'City' }) as HTMLInputElement;
+    expect(cityInput.value).toBe('Mayfair, London');
+    expect(screen.queryByTitle(/Wealth 88/)).toBeNull();
+    await runRegionDebounce();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    fireEvent.change(cityInput, { target: { value: 'London' } });
+    await runRegionDebounce();
+
+    expect(cityInput.value).toBe('London');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1]?.[0]).toBe('/api/business/neighborhoods?city=London&country=gb');
+    expect(screen.getByTitle(/Wealth 88/)).toBeTruthy();
+  });
+
+  test('clears the city before changing country', () => {
+    const onCityChange = vi.fn();
+    const onCountryChange = vi.fn();
+    render(
+      <CityInput
+        location={{ cityQuery: 'London', neighborhoodLabel: null }}
+        country="gb"
+        onLocationChange={onCityChange}
+        onCountryChange={onCountryChange}
+        onSearch={vi.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'GB' }));
+    fireEvent.click(screen.getByRole('button', { name: /FRFrance/i }));
+
+    expect(onCityChange).toHaveBeenCalledWith({ cityQuery: '', neighborhoodLabel: null });
+    expect(onCountryChange).toHaveBeenCalledWith('fr');
+    expect(onCityChange.mock.invocationCallOrder[0]).toBeLessThan(
+      onCountryChange.mock.invocationCallOrder[0] ?? Infinity
+    );
   });
 });
 

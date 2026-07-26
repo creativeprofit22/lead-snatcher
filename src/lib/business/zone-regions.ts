@@ -1,6 +1,5 @@
+import type { RegionDirection } from './neighborhood-contract';
 import type { ZoneBbox } from './zone-contract';
-
-export type RegionDirection = 'nw' | 'n' | 'ne' | 'w' | 'central' | 'e' | 'sw' | 's' | 'se';
 
 /** Geographic lookup rows ordered from south to north. */
 export const REGION_CLASSIFICATION_GRID = [

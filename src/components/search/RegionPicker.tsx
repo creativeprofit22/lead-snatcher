@@ -4,12 +4,14 @@ import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { ArrowLeft, MapPin, Gem, Building2, Shuffle, TrendingUp } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import type { ZoneArchetype, ZoneLevel } from '@/lib/business/zone-contract';
 import {
-  REGION_DISPLAY_LAYOUT,
-  REGION_SHORT_LABELS,
+  neighborhoodLookupResponseSchema,
+  type NeighborhoodSuggestion,
   type RegionDirection,
-} from '@/lib/business/zone-regions';
+  type RegionSummary,
+} from '@/lib/business/neighborhood-contract';
+import type { ZoneArchetype } from '@/lib/business/zone-contract';
+import { REGION_DISPLAY_LAYOUT, REGION_SHORT_LABELS } from '@/lib/business/zone-regions';
 /**
  * Two-stage location picker that replaces the flat NeighborhoodChips. Lets
  * users browse by geographic region (3×3 grid: NW/N/NE, W/Central/E,
@@ -18,29 +20,27 @@ import {
  * flat top-6 race — Canary Wharf, Stratford, Greenwich all live in
  * different regions than Mayfair, so they get their own slot.
  *
- * For users who already know the specific neighborhood, this whole picker
- * is bypassed — they type "Mayfair, London" and hit search.
+ * The picker collapses only after a user selects a neighborhood here. Commas
+ * in manually typed locations remain part of the full discovery query.
  */
 
-interface RegionSummary {
-  direction: RegionDirection;
-  label: string;
-  score: number;
-  zoneCount: number;
-  topLabel: string | null;
+type RegionRequestStatus = 'idle' | 'pending' | 'resolved';
+
+interface RegionResultState {
+  key: string;
+  status: RegionRequestStatus;
+  regions: readonly RegionSummary[];
+  zones: readonly NeighborhoodSuggestion[];
+  singleZone: boolean;
 }
 
-interface Neighborhood {
-  label: string;
-  score: number;
-  wealthScore: number;
-  businessScore: number;
-  archetype: ZoneArchetype;
-  level: ZoneLevel;
-  latitude: number;
-  longitude: number;
-  region: RegionDirection;
-}
+const EMPTY_RESULT: RegionResultState = {
+  key: '',
+  status: 'idle',
+  regions: [],
+  zones: [],
+  singleZone: false,
+};
 
 /**
  * Archetype presentation — icon, short label, and color tone. Consumer
@@ -79,24 +79,15 @@ const ARCHETYPE_DISPLAY: Record<
 };
 
 interface RegionPickerProps {
-  city: string;
+  cityQuery: string;
   country: string;
-  onNeighborhoodSelect: (combinedCity: string) => void;
+  neighborhoodSelected?: boolean;
+  onNeighborhoodSelect: (neighborhoodLabel: string) => void;
   disabled?: boolean;
 }
 
 const DEBOUNCE_MS = 700;
 const MIN_CHARS = 3;
-
-/**
- * Returns the base city name — i.e. the text after the first comma if the
- * user has refined to "Neighborhood, City", else the whole input.
- */
-function cityBase(city: string): string {
-  const commaIdx = city.indexOf(',');
-  if (commaIdx === -1) return city.trim();
-  return city.slice(commaIdx + 1).trim();
-}
 
 function SkeletonTile({ index }: { index: number }) {
   return (
@@ -149,43 +140,37 @@ function scoreTone(score: number): { text: string; border: string; bg: string } 
   };
 }
 
-export function RegionPicker({ city, country, onNeighborhoodSelect, disabled }: RegionPickerProps) {
-  const [regions, setRegions] = useState<RegionSummary[]>([]);
-  const [zones, setZones] = useState<Neighborhood[]>([]);
-  const [pending, setPending] = useState(false);
-  const [singleZone, setSingleZone] = useState(false);
+export function RegionPicker({
+  cityQuery,
+  country,
+  neighborhoodSelected = false,
+  onNeighborhoodSelect,
+  disabled,
+}: RegionPickerProps) {
+  const [result, setResult] = useState<RegionResultState>(EMPTY_RESULT);
   const [selectedRegion, setSelectedRegion] = useState<RegionDirection | null>(null);
-  const lastFetchedRef = useRef<string>('');
   const abortRef = useRef<AbortController | null>(null);
 
-  const trimmedCity = city.trim();
-  const hasRefinement = trimmedCity.includes(',');
-  const base = cityBase(trimmedCity);
+  const base = cityQuery.trim();
   const tooShort = base.length < MIN_CHARS;
+  const requestKey = `${country}|${base.toLowerCase()}`;
 
   useEffect(() => {
     if (tooShort) {
-      setRegions([]);
-      setZones([]);
-      setPending(false);
-      setSelectedRegion(null);
-      lastFetchedRef.current = '';
+      setResult(EMPTY_RESULT);
       return;
     }
 
-    // User already picked a neighborhood — keep picker collapsed.
-    if (hasRefinement) {
-      setPending(false);
-      return;
-    }
+    // An explicit picker selection, rather than punctuation, keeps the picker collapsed.
+    if (neighborhoodSelected) return;
 
-    const cacheKey = `${country}|${base.toLowerCase()}`;
-    if (lastFetchedRef.current === cacheKey) {
-      setPending(false);
-      return;
-    }
-
-    setPending(true);
+    setResult({
+      key: requestKey,
+      status: 'pending',
+      regions: [],
+      zones: [],
+      singleZone: false,
+    });
 
     let controller: AbortController | null = null;
     const timer = setTimeout(() => {
@@ -200,35 +185,47 @@ export function RegionPicker({ city, country, onNeighborhoodSelect, disabled }: 
             { signal: controller.signal }
           );
           if (controller.signal.aborted) return;
+
           if (!response.ok) {
-            setRegions([]);
-            setZones([]);
+            setResult((current) =>
+              current.key === requestKey
+                ? { ...current, status: 'resolved', regions: [], zones: [], singleZone: false }
+                : current
+            );
             return;
           }
+
           const data: unknown = await response.json();
           if (controller.signal.aborted) return;
-          const payload =
-            typeof data === 'object' && data !== null ? (data as Record<string, unknown>) : {};
-          const nextRegions: RegionSummary[] = Array.isArray(payload.regions)
-            ? payload.regions
-            : [];
-          const nextZones: Neighborhood[] = Array.isArray(payload.zones) ? payload.zones : [];
-          setRegions(nextRegions);
-          setZones(nextZones);
-          setSingleZone(payload.singleZone === true);
-          if (nextRegions.length > 0 || nextZones.length > 0) {
-            lastFetchedRef.current = cacheKey;
-          }
+
+          const parsed = neighborhoodLookupResponseSchema.safeParse(data);
+          const nextResult = parsed.success
+            ? {
+                regions: parsed.data.regions,
+                zones: parsed.data.zones,
+                singleZone: parsed.data.singleZone,
+              }
+            : { regions: [], zones: [], singleZone: false };
+
+          setResult((current) =>
+            current.key === requestKey
+              ? {
+                  key: requestKey,
+                  status: 'resolved',
+                  ...nextResult,
+                }
+              : current
+          );
         } catch (err) {
-          if (err instanceof Error && err.name !== 'AbortError') {
-            setRegions([]);
-            setZones([]);
+          if (!controller.signal.aborted && err instanceof Error && err.name !== 'AbortError') {
+            setResult((current) =>
+              current.key === requestKey
+                ? { ...current, status: 'resolved', regions: [], zones: [], singleZone: false }
+                : current
+            );
           }
         } finally {
-          if (abortRef.current === controller) {
-            abortRef.current = null;
-            setPending(false);
-          }
+          if (abortRef.current === controller) abortRef.current = null;
         }
       })();
     }, DEBOUNCE_MS);
@@ -238,19 +235,25 @@ export function RegionPicker({ city, country, onNeighborhoodSelect, disabled }: 
       controller?.abort();
       if (abortRef.current === controller) abortRef.current = null;
     };
-  }, [trimmedCity, country, hasRefinement, tooShort, base]);
+  }, [requestKey, country, neighborhoodSelected, tooShort, base]);
 
   useEffect(() => {
-    // Reset drill-in whenever the city changes.
+    // Reset drill-in whenever the city or country request changes.
     setSelectedRegion(null);
-  }, [base]);
+  }, [requestKey]);
 
   useEffect(() => {
     return () => abortRef.current?.abort();
   }, []);
 
   if (tooShort) return null;
-  if (hasRefinement) return null;
+  if (neighborhoodSelected) return null;
+
+  const hasCurrentResult = result.key === requestKey;
+  const pending = !hasCurrentResult || result.status === 'pending';
+  const regions = hasCurrentResult ? result.regions : [];
+  const zones = hasCurrentResult ? result.zones : [];
+  const singleZone = hasCurrentResult && result.singleZone;
 
   const zonesInRegion = selectedRegion
     ? zones
@@ -264,10 +267,9 @@ export function RegionPicker({ city, country, onNeighborhoodSelect, disabled }: 
     setSelectedRegion(direction);
   };
 
-  const handleNeighborhoodPick = (n: Neighborhood) => {
+  const handleNeighborhoodPick = (neighborhood: NeighborhoodSuggestion) => {
     if (disabled) return;
-    const nextBase = base || trimmedCity;
-    onNeighborhoodSelect(`${n.label}, ${nextBase}`);
+    onNeighborhoodSelect(neighborhood.label);
   };
 
   // Loading state — skeleton grid
@@ -298,7 +300,7 @@ export function RegionPicker({ city, country, onNeighborhoodSelect, disabled }: 
   // neighborhoods directly — forcing a user to click "Central" when there's
   // nothing else is pointless friction.
   if (singleZone || regions.filter((r) => r.zoneCount > 0).length <= 1) {
-    const fallbackNeighborhoods = zones.sort((a, b) => b.score - a.score).slice(0, 8);
+    const fallbackNeighborhoods = [...zones].sort((a, b) => b.score - a.score).slice(0, 8);
     if (fallbackNeighborhoods.length === 0) return null;
     return (
       <div className="mt-3 w-full max-w-md">
@@ -443,8 +445,8 @@ function NeighborhoodChipRow({
   onPick,
   disabled,
 }: {
-  items: Neighborhood[];
-  onPick: (n: Neighborhood) => void;
+  items: readonly NeighborhoodSuggestion[];
+  onPick: (n: NeighborhoodSuggestion) => void;
   disabled?: boolean;
 }) {
   if (items.length === 0) {

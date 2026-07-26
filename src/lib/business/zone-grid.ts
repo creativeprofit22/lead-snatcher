@@ -9,10 +9,11 @@
  * Cost: 1 free Overpass call, 0 paid Maps credits. Cached per city 7 days.
  */
 
+import type { RegionDirection } from './neighborhood-contract';
 import type { Zone, ZoneBbox, ZoneGridResult } from './zone-contract';
 import { decodeZoneElements, type NamedPlace } from './zone-osm-signals';
 import { fetchZoneElements } from './zone-overpass';
-import { classifyRegion, type RegionDirection } from './zone-regions';
+import { classifyRegion } from './zone-regions';
 import {
   buildScoredZone,
   DEFAULT_ZONE_RADIUS_METERS,

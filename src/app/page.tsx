@@ -9,6 +9,8 @@ import {
   WelcomeHeader,
   BusinessTypeSelector,
   CityInput,
+  formatLocationSelection,
+  type LocationSelection,
   RadarScan,
   ResumeSearchCard,
   ActivityTicker,
@@ -68,7 +70,11 @@ function HomeInner() {
   // Search form state stays local; the controller owns result and lifecycle state.
   const [selectedIndustry, setSelectedIndustry] = useState<IndustryType | null>(null);
   const [customIndustry, setCustomIndustry] = useState('');
-  const [city, setCity] = useState('');
+  const [location, setLocation] = useState<LocationSelection>({
+    cityQuery: '',
+    neighborhoodLabel: null,
+  });
+  const city = formatLocationSelection(location);
   const [country, setCountry] = useState(DEFAULT_COUNTRY_CODE);
   const [deepAnalysis, setDeepAnalysis] = useState(false);
   const effectiveIndustry = customIndustry.trim() || selectedIndustry;
@@ -150,7 +156,7 @@ function HomeInner() {
       replaceSnapshot(payload, kind);
       setSelectedIndustry(isPresetQuery ? payload.industry : null);
       setCustomIndustry(isPresetQuery ? '' : payload.businessType);
-      setCity(payload.city);
+      setLocation({ cityQuery: payload.city, neighborhoodLabel: null });
       setCountry(payload.country);
       setDeepAnalysis(false);
       replaceEnrichmentSession(browserState.enrichStatusMap, browserState.enrichResultMap);
@@ -312,7 +318,7 @@ function HomeInner() {
     setSavedLeadModal({ isOpen: false, businessName: '' });
     setSelectedIndustry(null);
     setCustomIndustry('');
-    setCity('');
+    setLocation({ cityQuery: '', neighborhoodLabel: null });
     setCountry(DEFAULT_COUNTRY_CODE);
     setDeepAnalysis(false);
     setSortBy('fit');
@@ -475,9 +481,9 @@ function HomeInner() {
           {(selectedIndustry || customIndustry.trim().length > 0) && (
             <>
               <CityInput
-                city={city}
+                location={location}
                 country={country}
-                onCityChange={setCity}
+                onLocationChange={setLocation}
                 onCountryChange={setCountry}
                 onSearch={handleSearch}
                 isLoading={isSearching}
