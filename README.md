@@ -62,14 +62,18 @@ npm run dev
 
 ## Environment Variables
 
-| Variable            | Required | Description                       |
-| ------------------- | -------- | --------------------------------- |
-| `DATABASE_URL`      | Yes      | `file:./data/lead-snatcher.db`    |
-| `NEXTAUTH_SECRET`   | Yes      | Auth encryption key               |
-| `NEXTAUTH_URL`      | Yes      | App URL (http://localhost:3000)   |
-| `ADMIN_SECRET`      | Yes      | Secret for /admin user management |
-| `ENCRYPTION_SECRET` | Yes      | API key encryption                |
-| `RAPIDAPI_KEY`      | No       | For Google Maps search            |
+| Variable            | Required | Description                                                  |
+| ------------------- | -------- | ------------------------------------------------------------ |
+| `DATABASE_URL`      | Yes      | SQLite URL (`file:./data/lead-snatcher.db`)                  |
+| `NEXTAUTH_SECRET`   | Yes      | Authentication encryption key                                |
+| `NEXTAUTH_URL`      | Yes      | App URL (`http://localhost:3000`)                            |
+| `ADMIN_SECRET`      | Yes      | Secret for `/admin` user management                          |
+| `ENCRYPTION_SECRET` | Yes      | Secret used to encrypt stored API keys                       |
+| `ENCRYPTION_SALT`   | Yes      | Separate salt used with `ENCRYPTION_SECRET`                  |
+| `RAPIDAPI_KEY`      | No       | Fallback when a user has not saved a RapidAPI key            |
+| `PAGESPEED_API_KEY` | No       | Fallback when a user has no readable saved PageSpeed API key |
+
+Generate `ENCRYPTION_SECRET` with `openssl rand -base64 32` and generate `ENCRYPTION_SALT` separately with `openssl rand -base64 16`. Keep both values unchanged after storing API keys: changing either value makes existing encrypted API-key rows unreadable, so users must re-enter their keys in Settings.
 
 ## Scripts
 

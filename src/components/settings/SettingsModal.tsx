@@ -1,139 +1,74 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { X, Eye, EyeOff, Check, Loader2, Trash2, ExternalLink } from 'lucide-react';
 import { toast } from 'sonner';
-
-interface ApiKeyState {
-  service: string;
-  maskedKey: string | null;
-  hasKey: boolean;
-}
+import {
+  API_KEY_MAX_LENGTH,
+  API_KEY_SERVICE_REGISTRY,
+  type ApiKeyService,
+} from '@/lib/api-key-services';
+import { useApiKeySettings } from '@/lib/hooks/useApiKeySettings';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-// Per-service display metadata. Adding a new key only requires adding a row
-// here plus wiring the service name into the validations enum + settings
-// route — the modal renders one card per entry without further code changes.
-interface ServiceMeta {
-  service: string;
-  label: string;
-  description: string;
-  helpHref: string;
-  helpLabel: string;
-}
-
-const SERVICES: ServiceMeta[] = [
-  {
-    service: 'rapidapi',
-    label: 'RapidAPI Key',
-    description: 'Required for business search (Maps Data API)',
-    helpHref: 'https://rapidapi.com/letscrape-6bRBa3QguO5/api/google-maps-data',
-    helpLabel: 'Get a free RapidAPI key',
-  },
-  {
-    service: 'pagespeed',
-    label: 'PageSpeed Insights Key',
-    description: 'Optional — enables Deep Analysis (website performance scoring)',
-    helpHref: 'https://developers.google.com/speed/docs/insights/v5/get-started',
-    helpLabel: 'Get a free PageSpeed key',
-  },
-];
-
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
-  const [apiKeys, setApiKeys] = useState<ApiKeyState[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const {
+    apiKeys,
+    isLoading,
+    loadError,
+    savingService,
+    deletingService,
+    retry,
+    saveApiKey,
+    deleteApiKey,
+  } = useApiKeySettings(isOpen);
   // Edit/save/delete state is scoped to a single active service so two
   // cards can't fight over the same input.
-  const [editingService, setEditingService] = useState<string | null>(null);
+  const [editingService, setEditingService] = useState<ApiKeyService | null>(null);
   const [inputValue, setInputValue] = useState('');
   const [showKey, setShowKey] = useState(false);
-  const [savingService, setSavingService] = useState<string | null>(null);
-  const [deletingService, setDeletingService] = useState<string | null>(null);
   const [isVisible, setIsVisible] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const fetchApiKeys = useCallback(async () => {
-    try {
-      const response = await fetch('/api/settings');
-      if (response.ok) {
-        const data = await response.json();
-        setApiKeys(data);
-      }
-    } catch (error) {
-      console.error('Failed to fetch API keys:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
   useEffect(() => {
-    if (isOpen) {
-      fetchApiKeys();
-      requestAnimationFrame(() => {
-        setIsVisible(true);
-      });
-    } else {
-      setIsVisible(false);
+    const animationFrame = requestAnimationFrame(() => {
+      setIsVisible(isOpen);
       setEditingService(null);
       setInputValue('');
       setShowKey(false);
-    }
-  }, [isOpen, fetchApiKeys]);
+    });
 
-  const handleSave = async (service: string) => {
+    return () => cancelAnimationFrame(animationFrame);
+  }, [isOpen]);
+
+  const handleSave = async (service: ApiKeyService) => {
     if (!inputValue.trim()) return;
 
-    setSavingService(service);
     try {
-      const response = await fetch('/api/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ service, key: inputValue.trim() }),
-      });
-
-      if (response.ok) {
-        await fetchApiKeys();
-        setEditingService(null);
-        setInputValue('');
-        setShowKey(false);
-        toast.success('API key saved');
-      } else {
-        toast.error('Failed to save key');
-      }
+      await saveApiKey(service, inputValue);
+      setEditingService(null);
+      setInputValue('');
+      setShowKey(false);
+      toast.success('API key saved');
     } catch (error) {
-      console.error('Failed to save API key:', error);
-      toast.error('Failed to save key');
-    } finally {
-      setSavingService(null);
+      toast.error(error instanceof Error ? error.message : 'Failed to save key');
     }
   };
 
-  const handleDelete = async (service: string) => {
-    setDeletingService(service);
+  const handleDelete = async (service: ApiKeyService) => {
     try {
-      const response = await fetch(`/api/settings?service=${encodeURIComponent(service)}`, {
-        method: 'DELETE',
-      });
-
-      if (response.ok) {
-        await fetchApiKeys();
-        toast.success('API key removed');
-      } else {
-        toast.error('Failed to remove key');
-      }
+      await deleteApiKey(service);
+      toast.success('API key removed');
     } catch (error) {
-      console.error('Failed to delete API key:', error);
-      toast.error('Failed to remove key');
-    } finally {
-      setDeletingService(null);
+      toast.error(error instanceof Error ? error.message : 'Failed to remove key');
     }
   };
 
-  const handleStartEdit = (service: string) => {
+  const handleStartEdit = (service: ApiKeyService) => {
     setEditingService(service);
     setInputValue('');
     setShowKey(false);
@@ -162,15 +97,21 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
 
       {/* Modal */}
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-modal-title"
         className={`relative w-[calc(100vw-1.5rem)] sm:w-full max-w-md mx-3 sm:mx-0 rounded-xl sm:rounded-2xl border border-white/10 bg-black/90 p-4 sm:p-6 shadow-2xl transition-all duration-300 ease-out ${
           isVisible ? 'scale-100 opacity-100' : 'scale-95 opacity-0'
         }`}
       >
         {/* Header */}
         <div className="mb-4 sm:mb-6 flex items-center justify-between">
-          <h2 className="text-base sm:text-lg font-medium text-white">Settings</h2>
+          <h2 id="settings-modal-title" className="text-base sm:text-lg font-medium text-white">
+            Settings
+          </h2>
           <button
             onClick={onClose}
+            aria-label="Close settings"
             className="rounded-lg p-2 min-h-[44px] min-w-[44px] flex items-center justify-center text-white/40 transition-colors hover:bg-white/10 hover:text-white"
           >
             <X className="h-5 w-5" />
@@ -184,12 +125,25 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           </h3>
 
           {isLoading ? (
-            <div className="flex items-center justify-center py-8">
+            <div className="flex items-center justify-center py-8" role="status">
               <Loader2 className="h-5 w-5 animate-spin text-white/40" />
+              <span className="sr-only">Loading API configuration</span>
+            </div>
+          ) : loadError ? (
+            <div className="rounded-lg border border-white/15 px-4 py-5 text-center" role="alert">
+              <p className="text-sm font-medium text-white/80">Unable to load API configuration</p>
+              <p className="mt-1 text-xs text-white/60">{loadError.message}</p>
+              <button
+                type="button"
+                onClick={() => void retry()}
+                className="mt-4 rounded-lg border border-white/20 px-3 py-2 text-xs font-medium text-white/70 transition-colors hover:border-white/30 hover:text-white"
+              >
+                Retry
+              </button>
             </div>
           ) : (
             <div className="space-y-3">
-              {SERVICES.map((meta) => {
+              {API_KEY_SERVICE_REGISTRY.map((meta) => {
                 const state = apiKeys.find((k) => k.service === meta.service);
                 const isEditingThis = editingService === meta.service;
                 const isSavingThis = savingService === meta.service;
@@ -212,6 +166,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                           <button
                             onClick={() => handleDelete(meta.service)}
                             disabled={isDeletingThis}
+                            aria-label={`Remove ${meta.label}`}
                             className="rounded-md p-1 min-h-[28px] min-w-[28px] flex items-center justify-center text-white/30 transition-colors hover:bg-red-500/20 hover:text-red-400"
                           >
                             {isDeletingThis ? (
@@ -232,6 +187,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                             ref={inputRef}
                             type={showKey ? 'text' : 'password'}
                             value={inputValue}
+                            maxLength={API_KEY_MAX_LENGTH}
                             onChange={(e) => setInputValue(e.target.value)}
                             onKeyDown={(e) => {
                               if (e.key === 'Enter' && inputValue.trim()) handleSave(meta.service);
@@ -243,6 +199,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
                           <button
                             type="button"
                             onClick={() => setShowKey(!showKey)}
+                            aria-label={showKey ? 'Hide API key' : 'Show API key'}
                             className="absolute right-2 top-1/2 -translate-y-1/2 text-white/40 transition-colors hover:text-white/60"
                           >
                             {showKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}

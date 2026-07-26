@@ -1,23 +1,23 @@
 import { NextResponse } from 'next/server';
+import {
+  apiKeySettingsDeleteSuccessSchema,
+  apiKeySettingsGetResponseSchema,
+  apiKeySettingsPostSuccessSchema,
+  type ApiKeySettingsGetResponse,
+} from '@/lib/api-key-settings-contract';
+import { API_KEY_SERVICES, type ApiKeyService } from '@/lib/api-key-services';
 import { invalidateCachedApiKey } from '@/lib/cache';
 import { decrypt, encrypt, maskApiKey } from '@/lib/crypto';
 import { prisma } from '@/lib/db';
 import {
   HttpError,
   parseRouteBody,
-  requireRouteUserId,
   requireRouteValidUser,
   routeErrorResponse,
 } from '@/lib/route-utils';
-import { apiKeyServiceSchema, saveApiKeySchema, type ApiKeyService } from '@/lib/validations';
+import { apiKeyServiceSchema, saveApiKeySchema } from '@/lib/validations';
 
-export type { ApiKeyService } from '@/lib/validations';
-
-interface ApiKeyResponse {
-  service: ApiKeyService;
-  maskedKey: string | null;
-  hasKey: boolean;
-}
+export type { ApiKeyService } from '@/lib/api-key-services';
 
 function parseApiKeyService(request: Request): ApiKeyService {
   const service = new URL(request.url).searchParams.get('service');
@@ -37,12 +37,12 @@ function parseApiKeyService(request: Request): ApiKeyService {
 // GET - Fetch all API keys (masked) for current user
 export async function GET() {
   try {
-    const userId = await requireRouteUserId();
+    const userId = await requireRouteValidUser();
     const apiKeys = await prisma.apiKey.findMany({
       where: { userId },
     });
 
-    const response: ApiKeyResponse[] = apiKeyServiceSchema.options.map((service) => {
+    const response: ApiKeySettingsGetResponse = API_KEY_SERVICES.map((service) => {
       const found = apiKeys.find((apiKey) => apiKey.service === service);
       if (found) {
         try {
@@ -71,7 +71,7 @@ export async function GET() {
       };
     });
 
-    return NextResponse.json(response);
+    return NextResponse.json(apiKeySettingsGetResponseSchema.parse(response));
   } catch (error) {
     console.error('Failed to fetch API keys:', error);
     return routeErrorResponse(error, 'Failed to fetch API keys');
@@ -95,11 +95,13 @@ export async function POST(request: Request) {
 
     invalidateCachedApiKey(userId, service);
 
-    return NextResponse.json({
-      success: true,
-      service,
-      maskedKey: maskApiKey(key),
-    });
+    return NextResponse.json(
+      apiKeySettingsPostSuccessSchema.parse({
+        success: true,
+        service,
+        maskedKey: maskApiKey(key),
+      })
+    );
   } catch (error) {
     console.error('Failed to save API key:', error);
     return routeErrorResponse(error, 'Failed to save API key');
@@ -109,7 +111,7 @@ export async function POST(request: Request) {
 // DELETE - Remove an API key for current user
 export async function DELETE(request: Request) {
   try {
-    const userId = await requireRouteUserId();
+    const userId = await requireRouteValidUser();
     const service = parseApiKeyService(request);
     const existing = await prisma.apiKey.findUnique({
       where: {
@@ -129,7 +131,7 @@ export async function DELETE(request: Request) {
 
     invalidateCachedApiKey(userId, service);
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json(apiKeySettingsDeleteSuccessSchema.parse({ success: true }));
   } catch (error) {
     console.error('Failed to delete API key:', error);
     return routeErrorResponse(error, 'Failed to delete API key');

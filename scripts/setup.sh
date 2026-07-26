@@ -132,14 +132,17 @@ NEXTAUTH_URL="http://localhost:3000"
 # Admin Secret - for creating users via /admin
 ADMIN_SECRET="${ADMIN_SECRET}"
 
-# Encryption Secret - for API key storage
+# Encryption values - for API key storage; keep both unchanged
+# Changing either makes stored API keys unreadable and requires users to re-enter them
 ENCRYPTION_SECRET="${ENCRYPTION_SECRET}"
 ENCRYPTION_SALT="${ENCRYPTION_SALT}"
 
 # ===========================================
-# Optional: External APIs
+# Optional: External API fallbacks
+# User-saved keys in Settings take precedence.
 # ===========================================
 # RAPIDAPI_KEY="your-rapidapi-key"
+# PAGESPEED_API_KEY="your-pagespeed-api-key"
 EOF
 
     print_success "Environment file created with auto-generated secrets"

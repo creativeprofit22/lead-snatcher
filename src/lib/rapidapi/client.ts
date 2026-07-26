@@ -1,25 +1,20 @@
 import { prisma } from '@/lib/db';
 import { decrypt } from '@/lib/crypto';
 import { ApiError, parseRapidApiError } from '@/lib/errors';
-import { getCachedApiKey, setCachedApiKey } from '@/lib/cache';
+import { getOrLoadCachedApiKey } from '@/lib/cache';
 
 export async function getRapidApiKey(userId: string): Promise<string> {
-  // Check cache first
-  const cached = getCachedApiKey(userId, 'rapidapi');
-  if (cached) {
-    return cached;
-  }
+  const userKey = await getOrLoadCachedApiKey(userId, 'rapidapi', async () => {
+    const apiKeyRecord = await prisma.apiKey.findUnique({
+      where: { userId_service: { userId, service: 'rapidapi' } },
+    });
 
-  // Try to get from database for this user
-  const apiKeyRecord = await prisma.apiKey.findUnique({
-    where: { userId_service: { userId, service: 'rapidapi' } },
-  });
+    if (!apiKeyRecord) {
+      return undefined;
+    }
 
-  if (apiKeyRecord) {
     try {
-      const decrypted = decrypt(apiKeyRecord.key);
-      setCachedApiKey(userId, 'rapidapi', decrypted);
-      return decrypted;
+      return decrypt(apiKeyRecord.key);
     } catch (error) {
       console.error('Failed to decrypt RapidAPI key:', error);
       throw new ApiError(
@@ -28,6 +23,10 @@ export async function getRapidApiKey(userId: string): Promise<string> {
         400
       );
     }
+  });
+
+  if (userKey) {
+    return userKey;
   }
 
   // Fallback to environment variable

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { API_KEY_MAX_LENGTH, API_KEY_SERVICES } from '@/lib/api-key-services';
 import {
   LEAD_SCORE_MAX,
   LEAD_SCORE_MIN,
@@ -29,8 +30,7 @@ export const contactOutcomeSchema = z.enum(['positive', 'negative', 'neutral']);
 export const taskTypeSchema = z.enum(['call', 'email', 'meeting', 'follow_up', 'other']);
 export const taskPrioritySchema = z.enum(['low', 'medium', 'high', 'urgent']);
 
-export const apiKeyServiceSchema = z.enum(['youtube', 'rapidapi', 'openrouter', 'pagespeed']);
-export type ApiKeyService = z.infer<typeof apiKeyServiceSchema>;
+export const apiKeyServiceSchema = z.enum(API_KEY_SERVICES);
 
 // ─── Route schemas ──────────────────────────────────────────────
 
@@ -182,7 +182,7 @@ export const bulkDeleteLeadsSchema = z.object({
 // POST /api/settings (API keys)
 export const saveApiKeySchema = z.object({
   service: apiKeyServiceSchema,
-  key: z.string().min(1, 'API key is required').max(500),
+  key: z.string().trim().min(1, 'API key is required').max(API_KEY_MAX_LENGTH),
 });
 
 const tagNameSchema = z.string().trim().min(1, 'Name is required').max(100);

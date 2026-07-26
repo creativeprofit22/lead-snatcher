@@ -1,6 +1,6 @@
 import { prisma } from '@/lib/db';
 import { decrypt } from '@/lib/crypto';
-import { getCachedApiKey, setCachedApiKey } from '@/lib/cache';
+import { getOrLoadCachedApiKey } from '@/lib/cache';
 
 /**
  * Fetch the user's PageSpeed Insights API key.
@@ -10,22 +10,22 @@ import { getCachedApiKey, setCachedApiKey } from '@/lib/cache';
  * optional, so the search continues without it instead of erroring.
  */
 export async function getPageSpeedKey(userId: string): Promise<string | undefined> {
-  const cached = getCachedApiKey(userId, 'pagespeed');
-  if (cached) return cached;
+  const userKey = await getOrLoadCachedApiKey(userId, 'pagespeed', async () => {
+    const record = await prisma.apiKey.findUnique({
+      where: { userId_service: { userId, service: 'pagespeed' } },
+    });
 
-  const record = await prisma.apiKey.findUnique({
-    where: { userId_service: { userId, service: 'pagespeed' } },
-  });
+    if (!record) {
+      return undefined;
+    }
 
-  if (record) {
     try {
-      const decrypted = decrypt(record.key);
-      setCachedApiKey(userId, 'pagespeed', decrypted);
-      return decrypted;
+      return decrypt(record.key);
     } catch {
       // Stale encryption — fall through to env fallback so search still works.
+      return undefined;
     }
-  }
+  });
 
-  return process.env.PAGESPEED_API_KEY || undefined;
+  return userKey || process.env.PAGESPEED_API_KEY || undefined;
 }

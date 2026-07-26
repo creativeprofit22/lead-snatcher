@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'vitest';
+import { API_KEY_MAX_LENGTH } from '@/lib/api-key-services';
 import { createScoreBreakdown } from '@/lib/business/score-breakdown-contract';
 import { COUNTRIES, DEFAULT_COUNTRY_CODE } from '@/lib/constants';
 import {
@@ -7,6 +8,7 @@ import {
   createLeadSchema,
   createTagSchema,
   createTaskSchema,
+  saveApiKeySchema,
   updateTagSchema,
   updateTaskSchema,
 } from '@/lib/validations';
@@ -30,6 +32,34 @@ describe('country defaults', () => {
     expect(search.country).toBe(DEFAULT_COUNTRY_CODE);
     expect(enrichment.country).toBe(DEFAULT_COUNTRY_CODE);
     expect(COUNTRIES[0]?.code).toBe(DEFAULT_COUNTRY_CODE);
+  });
+});
+
+describe('API key validation', () => {
+  test('rejects whitespace-only keys', () => {
+    expect(saveApiKeySchema.safeParse({ service: 'rapidapi', key: ' \t\n ' }).success).toBe(false);
+  });
+
+  test('normalizes surrounding whitespace before validation', () => {
+    expect(saveApiKeySchema.parse({ service: 'rapidapi', key: '  secret-key  ' }).key).toBe(
+      'secret-key'
+    );
+  });
+
+  test('accepts 500 characters after trimming', () => {
+    const key = 'a'.repeat(API_KEY_MAX_LENGTH);
+
+    expect(saveApiKeySchema.parse({ service: 'pagespeed', key: ` ${key} ` }).key).toBe(key);
+  });
+
+  test('rejects 501 characters', () => {
+    const key = 'a'.repeat(API_KEY_MAX_LENGTH + 1);
+
+    expect(saveApiKeySchema.safeParse({ service: 'rapidapi', key }).success).toBe(false);
+  });
+
+  test.each(['youtube', 'openrouter', 'mailchimp'])('rejects unsupported service %s', (service) => {
+    expect(saveApiKeySchema.safeParse({ service, key: 'secret-key' }).success).toBe(false);
   });
 });
 

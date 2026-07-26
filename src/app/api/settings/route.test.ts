@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { API_KEY_MAX_LENGTH } from '@/lib/api-key-services';
 
 const {
   getCurrentUserId,
@@ -95,11 +96,15 @@ describe('/api/settings authentication', () => {
     expect(findApiKey).not.toHaveBeenCalled();
   });
 
-  test('preserves the stale-session POST response without attempting the upsert', async () => {
+  test.each([
+    ['GET', () => GET()],
+    ['POST', () => post(JSON.stringify({ service: 'rapidapi', key: 'abcd-secret-wxyz' }))],
+    ['DELETE', () => remove()],
+  ])('returns the stale-session 401 for %s without accessing API keys', async (_method, call) => {
     findUser.mockResolvedValue(null);
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
-    const response = await post(JSON.stringify({ service: 'rapidapi', key: 'secret-key' }));
+    const response = await call();
 
     expect(response.status).toBe(401);
     await expect(response.json()).resolves.toEqual({
@@ -109,15 +114,30 @@ describe('/api/settings authentication', () => {
       where: { id: 'user-1' },
       select: { id: true },
     });
+    expect(findApiKeys).not.toHaveBeenCalled();
+    expect(findApiKey).not.toHaveBeenCalled();
     expect(upsertApiKey).not.toHaveBeenCalled();
+    expect(deleteApiKey).not.toHaveBeenCalled();
   });
 });
 
 describe('POST /api/settings', () => {
   test.each([
     ['malformed JSON', '{', 'Invalid JSON body'],
-    ['an unsupported service', JSON.stringify({ service: 'mailchimp', key: 'secret-key' }), null],
+    ['legacy YouTube service', JSON.stringify({ service: 'youtube', key: 'secret' }), null],
+    ['legacy OpenRouter service', JSON.stringify({ service: 'openrouter', key: 'secret' }), null],
+    ['an unsupported service', JSON.stringify({ service: 'mailchimp', key: 'secret' }), null],
     ['an empty key', JSON.stringify({ service: 'rapidapi', key: '' }), 'API key is required'],
+    [
+      'a whitespace-only key',
+      JSON.stringify({ service: 'rapidapi', key: ' \t\n ' }),
+      'API key is required',
+    ],
+    [
+      'a 501-character key',
+      JSON.stringify({ service: 'rapidapi', key: 'a'.repeat(API_KEY_MAX_LENGTH + 1) }),
+      null,
+    ],
   ])('returns 400 for %s without encrypting or writing', async (_label, body, expectedError) => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
@@ -130,8 +150,10 @@ describe('POST /api/settings', () => {
     expect(upsertApiKey).not.toHaveBeenCalled();
   });
 
-  test('upserts the owned encrypted key, masks the response, and invalidates its cache', async () => {
-    const response = await post(JSON.stringify({ service: 'rapidapi', key: 'abcd-secret-wxyz' }));
+  test('trims and upserts the owned encrypted key, masks the response, and invalidates its cache', async () => {
+    const response = await post(
+      JSON.stringify({ service: 'rapidapi', key: '  abcd-secret-wxyz  ' })
+    );
 
     expect(response.status).toBe(200);
     expect(encrypt).toHaveBeenCalledWith('abcd-secret-wxyz');
@@ -151,10 +173,25 @@ describe('POST /api/settings', () => {
       maskedKey: 'abcd••••••••wxyz',
     });
   });
+
+  test('accepts and stores a 500-character key', async () => {
+    const key = 'a'.repeat(API_KEY_MAX_LENGTH);
+
+    const response = await post(JSON.stringify({ service: 'pagespeed', key }));
+
+    expect(response.status).toBe(200);
+    expect(encrypt).toHaveBeenCalledWith(key);
+    expect(upsertApiKey).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: { key: `encrypted:${key}` },
+        create: expect.objectContaining({ service: 'pagespeed', key: `encrypted:${key}` }),
+      })
+    );
+  });
 });
 
 describe('GET /api/settings', () => {
-  test('reads only owned keys and returns every schema service with masked values', async () => {
+  test('returns each supported service and ignores unsupported stored rows', async () => {
     findApiKeys.mockResolvedValue([
       { id: 'key-1', userId: 'user-1', service: 'rapidapi', key: 'encrypted:abcd-secret-wxyz' },
       { id: 'key-2', userId: 'user-1', service: 'youtube', key: 'cannot-decrypt' },
@@ -166,9 +203,7 @@ describe('GET /api/settings', () => {
     expect(response.status).toBe(200);
     expect(findApiKeys).toHaveBeenCalledWith({ where: { userId: 'user-1' } });
     await expect(response.json()).resolves.toEqual([
-      { service: 'youtube', maskedKey: null, hasKey: false },
       { service: 'rapidapi', maskedKey: 'abcd••••••••wxyz', hasKey: true },
-      { service: 'openrouter', maskedKey: null, hasKey: false },
       { service: 'pagespeed', maskedKey: null, hasKey: false },
     ]);
   });
