@@ -28,6 +28,7 @@ import { useVisibleLeadSelection } from '@/lib/hooks/useVisibleLeadSelection';
 import { LEAD_STATUS_METADATA, PIPELINE_LEAD_STATUS_VALUES } from '@/lib/lead-status';
 import {
   defaultLeadListQuery,
+  hasActiveLeadListFilters,
   type LeadListFilters,
   type LeadListUiSortField,
 } from '@/lib/crm-lead-query';
@@ -110,13 +111,7 @@ function CRMPageContent() {
     setLeadStatus,
     removeLeadIds,
   } = useCrmLeadsController(effectiveQuery);
-  const hasActiveFilters =
-    filters.statuses.length > 0 ||
-    filters.industries.length > 0 ||
-    filters.tags.length > 0 ||
-    filters.minScore > 0 ||
-    filters.maxScore < 100 ||
-    filters.followUp !== 'all';
+  const hasActiveFilters = hasActiveLeadListFilters(filters);
 
   // Modal state
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);

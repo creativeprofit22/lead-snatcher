@@ -33,7 +33,15 @@ vi.mock('@/lib/hooks/useCrmTasks', () => ({
 
 vi.mock('@/lib/hooks/useCrmTags', () => ({
   useCrmTags: () => ({
-    tags: [],
+    tags: [
+      {
+        id: 'tag-priority',
+        name: 'Priority',
+        color: '#ef4444',
+        createdAt: '2026-07-25T00:00:00.000Z',
+        leadCount: 1,
+      },
+    ],
     loading: false,
     error: null,
     refetch: vi.fn(async () => undefined),
@@ -55,6 +63,7 @@ vi.mock('@/components/crm', async (importOriginal) => {
   };
 });
 
+import { parseLeadListQuery } from '@/lib/crm-lead-query';
 import CRMPage from './page';
 
 function jsonResponse(body: unknown): Response {
@@ -131,6 +140,51 @@ describe('CRM view and filter state', () => {
       false
     );
   });
+
+  test('sends canonical controller state from supported sidebar filters and sorting', async () => {
+    const fetchMock = setupFetch();
+    render(<CRMPage />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Status' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Contacted' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Lead Score' }));
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Minimum lead score' }), {
+      target: { value: '25' },
+    });
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Maximum lead score' }), {
+      target: { value: '80' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Industry' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Medical & Dental' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Tags' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Priority' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Follow-up' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Today' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sort By' }));
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'nextFollowUpAt' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Ascending' }));
+
+    await waitFor(() => {
+      const searchParams = latestLeadQuery(fetchMock);
+      if (!searchParams) throw new Error('Expected an outbound leads request');
+
+      expect(parseLeadListQuery(searchParams)).toEqual({
+        statuses: ['contacted'],
+        industries: ['medical'],
+        tags: ['tag-priority'],
+        minScore: 25,
+        maxScore: 80,
+        followUp: 'today',
+        sortBy: 'nextFollowUpAt',
+        sortOrder: 'asc',
+      });
+    });
+  }, 10_000);
 
   test('opens and resets filters while the persisted Kanban view remains active', async () => {
     localStorage.setItem('crm-view-mode', 'kanban');

@@ -3,12 +3,10 @@
 import { ArrowUp, ArrowDown } from 'lucide-react';
 import { Table, TableBody, TableHead, TableHeader, TableRow } from '@/components/ui/Table';
 import { Skeleton } from '@/components/ui/Skeleton';
+import type { LeadListSortOrder, LeadListUiSortField } from '@/lib/crm-lead-query';
 import { LeadsTableRow } from './LeadsTableRow';
 import { EmptyState } from './EmptyState';
 import type { Lead } from '@/types';
-
-type SortField = 'savedAt' | 'leadScore' | 'name' | 'nextFollowUpAt';
-type SortOrder = 'asc' | 'desc';
 
 interface LeadsTableProps {
   leads: Lead[];
@@ -19,9 +17,9 @@ interface LeadsTableProps {
   onToggleSelect?: (leadId: string) => void;
   onSelectAllVisible?: () => void;
   onDeselectVisible?: () => void;
-  sortBy?: SortField;
-  sortOrder?: SortOrder;
-  onSortChange?: (field: SortField) => void;
+  sortBy?: LeadListUiSortField;
+  sortOrder?: LeadListSortOrder;
+  onSortChange?: (field: LeadListUiSortField) => void;
 }
 
 function TableSkeleton() {

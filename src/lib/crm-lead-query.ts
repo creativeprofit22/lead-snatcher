@@ -21,9 +21,11 @@ export const LEAD_LIST_UI_SORT_FIELDS = [
 
 export const LEAD_LIST_FOLLOW_UP_FILTERS = ['all', 'today', 'overdue', 'this_week'] as const;
 
+export const LEAD_LIST_SORT_ORDERS = ['asc', 'desc'] as const;
+
 export type LeadListSortField = (typeof LEAD_LIST_SORT_FIELDS)[number];
 export type LeadListUiSortField = (typeof LEAD_LIST_UI_SORT_FIELDS)[number];
-export type LeadListSortOrder = 'asc' | 'desc';
+export type LeadListSortOrder = (typeof LEAD_LIST_SORT_ORDERS)[number];
 export type LeadListFollowUp = (typeof LEAD_LIST_FOLLOW_UP_FILTERS)[number];
 
 export interface LeadListQuery {
@@ -51,6 +53,17 @@ export const defaultLeadListQuery: LeadListFilters = {
   sortBy: 'savedAt',
   sortOrder: 'desc',
 };
+
+export function hasActiveLeadListFilters(filters: LeadListFilters): boolean {
+  return (
+    filters.statuses.length > defaultLeadListQuery.statuses.length ||
+    filters.industries.length > defaultLeadListQuery.industries.length ||
+    filters.tags.length > defaultLeadListQuery.tags.length ||
+    filters.minScore !== defaultLeadListQuery.minScore ||
+    filters.maxScore !== defaultLeadListQuery.maxScore ||
+    filters.followUp !== defaultLeadListQuery.followUp
+  );
+}
 
 const scoreSchema = (name: 'minScore' | 'maxScore') =>
   z
@@ -89,7 +102,7 @@ const rawLeadListQuerySchema = z.object({
   maxScore: scoreSchema('maxScore').optional(),
   followUp: z.enum(LEAD_LIST_FOLLOW_UP_FILTERS).optional(),
   sortBy: z.enum(LEAD_LIST_SORT_FIELDS).optional(),
-  sortOrder: z.enum(['asc', 'desc']).optional(),
+  sortOrder: z.enum(LEAD_LIST_SORT_ORDERS).optional(),
 });
 
 const leadListQuerySchema = rawLeadListQuerySchema

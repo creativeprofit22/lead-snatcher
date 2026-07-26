@@ -14,6 +14,7 @@ vi.mock('@/lib/db', () => ({
 }));
 
 import { createScoreBreakdown } from '@/lib/business/score-breakdown-contract';
+import { encodeLeadListQuery, type LeadListQuery } from '@/lib/crm-lead-query';
 import { GET, POST } from './route';
 
 async function get(query: string) {
@@ -31,6 +32,7 @@ async function post(body: unknown) {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.clearAllMocks();
   vi.restoreAllMocks();
 });
@@ -62,6 +64,42 @@ describe('GET /api/leads Prisma query', () => {
     expect(findMany).toHaveBeenCalledWith({
       where: { userId: 'user-1' },
       orderBy: { savedAt: 'desc' },
+      include: {
+        tags: { include: { tag: true } },
+      },
+    });
+  });
+
+  test('maps a complete canonical query to the current Prisma query', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 6, 25, 15, 30));
+    findMany.mockResolvedValueOnce([]);
+    const query: LeadListQuery = {
+      statuses: ['contacted', 'proposal_sent'],
+      industries: ['medical', 'restaurant'],
+      tags: ['tag-1', 'tag-2'],
+      minScore: 20,
+      maxScore: 85,
+      followUp: 'this_week',
+      sortBy: 'nextFollowUpAt',
+      sortOrder: 'asc',
+    };
+    const startOfDay = new Date(2026, 6, 25);
+    const endOfWeek = new Date(startOfDay.getTime() + 7 * 24 * 60 * 60 * 1000 - 1);
+
+    const response = await get(encodeLeadListQuery(query).toString());
+
+    expect(response.status).toBe(200);
+    expect(findMany).toHaveBeenCalledWith({
+      where: {
+        userId: 'user-1',
+        status: { in: ['contacted', 'proposal_sent'] },
+        leadScore: { gte: 20, lte: 85 },
+        industryType: { in: ['medical', 'restaurant'] },
+        nextFollowUpAt: { gte: startOfDay, lte: endOfWeek },
+        tags: { some: { tagId: { in: ['tag-1', 'tag-2'] } } },
+      },
+      orderBy: { nextFollowUpAt: 'asc' },
       include: {
         tags: { include: { tag: true } },
       },

@@ -11,11 +11,45 @@ import {
   AlertCircle,
   Clock,
   Settings,
+  type LucideIcon,
 } from 'lucide-react';
 import { LEAD_STATUSES, INDUSTRY_TYPES } from '@/lib/constants';
-import { defaultLeadListQuery, type LeadListFilters } from '@/lib/crm-lead-query';
+import {
+  LEAD_LIST_FOLLOW_UP_FILTERS,
+  LEAD_LIST_UI_SORT_FIELDS,
+  defaultLeadListQuery,
+  hasActiveLeadListFilters,
+  type LeadListFilters,
+  type LeadListFollowUp,
+  type LeadListUiSortField,
+} from '@/lib/crm-lead-query';
 import type { CrmTagsResource } from '@/lib/hooks/useCrmTags';
 import type { LeadStatus, IndustryType } from '@/types';
+
+const FOLLOW_UP_PRESENTATION: Record<LeadListFollowUp, { label: string; icon: LucideIcon | null }> =
+  {
+    all: { label: 'All', icon: null },
+    today: { label: 'Today', icon: Calendar },
+    overdue: { label: 'Overdue', icon: AlertCircle },
+    this_week: { label: 'This Week', icon: Clock },
+  };
+
+const SORT_PRESENTATION: Record<LeadListUiSortField, { label: string }> = {
+  savedAt: { label: 'Date Added' },
+  leadScore: { label: 'Lead Score' },
+  name: { label: 'Name' },
+  nextFollowUpAt: { label: 'Follow-up Date' },
+};
+
+const FOLLOW_UP_OPTIONS = LEAD_LIST_FOLLOW_UP_FILTERS.map((id) => ({
+  id,
+  ...FOLLOW_UP_PRESENTATION[id],
+}));
+
+const SORT_OPTIONS = LEAD_LIST_UI_SORT_FIELDS.map((id) => ({
+  id,
+  ...SORT_PRESENTATION[id],
+}));
 
 interface FilterSidebarProps {
   filters: LeadListFilters;
@@ -53,14 +87,7 @@ export function FilterSidebar({
     setSections((prev) => ({ ...prev, [section]: !prev[section] }));
   };
 
-  // Check if any filters are active
-  const hasActiveFilters =
-    filters.statuses.length > 0 ||
-    filters.industries.length > 0 ||
-    filters.tags.length > 0 ||
-    filters.minScore > 0 ||
-    filters.maxScore < 100 ||
-    filters.followUp !== 'all';
+  const hasActiveFilters = hasActiveLeadListFilters(filters);
 
   // Reset all filters
   const resetFilters = () => {
@@ -104,22 +131,6 @@ export function FilterSidebar({
     }
     onFiltersChange(nextFilters);
   };
-
-  // Follow-up options
-  const followUpOptions = [
-    { id: 'all' as const, label: 'All', icon: null },
-    { id: 'today' as const, label: 'Today', icon: Calendar },
-    { id: 'overdue' as const, label: 'Overdue', icon: AlertCircle },
-    { id: 'this_week' as const, label: 'This Week', icon: Clock },
-  ];
-
-  // Sort options
-  const sortOptions = [
-    { id: 'savedAt' as const, label: 'Date Added' },
-    { id: 'leadScore' as const, label: 'Lead Score' },
-    { id: 'name' as const, label: 'Name' },
-    { id: 'nextFollowUpAt' as const, label: 'Follow-up Date' },
-  ];
 
   return (
     <>
@@ -417,7 +428,7 @@ export function FilterSidebar({
             </button>
             {sections.followUp && (
               <div className="space-y-1 mt-2">
-                {followUpOptions.map((option) => (
+                {FOLLOW_UP_OPTIONS.map((option) => (
                   <button
                     key={option.id}
                     onClick={() => onFiltersChange({ ...filters, followUp: option.id })}
@@ -452,15 +463,15 @@ export function FilterSidebar({
               <div className="mt-2 space-y-2">
                 <select
                   value={filters.sortBy}
-                  onChange={(e) =>
-                    onFiltersChange({
-                      ...filters,
-                      sortBy: e.target.value as LeadListFilters['sortBy'],
-                    })
-                  }
+                  onChange={(event) => {
+                    const sortBy = LEAD_LIST_UI_SORT_FIELDS.find(
+                      (field) => field === event.currentTarget.value
+                    );
+                    if (sortBy) onFiltersChange({ ...filters, sortBy });
+                  }}
                   className="w-full px-3 py-2 text-sm bg-white/5 border border-white/10 rounded-lg text-gray-300 outline-none focus:border-white/20"
                 >
-                  {sortOptions.map((option) => (
+                  {SORT_OPTIONS.map((option) => (
                     <option key={option.id} value={option.id}>
                       {option.label}
                     </option>

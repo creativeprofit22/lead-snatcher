@@ -1,14 +1,50 @@
 import { describe, expect, test } from 'vitest';
 import {
+  LEAD_LIST_FOLLOW_UP_FILTERS,
+  LEAD_LIST_SORT_FIELDS,
+  LEAD_LIST_SORT_ORDERS,
+  LEAD_LIST_UI_SORT_FIELDS,
   defaultLeadListQuery,
   encodeLeadListQuery,
+  hasActiveLeadListFilters,
   parseLeadListQuery,
+  type LeadListFilters,
   type LeadListQuery,
 } from '@/lib/crm-lead-query';
 
 function params(query = '') {
   return new URLSearchParams(query);
 }
+
+const representativeQuery: LeadListQuery = {
+  statuses: ['new', 'proposal_sent'],
+  industries: ['restaurant', 'professional_services'],
+  tags: ['tag-1', 'tag-2'],
+  minScore: 20,
+  maxScore: 85,
+  followUp: 'this_week',
+  sortBy: 'updatedAt',
+  sortOrder: 'asc',
+};
+
+const roundTripCases: [string, LeadListQuery][] = [
+  ...LEAD_LIST_FOLLOW_UP_FILTERS.map((followUp): [string, LeadListQuery] => [
+    `follow-up ${followUp}`,
+    { ...representativeQuery, followUp },
+  ]),
+  ...LEAD_LIST_SORT_FIELDS.map((sortBy): [string, LeadListQuery] => [
+    `API sort field ${sortBy}`,
+    { ...representativeQuery, sortBy },
+  ]),
+  ...LEAD_LIST_UI_SORT_FIELDS.map((sortBy): [string, LeadListQuery] => [
+    `UI sort field ${sortBy}`,
+    { ...representativeQuery, sortBy },
+  ]),
+  ...LEAD_LIST_SORT_ORDERS.map((sortOrder): [string, LeadListQuery] => [
+    `sort order ${sortOrder}`,
+    { ...representativeQuery, sortOrder },
+  ]),
+];
 
 describe('lead list query contract', () => {
   test('uses the current defaults for an empty query', () => {
@@ -18,18 +54,37 @@ describe('lead list query contract', () => {
     );
   });
 
-  test('round-trips every filter and sort value', () => {
-    const query: LeadListQuery = {
-      statuses: ['new', 'proposal_sent'],
-      industries: ['restaurant', 'professional_services'],
-      tags: ['tag-1', 'tag-2'],
-      minScore: 20,
-      maxScore: 85,
-      followUp: 'this_week',
-      sortBy: 'updatedAt',
-      sortOrder: 'asc',
-    };
+  test.each<[string, Partial<LeadListFilters>, boolean]>([
+    ['default filters', {}, false],
+    ['status', { statuses: ['new'] }, true],
+    ['industry', { industries: ['medical'] }, true],
+    ['tag', { tags: ['priority'] }, true],
+    ['minimum score', { minScore: 1 }, true],
+    ['maximum score', { maxScore: 99 }, true],
+    ['follow-up', { followUp: 'today' }, true],
+    ['sort field only', { sortBy: 'leadScore' }, false],
+    ['sort order only', { sortOrder: 'asc' }, false],
+  ])('reports %s activity', (_name, overrides, expected) => {
+    const filters = { ...defaultLeadListQuery, ...overrides };
 
+    expect(hasActiveLeadListFilters(filters)).toBe(expected);
+  });
+
+  test('checks filter activity without mutating the input', () => {
+    const filters: LeadListFilters = {
+      ...defaultLeadListQuery,
+      statuses: ['new'],
+      industries: ['medical'],
+      tags: ['priority'],
+    };
+    const originalFilters = structuredClone(filters);
+
+    hasActiveLeadListFilters(filters);
+
+    expect(filters).toEqual(originalFilters);
+  });
+
+  test.each(roundTripCases)('round-trips the canonical %s', (_name, query) => {
     expect(parseLeadListQuery(encodeLeadListQuery(query))).toEqual(query);
   });
 
@@ -73,11 +128,16 @@ describe('lead list query contract', () => {
     );
   });
 
-  test('trims and deduplicates tag IDs', () => {
-    expect(parseLeadListQuery(params('tags=tag-1,%20tag-2%20,tag-1')).tags).toEqual([
-      'tag-1',
-      'tag-2',
-    ]);
+  test('keeps parsed legacy and tag input stable after canonical encoding', () => {
+    const parsed = parseLeadListQuery(
+      params('status=won&industry=salon&tags=%20tag-1%20,tag-2,tag-1')
+    );
+    const encoded = encodeLeadListQuery(parsed);
+
+    expect(encoded.toString()).toBe(
+      'statuses=won&industries=salon&tags=tag-1%2Ctag-2&sortBy=savedAt&sortOrder=desc'
+    );
+    expect(parseLeadListQuery(encoded)).toEqual(parsed);
   });
 
   test.each(['abc', '1.5', '-1', '101', ''])('rejects invalid score %j', (score) => {
