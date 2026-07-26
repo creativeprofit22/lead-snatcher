@@ -57,6 +57,15 @@ export interface ScrapeFailure {
   message: string;
 }
 
+export interface PopularTimesFailureBody {
+  error: string;
+  reason: ScrapeFailure['reason'];
+}
+
+export function toPopularTimesFailureBody(failure: ScrapeFailure): PopularTimesFailureBody {
+  return { error: failure.message, reason: failure.reason };
+}
+
 export type PopularTimesResult =
   | { ok: true; data: PopularTimesData }
   | { ok: false; failure: ScrapeFailure };

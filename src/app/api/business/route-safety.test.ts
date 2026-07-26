@@ -1,38 +1,73 @@
-import { describe, expect, test, vi } from 'vitest';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
+import { NextRequest } from 'next/server';
 import { z } from 'zod';
 
-vi.mock('@/lib/auth', () => ({ auth: vi.fn() }));
-vi.mock('@/lib/db', () => ({ prisma: {} }));
+const {
+  authMock,
+  businessSearchCreateMock,
+  checkRateLimitMock,
+  geocodeCityMock,
+  getClientIpMock,
+  getEnrichmentManyMock,
+  getPageSpeedKeyMock,
+  getSearchQueryMock,
+  scanCityZonesMock,
+  searchBusinessesMock,
+} = vi.hoisted(() => ({
+  authMock: vi.fn(),
+  businessSearchCreateMock: vi.fn(),
+  checkRateLimitMock: vi.fn(),
+  geocodeCityMock: vi.fn(),
+  getClientIpMock: vi.fn(),
+  getEnrichmentManyMock: vi.fn(),
+  getPageSpeedKeyMock: vi.fn(),
+  getSearchQueryMock: vi.fn(),
+  scanCityZonesMock: vi.fn(),
+  searchBusinessesMock: vi.fn(),
+}));
+
+vi.mock('@/lib/auth', () => ({ auth: authMock }));
+vi.mock('@/lib/db', () => ({
+  prisma: { businessSearch: { create: businessSearchCreateMock } },
+}));
 vi.mock('@/lib/business', () => ({
-  geocodeCity: vi.fn(),
-  scanCityZones: vi.fn(),
-  searchBusinesses: vi.fn(),
+  geocodeCity: geocodeCityMock,
+  scanCityZones: scanCityZonesMock,
+  searchBusinesses: searchBusinessesMock,
 }));
 vi.mock('@/lib/business/enrichment', () => ({
   discoverSocials: vi.fn(),
   discoverWebsite: vi.fn(),
 }));
 vi.mock('@/lib/business/enrichment-cache', () => ({
-  getEnrichmentMany: vi.fn(),
+  getEnrichmentMany: getEnrichmentManyMock,
   putEnrichment: vi.fn(),
 }));
-vi.mock('@/lib/business/pagespeed-key', () => ({ getPageSpeedKey: vi.fn() }));
+vi.mock('@/lib/business/pagespeed-key', () => ({ getPageSpeedKey: getPageSpeedKeyMock }));
 vi.mock('@/lib/business/budget-estimate', () => ({
   buildBudgetInput: vi.fn(),
   computeFitScore: vi.fn(),
   estimateBudget: vi.fn(),
 }));
-vi.mock('@/lib/constants', () => ({ DEFAULT_COUNTRY_CODE: 'us', getSearchQuery: vi.fn() }));
+vi.mock('@/lib/constants', () => ({
+  DEFAULT_COUNTRY_CODE: 'us',
+  getSearchQuery: getSearchQueryMock,
+}));
 vi.mock('@/lib/rate-limit', () => ({
-  checkRateLimit: vi.fn(),
-  getClientIp: vi.fn(),
+  checkRateLimit: checkRateLimitMock,
+  getClientIp: getClientIpMock,
   RATE_LIMITS: { enrich: {}, search: {}, standard: {} },
 }));
 
-import { getQueuedLead } from '@/app/api/business/enrich/route';
-import { getFallbackZoneLabel, selectFocusedZone } from '@/app/api/business/search/route';
+import { getQueuedLead, POST as enrichBusinesses } from '@/app/api/business/enrich/route';
+import {
+  getFallbackZoneLabel,
+  POST as searchBusinesses,
+  selectFocusedZone,
+} from '@/app/api/business/search/route';
 import type { Zone, ZoneBbox } from '@/lib/business/zone-contract';
 import { classifyRegion, getRegionAt } from '@/lib/business/zone-regions';
+import { ApiError } from '@/lib/errors';
 import { HttpError, parseRouteBody, routeErrorResponse } from '@/lib/route-utils';
 
 function searchZone(
@@ -66,6 +101,228 @@ function searchZone(
     distanceFromCenterMeters: 0,
   };
 }
+
+function enrichmentRequest(body: BodyInit = JSON.stringify(validEnrichmentBody())) {
+  return new NextRequest('http://localhost/api/business/enrich', {
+    method: 'POST',
+    body,
+    headers: { 'content-type': 'application/json' },
+  });
+}
+
+function validEnrichmentBody() {
+  return {
+    leads: [
+      {
+        businessId: 'business-1',
+        name: 'Business One',
+        needsWebsite: true,
+        needsSocials: true,
+      },
+    ],
+    city: 'London',
+    country: 'GB',
+  };
+}
+
+function searchRequest(body: BodyInit = JSON.stringify(validSearchBody())) {
+  return new NextRequest('http://localhost/api/business/search', {
+    method: 'POST',
+    body,
+    headers: { 'content-type': 'application/json' },
+  });
+}
+
+function validSearchBody() {
+  return {
+    businessType: 'restaurant',
+    city: 'London',
+    country: 'GB',
+    limit: 10,
+    deepAnalysis: false,
+  };
+}
+
+describe('business enrich POST pre-stream safety', () => {
+  beforeEach(() => {
+    authMock.mockReset();
+    getEnrichmentManyMock.mockReset();
+  });
+
+  test('preserves the unauthorized JSON response', async () => {
+    authMock.mockResolvedValue(null);
+
+    const response = await enrichBusinesses(enrichmentRequest());
+
+    expect(response.status).toBe(401);
+    expect(response.headers.get('content-type')).toBe('application/json');
+    await expect(response.json()).resolves.toEqual({ error: 'Unauthorized' });
+  });
+
+  test('preserves malformed JSON and schema validation responses', async () => {
+    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+
+    const malformed = await enrichBusinesses(enrichmentRequest('{'));
+    const invalid = await enrichBusinesses(
+      enrichmentRequest(JSON.stringify({ ...validEnrichmentBody(), leads: [] }))
+    );
+
+    expect(malformed.status).toBe(400);
+    await expect(malformed.json()).resolves.toEqual({ error: 'Invalid JSON' });
+    expect(invalid.status).toBe(400);
+    await expect(invalid.json()).resolves.toEqual({ error: 'At least one lead is required' });
+  });
+
+  test.each([
+    ['auth', () => authMock.mockRejectedValue(new Error('auth secret'))],
+    [
+      'cache lookup',
+      () => {
+        authMock.mockResolvedValue({ user: { id: 'user-1' } });
+        getEnrichmentManyMock.mockRejectedValue(new Error('cache secret'));
+      },
+    ],
+  ])('maps unexpected %s failures to safe endpoint JSON', async (_source, rejectDependency) => {
+    rejectDependency();
+
+    const response = await enrichBusinesses(enrichmentRequest());
+
+    expect(response.status).toBe(500);
+    expect(response.headers.get('content-type')).toContain('application/json');
+    await expect(response.json()).resolves.toEqual({ error: 'Failed to start enrichment' });
+  });
+
+  test('returns the successful NDJSON stream unchanged with cached rows first', async () => {
+    authMock.mockResolvedValue({ user: { id: 'user-1' } });
+    getEnrichmentManyMock.mockResolvedValue(
+      new Map([['business-1', { website: 'https://cached.example' }]])
+    );
+
+    const response = await enrichBusinesses(enrichmentRequest());
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('application/x-ndjson');
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(response.headers.get('x-accel-buffering')).toBe('no');
+    await expect(response.text()).resolves.toBe(
+      '{"businessId":"business-1","status":"cached","website":"https://cached.example"}\n'
+    );
+  });
+});
+
+describe('business search POST safety', () => {
+  beforeEach(() => {
+    authMock.mockReset();
+    businessSearchCreateMock.mockReset();
+    checkRateLimitMock.mockReset();
+    geocodeCityMock.mockReset();
+    getClientIpMock.mockReset();
+    getPageSpeedKeyMock.mockReset();
+    getSearchQueryMock.mockReset();
+    scanCityZonesMock.mockReset();
+    searchBusinessesMock.mockReset();
+
+    authMock.mockResolvedValue({ user: { id: 'route-user' } });
+    checkRateLimitMock.mockReturnValue({ success: true });
+    getClientIpMock.mockReturnValue('127.0.0.1');
+    getSearchQueryMock.mockReturnValue('restaurants');
+  });
+
+  test.each([
+    ['malformed JSON', '{', { error: 'Invalid JSON body' }],
+    [
+      'schema-invalid JSON',
+      JSON.stringify({ ...validSearchBody(), businessType: '' }),
+      { error: 'Business type is required' },
+    ],
+  ])('returns 400 for %s before external work', async (_case, body, expectedBody) => {
+    const response = await searchBusinesses(searchRequest(body));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual(expectedBody);
+    expect(geocodeCityMock).not.toHaveBeenCalled();
+    expect(getPageSpeedKeyMock).not.toHaveBeenCalled();
+    expect(searchBusinessesMock).not.toHaveBeenCalled();
+    expect(scanCityZonesMock).not.toHaveBeenCalled();
+    expect(businessSearchCreateMock).not.toHaveBeenCalled();
+  });
+
+  test('returns 401 when authentication is missing', async () => {
+    authMock.mockResolvedValue(null);
+
+    const response = await searchBusinesses(searchRequest());
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({ error: 'Unauthorized' });
+    expect(checkRateLimitMock).not.toHaveBeenCalled();
+    expect(geocodeCityMock).not.toHaveBeenCalled();
+  });
+
+  test('preserves ApiError status and code', async () => {
+    geocodeCityMock.mockResolvedValue({
+      latitude: 51.5,
+      longitude: -0.1,
+      bbox: [51.4, 51.6, -0.2, 0],
+      displayName: 'London, UK',
+    });
+    searchBusinessesMock.mockRejectedValue(
+      new ApiError('Provider quota exhausted', 'PROVIDER_QUOTA', 429)
+    );
+    scanCityZonesMock.mockResolvedValue({ status: 'unavailable', zones: [] });
+
+    const response = await searchBusinesses(searchRequest());
+
+    expect(response.status).toBe(429);
+    await expect(response.json()).resolves.toEqual({
+      error: 'Provider quota exhausted',
+      code: 'PROVIDER_QUOTA',
+    });
+  });
+
+  test('uses the authenticated user ID for PageSpeed, providers, and persistence', async () => {
+    geocodeCityMock.mockResolvedValue({
+      latitude: 51.5,
+      longitude: -0.1,
+      bbox: [51.4, 51.6, -0.2, 0],
+      displayName: 'London, UK',
+    });
+    getPageSpeedKeyMock.mockResolvedValue('pagespeed-key');
+    searchBusinessesMock.mockResolvedValue([]);
+    scanCityZonesMock.mockResolvedValue({ status: 'unavailable', zones: [] });
+    businessSearchCreateMock.mockResolvedValue({});
+
+    const response = await searchBusinesses(
+      searchRequest(JSON.stringify({ ...validSearchBody(), deepAnalysis: true }))
+    );
+
+    expect(response.status).toBe(200);
+    expect(getPageSpeedKeyMock).toHaveBeenCalledWith('route-user');
+    expect(searchBusinessesMock).toHaveBeenCalledWith(
+      'route-user',
+      'restaurants',
+      51.5,
+      -0.1,
+      10,
+      expect.objectContaining({ pageSpeedApiKey: 'pagespeed-key' })
+    );
+    expect(businessSearchCreateMock).toHaveBeenCalledWith({
+      data: expect.objectContaining({ userId: 'route-user' }),
+    });
+  });
+
+  test('maps unknown failures to the current safe 500 response', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    authMock.mockRejectedValue(new Error('auth secret'));
+
+    const response = await searchBusinesses(searchRequest());
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: 'Search failed. Please try again.',
+    });
+    consoleError.mockRestore();
+  });
+});
 
 describe('route request safety helpers', () => {
   test('maps malformed JSON to a 400 response', async () => {

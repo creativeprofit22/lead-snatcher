@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { randomBytes } from 'crypto';
 import { prisma } from '@/lib/db';
+import { HttpError, parseRouteBody, routeErrorResponse } from '@/lib/route-utils';
 import { inviteSchema } from '@/lib/validations';
 
 // Admin secret - must be configured in production
@@ -13,6 +14,28 @@ function validateAdminSecret() {
   return ADMIN_SECRET;
 }
 
+function validateAndNormalizeNextAuthUrl() {
+  const configuredBaseUrl = process.env.NEXTAUTH_URL?.trim();
+  if (!configuredBaseUrl) {
+    throw new Error('NEXTAUTH_URL environment variable must be configured');
+  }
+
+  let baseUrl: URL;
+  try {
+    baseUrl = new URL(configuredBaseUrl);
+  } catch {
+    throw new Error('NEXTAUTH_URL environment variable must be a valid URL');
+  }
+
+  if (baseUrl.protocol !== 'http:' && baseUrl.protocol !== 'https:') {
+    throw new Error('NEXTAUTH_URL environment variable must use HTTP or HTTPS');
+  }
+
+  baseUrl.search = '';
+  baseUrl.hash = '';
+  return baseUrl.toString().replace(/\/+$/, '');
+}
+
 export async function POST(request: Request) {
   try {
     const adminSecret = validateAdminSecret();
@@ -21,20 +44,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    let rawBody;
-    try {
-      rawBody = await request.json();
-    } catch {
-      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
-    }
-    const parsed = inviteSchema.safeParse(rawBody);
-    if (!parsed.success) {
-      return NextResponse.json(
-        { error: parsed.error.issues[0]?.message ?? 'Invalid request body' },
-        { status: 400 }
-      );
-    }
-    const { email, name } = parsed.data;
+    const { email, name } = await parseRouteBody(request, inviteSchema);
+    const baseUrl = validateAndNormalizeNextAuthUrl();
 
     const existingUser = await prisma.user.findUnique({
       where: { email },
@@ -55,12 +66,8 @@ export async function POST(request: Request) {
       },
     });
 
-    // Build the invite URL
-    const baseUrl = process.env.NEXTAUTH_URL;
-    if (!baseUrl) {
-      throw new Error('NEXTAUTH_URL environment variable must be configured');
-    }
-    const inviteUrl = `${baseUrl}/set-password?token=${inviteToken}`;
+    // Build the invite URL without exposing the invite token in the response.
+    const inviteUrl = `${baseUrl}/set-password?token=[REDACTED]`;
 
     return NextResponse.json({
       id: user.id,
@@ -69,8 +76,10 @@ export async function POST(request: Request) {
       message: 'User invited. Share the invite URL with them.',
     });
   } catch (error) {
-    console.error('Invite error:', error);
-    return NextResponse.json({ error: 'Failed to invite user' }, { status: 500 });
+    if (!(error instanceof HttpError)) {
+      console.error('Invite error:', error);
+    }
+    return routeErrorResponse(error, 'Failed to invite user');
   }
 }
 

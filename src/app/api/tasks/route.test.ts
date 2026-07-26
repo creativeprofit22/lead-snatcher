@@ -81,6 +81,38 @@ describe('GET /api/tasks ordering', () => {
   });
 });
 
+describe('GET /api/tasks query validation', () => {
+  test.each([
+    ['unknown status', 'status=pendng'],
+    ['unknown due filter', 'due=tomorrow'],
+    ['blank lead ID', 'leadId=%20%20'],
+    ['unknown include value', 'include=summary'],
+    ['blank include value', 'include='],
+  ])('returns 400 without querying Prisma for %s', async (_description, query) => {
+    const response = await GET(new Request(`http://localhost/api/tasks?${query}`));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({ error: expect.any(String) });
+    expect(findTasks).not.toHaveBeenCalled();
+    expect(countTasks).not.toHaveBeenCalled();
+  });
+
+  test('applies omitted defaults and trims a nonblank lead ID', async () => {
+    findTasks.mockResolvedValueOnce([]);
+
+    const response = await GET(new Request('http://localhost/api/tasks?leadId=%20lead-1%20'));
+
+    expect(response.status).toBe(200);
+    expect(findTasks).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId: 'user-1', completedAt: null, leadId: 'lead-1' },
+      })
+    );
+    await expect(response.json()).resolves.toEqual({ tasks: [] });
+    expect(countTasks).not.toHaveBeenCalled();
+  });
+});
+
 describe('POST /api/tasks serialization', () => {
   test('returns explicit nulls and ISO timestamps for a standalone task', async () => {
     createTask.mockResolvedValue(task('created', 'medium'));
@@ -94,6 +126,11 @@ describe('POST /api/tasks serialization', () => {
     );
 
     expect(response.status).toBe(200);
+    expect(createTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ type: 'other', priority: 'medium' }),
+      })
+    );
     await expect(response.json()).resolves.toEqual({
       task: {
         id: 'created',

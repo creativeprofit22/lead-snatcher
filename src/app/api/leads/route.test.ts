@@ -125,6 +125,8 @@ describe('POST /api/leads score breakdown contract', () => {
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
+          industryType: 'other',
+          leadScore: 0,
           scoreBreakdown: JSON.stringify(normalizedScoreBreakdown),
         }),
       })

@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/db';
 import { geocodeCity, searchBusinesses, scanCityZones } from '@/lib/business';
 import { getPageSpeedKey } from '@/lib/business/pagespeed-key';
@@ -8,6 +7,12 @@ import { rederiveEnrichedSearchResult } from '@/lib/business/derive-search-resul
 import { getSearchQuery } from '@/lib/constants';
 import { ApiError } from '@/lib/errors';
 import { checkRateLimit, getClientIp, RATE_LIMITS } from '@/lib/rate-limit';
+import {
+  HttpError,
+  parseRouteBody,
+  requireRouteUserId,
+  routeErrorResponse,
+} from '@/lib/route-utils';
 import { businessSearchSchema } from '@/lib/validations';
 import type { IndustryType } from '@/types';
 
@@ -125,14 +130,11 @@ export function selectFocusedZone(
 
 export async function POST(request: NextRequest) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const userId = await requireRouteUserId();
 
     // Rate limit search to prevent API quota exhaustion
     const ip = getClientIp(request);
-    const rateLimit = checkRateLimit(`search:${session.user.id}:${ip}`, RATE_LIMITS.search);
+    const rateLimit = checkRateLimit(`search:${userId}:${ip}`, RATE_LIMITS.search);
     if (!rateLimit.success) {
       return NextResponse.json(
         { error: 'Too many searches. Please wait a moment and try again.' },
@@ -140,16 +142,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const rawBody = await request.json();
-    const parsed = businessSearchSchema.safeParse(rawBody);
-    if (!parsed.success) {
-      return NextResponse.json(
-        { error: parsed.error.issues[0]?.message ?? 'Invalid request body' },
-        { status: 400 }
-      );
-    }
     const { businessType, city, country, limit, deepAnalysis, searchLat, searchLng, zoneLabel } =
-      parsed.data;
+      await parseRouteBody(request, businessSearchSchema);
 
     // Geocode the city. Always needed for the zone-grid bbox, even when the
     // caller supplies explicit search coords (zone-targeted rescan).
@@ -173,14 +167,14 @@ export async function POST(request: NextRequest) {
 
     // Pull the user's PageSpeed key (optional; falls back to env, then to
     // the unauthenticated endpoint which Google rate-limits hard).
-    const pageSpeedApiKey = deepAnalysis ? await getPageSpeedKey(session.user.id) : undefined;
+    const pageSpeedApiKey = deepAnalysis ? await getPageSpeedKey(userId) : undefined;
 
     // Run business search and city zone scan in parallel. Zone scan is free
     // (one Overpass call, cached 7d per city) and now serves as the single
     // source of truth for area density, avoiding a redundant request that
     // could fail when Overpass is rate-limited.
     const [results, zoneGrid] = await Promise.all([
-      searchBusinesses(session.user.id, searchQuery, searchCenterLat, searchCenterLng, limit, {
+      searchBusinesses(userId, searchQuery, searchCenterLat, searchCenterLng, limit, {
         enableWebsiteScraping: true, // Always scrape for tech stack & features
         enableWebsiteAnalysis: deepAnalysis, // Optional PageSpeed analysis
         pageSpeedApiKey,
@@ -215,7 +209,7 @@ export async function POST(request: NextRequest) {
     // rescans show up as distinct history rows.
     await prisma.businessSearch.create({
       data: {
-        userId: session.user.id,
+        userId,
         businessType,
         city,
         country,
@@ -291,8 +285,6 @@ export async function POST(request: NextRequest) {
       },
     });
   } catch (error) {
-    console.error('Business search error:', error);
-
     if (error instanceof ApiError) {
       return NextResponse.json(
         { error: error.message, code: error.code },
@@ -300,6 +292,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    return NextResponse.json({ error: 'Search failed. Please try again.' }, { status: 500 });
+    if (!(error instanceof HttpError)) {
+      console.error('Business search error:', error);
+    }
+    return routeErrorResponse(error, 'Search failed. Please try again.');
   }
 }

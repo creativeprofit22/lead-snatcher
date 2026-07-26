@@ -1,17 +1,24 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
 import { geocodeCity } from '@/lib/business';
+import { DEFAULT_COUNTRY_CODE } from '@/lib/constants';
+import { checkRateLimit, getClientIp, RATE_LIMITS } from '@/lib/rate-limit';
+import { requireRouteUserId, routeErrorResponse } from '@/lib/route-utils';
 
 export async function GET(request: Request) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    const userId = await requireRouteUserId();
+    const ip = getClientIp(request);
+    const rateLimit = checkRateLimit(`geocode:${userId}:${ip}`, RATE_LIMITS.standard);
+    if (!rateLimit.success) {
+      return NextResponse.json(
+        { error: 'Too many geocoding requests. Please wait a moment and try again.' },
+        { status: 429 }
+      );
     }
 
     const { searchParams } = new URL(request.url);
-    const city = searchParams.get('city');
-    const country = searchParams.get('country') || 'au';
+    const city = searchParams.get('city')?.trim();
+    const country = searchParams.get('country')?.trim() || DEFAULT_COUNTRY_CODE;
 
     if (!city) {
       return NextResponse.json({ error: 'City is required' }, { status: 400 });
@@ -26,6 +33,6 @@ export async function GET(request: Request) {
     return NextResponse.json(result);
   } catch (error) {
     console.error('Geocode error:', error);
-    return NextResponse.json({ error: 'Geocoding failed. Please try again.' }, { status: 500 });
+    return routeErrorResponse(error, 'Geocoding failed. Please try again.');
   }
 }

@@ -7,6 +7,7 @@ import {
   type EnrichmentPayload,
 } from '@/lib/business/enrichment-cache';
 import { checkRateLimit, getClientIp, RATE_LIMITS } from '@/lib/rate-limit';
+import { routeErrorResponse } from '@/lib/route-utils';
 import { businessEnrichSchema } from '@/lib/validations';
 
 /**
@@ -33,6 +34,14 @@ export function getQueuedLead<T>(leads: readonly T[], index: number): T | undefi
 }
 
 export async function POST(request: NextRequest) {
+  try {
+    return await createEnrichmentResponse(request);
+  } catch (error) {
+    return routeErrorResponse(error, 'Failed to start enrichment');
+  }
+}
+
+async function createEnrichmentResponse(request: NextRequest) {
   const session = await auth();
   if (!session?.user?.id) {
     return new Response(JSON.stringify({ error: 'Unauthorized' }), {

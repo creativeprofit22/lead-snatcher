@@ -30,6 +30,7 @@ export const taskTypeSchema = z.enum(['call', 'email', 'meeting', 'follow_up', '
 export const taskPrioritySchema = z.enum(['low', 'medium', 'high', 'urgent']);
 
 export const apiKeyServiceSchema = z.enum(['youtube', 'rapidapi', 'openrouter', 'pagespeed']);
+export type ApiKeyService = z.infer<typeof apiKeyServiceSchema>;
 
 // ─── Route schemas ──────────────────────────────────────────────
 
@@ -52,18 +53,40 @@ export const setPasswordSchema = z.object({
 });
 
 // POST /api/business/search
-export const businessSearchSchema = z.object({
-  businessType: z.string().min(1, 'Business type is required'),
-  city: z.string().min(1, 'City is required'),
-  country: z.string().min(2).max(5).default(DEFAULT_COUNTRY_CODE),
-  limit: z.number().int().min(1).max(50).default(20),
-  deepAnalysis: z.boolean().default(false),
-  // Optional zone-targeted rescan: skip city geocoding and aim the Maps
-  // search + area score at these exact coords instead.
-  searchLat: z.number().min(-90).max(90).optional(),
-  searchLng: z.number().min(-180).max(180).optional(),
-  zoneLabel: z.string().max(200).optional(),
-});
+export const businessSearchSchema = z
+  .object({
+    businessType: z.string().min(1, 'Business type is required'),
+    city: z.string().min(1, 'City is required'),
+    country: z.string().min(2).max(5).default(DEFAULT_COUNTRY_CODE),
+    limit: z.number().int().min(1).max(50).default(20),
+    deepAnalysis: z.boolean().default(false),
+    // Optional zone-targeted rescan: skip city geocoding and aim the Maps
+    // search + area score at these exact coords instead.
+    searchLat: z.number().min(-90).max(90).optional(),
+    searchLng: z.number().min(-180).max(180).optional(),
+    zoneLabel: z.string().max(200).optional(),
+  })
+  .superRefine(({ searchLat, searchLng, zoneLabel }, context) => {
+    const hasSearchLat = searchLat !== undefined;
+    const hasSearchLng = searchLng !== undefined;
+
+    if (hasSearchLat !== hasSearchLng) {
+      context.addIssue({
+        code: 'custom',
+        message: 'searchLat and searchLng must be provided together',
+        path: hasSearchLat ? ['searchLng'] : ['searchLat'],
+      });
+      return;
+    }
+
+    if (zoneLabel !== undefined && !hasSearchLat) {
+      context.addIssue({
+        code: 'custom',
+        message: 'zoneLabel requires searchLat and searchLng',
+        path: ['zoneLabel'],
+      });
+    }
+  });
 
 // POST /api/business/enrich
 export const businessEnrichSchema = z.object({

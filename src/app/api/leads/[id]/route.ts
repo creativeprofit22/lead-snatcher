@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
 import { prisma } from '@/lib/db';
-import { updateLeadSchema } from '@/lib/validations';
 import { toLeadDto } from '@/lib/lead-dto';
+import { parseRouteBody, requireRouteUserId, routeErrorResponse } from '@/lib/route-utils';
+import { updateLeadSchema } from '@/lib/validations';
 
 interface RouteContext {
   params: Promise<{ id: string }>;
@@ -11,17 +11,14 @@ interface RouteContext {
 // GET - Get a single lead in { lead }; use /api/leads/[id]/contact for contact history
 export async function GET(request: Request, context: RouteContext) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const userId = await requireRouteUserId();
 
     const { id } = await context.params;
 
     const lead = await prisma.lead.findFirst({
       where: {
         id,
-        userId: session.user.id,
+        userId,
       },
       include: {
         tags: { include: { tag: true } },
@@ -35,34 +32,23 @@ export async function GET(request: Request, context: RouteContext) {
     return NextResponse.json({ lead: toLeadDto(lead) });
   } catch (error) {
     console.error('Get lead error:', error);
-    return NextResponse.json({ error: 'Failed to fetch lead' }, { status: 500 });
+    return routeErrorResponse(error, 'Failed to fetch lead');
   }
 }
 
 // PATCH - Update lead (status, notes, follow-up)
 export async function PATCH(request: Request, context: RouteContext) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const userId = await requireRouteUserId();
 
     const { id } = await context.params;
-    const rawBody = await request.json();
-    const parsed = updateLeadSchema.safeParse(rawBody);
-    if (!parsed.success) {
-      return NextResponse.json(
-        { error: parsed.error.issues[0]?.message ?? 'Invalid request body' },
-        { status: 400 }
-      );
-    }
-    const { status, notes, nextFollowUpAt } = parsed.data;
+    const { status, notes, nextFollowUpAt } = await parseRouteBody(request, updateLeadSchema);
 
     // Verify ownership
     const existing = await prisma.lead.findFirst({
       where: {
         id,
-        userId: session.user.id,
+        userId,
       },
     });
 
@@ -97,17 +83,14 @@ export async function PATCH(request: Request, context: RouteContext) {
     });
   } catch (error) {
     console.error('Update lead error:', error);
-    return NextResponse.json({ error: 'Failed to update lead' }, { status: 500 });
+    return routeErrorResponse(error, 'Failed to update lead');
   }
 }
 
 // DELETE - Remove lead
 export async function DELETE(request: Request, context: RouteContext) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const userId = await requireRouteUserId();
 
     const { id } = await context.params;
 
@@ -115,7 +98,7 @@ export async function DELETE(request: Request, context: RouteContext) {
     const existing = await prisma.lead.findFirst({
       where: {
         id,
-        userId: session.user.id,
+        userId,
       },
     });
 
@@ -130,6 +113,6 @@ export async function DELETE(request: Request, context: RouteContext) {
     return NextResponse.json({ message: 'Lead deleted successfully' });
   } catch (error) {
     console.error('Delete lead error:', error);
-    return NextResponse.json({ error: 'Failed to delete lead' }, { status: 500 });
+    return routeErrorResponse(error, 'Failed to delete lead');
   }
 }

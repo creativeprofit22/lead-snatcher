@@ -1,15 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { auth } from '@/lib/auth';
-import { scrapePopularTimes } from '@/lib/business/popular-times';
+import { scrapePopularTimes, toPopularTimesFailureBody } from '@/lib/business/popular-times';
+import { checkRateLimit, getClientIp, RATE_LIMITS } from '@/lib/rate-limit';
+import { HttpError, parseRouteBody, requireRouteUserId } from '@/lib/route-utils';
 
 /**
  * POST /api/business/popular-times
  *
- * Search-time foot-traffic scrape — no DB write. Used by per-card "Fetch
- * Foot Traffic" button on the search results screen, where the business
- * is not yet a saved Lead. Caching happens in client state for the search
- * session; persistence happens at Save Lead time if the user opts in.
+ * Search-time foot-traffic scrape with no database write. There is no current
+ * first-party UI caller, so this route remains compatibility-only until
+ * deployed request history can be checked.
  */
 
 const bodySchema = z.object({
@@ -19,29 +19,21 @@ const bodySchema = z.object({
 
 export async function POST(request: NextRequest) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
-    const rawBody = await request.json();
-    const parsed = bodySchema.safeParse(rawBody);
-    if (!parsed.success) {
+    const userId = await requireRouteUserId();
+    const { name, address } = await parseRouteBody(request, bodySchema);
+    const ip = getClientIp(request);
+    const rateLimit = checkRateLimit(`popular-times:${userId}:${ip}`, RATE_LIMITS.expensive);
+    if (!rateLimit.success) {
       return NextResponse.json(
-        { error: parsed.error.issues[0]?.message ?? 'Invalid request body' },
-        { status: 400 }
+        { error: 'Too many Popular Times requests. Please wait a moment.', reason: 'rate_limited' },
+        { status: 429 }
       );
     }
 
-    const { name, address } = parsed.data;
     const query = [name, address].filter(Boolean).join(' ');
-
     const result = await scrapePopularTimes(query);
     if (!result.ok) {
-      return NextResponse.json(
-        { error: result.failure.message, reason: result.failure.reason },
-        { status: 502 }
-      );
+      return NextResponse.json(toPopularTimesFailureBody(result.failure), { status: 502 });
     }
 
     return NextResponse.json({
@@ -49,6 +41,10 @@ export async function POST(request: NextRequest) {
       scrapedAt: new Date().toISOString(),
     });
   } catch (error) {
+    if (error instanceof HttpError) {
+      return NextResponse.json({ error: error.message }, { status: error.status });
+    }
+
     console.error('Popular Times search-time scrape error:', error);
     return NextResponse.json(
       { error: 'Server error during scrape', reason: 'server_error' },

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { ZodError, type ZodType } from 'zod';
 import { getCurrentUserId } from '@/lib/auth-utils';
+import { prisma } from '@/lib/db';
 
 export class HttpError extends Error {
   constructor(
@@ -17,6 +18,20 @@ export async function requireRouteUserId(): Promise<string> {
 
   if (!userId) {
     throw new HttpError('Unauthorized', 401);
+  }
+
+  return userId;
+}
+
+export async function requireRouteValidUser(): Promise<string> {
+  const userId = await requireRouteUserId();
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true },
+  });
+
+  if (!user) {
+    throw new HttpError('Session invalid. Please log out and log in again.', 401);
   }
 
   return userId;

@@ -1,9 +1,15 @@
 import { NextResponse } from 'next/server';
 import { getTaskDayBoundaries } from '@/lib/business/task-day';
 import { TASK_PRIORITY_RANK } from '@/lib/constants';
+import { parseTaskListQuery } from '@/lib/crm-task-query';
 import { prisma } from '@/lib/db';
 import { createTaskSchema } from '@/lib/validations';
-import { parseRouteBody, requireRouteUserId, routeErrorResponse } from '@/lib/route-utils';
+import {
+  parseRouteBody,
+  parseRouteQuery,
+  requireRouteUserId,
+  routeErrorResponse,
+} from '@/lib/route-utils';
 import { toTaskDto } from '@/lib/task-dto';
 import type {
   CreateTaskResponse,
@@ -18,18 +24,7 @@ export async function GET(request: Request) {
   try {
     const userId = await requireRouteUserId();
     const { searchParams } = new URL(request.url);
-
-    // Status filter: pending, completed, all
-    const status = searchParams.get('status') || 'pending';
-
-    // Due date filter: today, overdue, week, all
-    const due = searchParams.get('due') || 'all';
-
-    // Lead filter
-    const leadId = searchParams.get('leadId');
-
-    // Summary counts are opt-in so list-only consumers only pay for the filtered task query.
-    const includeStats = searchParams.get('include') === 'stats';
+    const { status, due, leadId, includeStats } = parseRouteQuery(searchParams, parseTaskListQuery);
 
     // Build where clause
     const where: Record<string, unknown> = {
@@ -152,9 +147,9 @@ export async function POST(request: Request) {
         userId,
         title,
         description,
-        type: type || 'other',
+        type,
         dueAt: new Date(dueAt),
-        priority: priority || 'medium',
+        priority,
         leadId,
       },
       include: {

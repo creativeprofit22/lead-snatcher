@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
+import {
+  scrapePopularTimes,
+  toPopularTimesFailureBody,
+  type PopularTimesData,
+} from '@/lib/business/popular-times';
 import { prisma } from '@/lib/db';
-import { scrapePopularTimes, type PopularTimesData } from '@/lib/business/popular-times';
+import { checkRateLimit, getClientIp, RATE_LIMITS } from '@/lib/rate-limit';
+import { HttpError, requireRouteUserId } from '@/lib/route-utils';
 
 interface RouteContext {
   params: Promise<{ id: string }>;
@@ -13,27 +18,22 @@ interface RouteContext {
  * Scrape Popular Times for a saved lead, persist to the row, return data.
  * Honors `?force=true` to re-scrape even when cached data exists.
  *
- * On scrape failure: returns 502 with structured `{ error, reason }` so
- * the UI can render a precise inline message (mode B).
+ * On scrape failure: returns 502 with structured `{ error, reason }`.
  */
 export async function POST(request: NextRequest, context: RouteContext) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
-
+    const userId = await requireRouteUserId();
     const { id } = await context.params;
     const force = request.nextUrl.searchParams.get('force') === 'true';
 
     const lead = await prisma.lead.findFirst({
-      where: { id, userId: session.user.id },
+      where: { id, userId },
     });
     if (!lead) {
       return NextResponse.json({ error: 'Lead not found' }, { status: 404 });
     }
 
-    // Cached path — return existing data unless caller forced a refresh.
+    // Cached reads cost no provider request and do not consume the scrape limit.
     if (!force && lead.popularTimesData && lead.popularTimesScrapedAt) {
       try {
         const cached = JSON.parse(lead.popularTimesData) as PopularTimesData;
@@ -47,17 +47,20 @@ export async function POST(request: NextRequest, context: RouteContext) {
       }
     }
 
+    const ip = getClientIp(request);
+    const rateLimit = checkRateLimit(`popular-times:${userId}:${ip}`, RATE_LIMITS.expensive);
+    if (!rateLimit.success) {
+      return NextResponse.json(
+        { error: 'Too many Popular Times requests. Please wait a moment.', reason: 'rate_limited' },
+        { status: 429 }
+      );
+    }
+
     const query = [lead.name, lead.address].filter(Boolean).join(' ');
     const result = await scrapePopularTimes(query);
 
     if (!result.ok) {
-      return NextResponse.json(
-        {
-          error: result.failure.message,
-          reason: result.failure.reason,
-        },
-        { status: 502 }
-      );
+      return NextResponse.json(toPopularTimesFailureBody(result.failure), { status: 502 });
     }
 
     const now = new Date();
@@ -75,6 +78,10 @@ export async function POST(request: NextRequest, context: RouteContext) {
       fromCache: false,
     });
   } catch (error) {
+    if (error instanceof HttpError) {
+      return NextResponse.json({ error: error.message }, { status: error.status });
+    }
+
     console.error('Popular Times scrape error:', error);
     return NextResponse.json(
       { error: 'Server error during scrape', reason: 'server_error' },

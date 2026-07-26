@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
+import { createOwnedContactLog } from '@/lib/business/contact-log-store';
 import { prisma } from '@/lib/db';
+import { parseRouteBody, requireRouteUserId, routeErrorResponse } from '@/lib/route-utils';
 import { createContactLogSchema } from '@/lib/validations';
 
 interface RouteContext {
@@ -10,10 +11,7 @@ interface RouteContext {
 // GET - Get contact logs for a lead
 export async function GET(request: Request, context: RouteContext) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const userId = await requireRouteUserId();
 
     const { id } = await context.params;
 
@@ -21,7 +19,7 @@ export async function GET(request: Request, context: RouteContext) {
     const lead = await prisma.lead.findFirst({
       where: {
         id,
-        userId: session.user.id,
+        userId,
       },
     });
 
@@ -37,56 +35,23 @@ export async function GET(request: Request, context: RouteContext) {
     return NextResponse.json({ contactLogs });
   } catch (error) {
     console.error('Get contact logs error:', error);
-    return NextResponse.json({ error: 'Failed to fetch contact logs' }, { status: 500 });
+    return routeErrorResponse(error, 'Failed to fetch contact logs');
   }
 }
 
 // POST - Add contact log entry
 export async function POST(request: Request, context: RouteContext) {
   try {
-    const session = await auth();
-    if (!session?.user?.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const userId = await requireRouteUserId();
 
     const { id } = await context.params;
-    const rawBody = await request.json();
-    const parsed = createContactLogSchema.safeParse(rawBody);
-    if (!parsed.success) {
-      return NextResponse.json(
-        { error: parsed.error.issues[0]?.message ?? 'Invalid request body' },
-        { status: 400 }
-      );
-    }
-    const { type, summary, outcome } = parsed.data;
+    const { type, summary, outcome } = await parseRouteBody(request, createContactLogSchema);
 
-    // Verify ownership
-    const lead = await prisma.lead.findFirst({
-      where: {
-        id,
-        userId: session.user.id,
-      },
-    });
+    const contactLog = await createOwnedContactLog(userId, id, { type, summary, outcome });
 
-    if (!lead) {
+    if (!contactLog) {
       return NextResponse.json({ error: 'Lead not found' }, { status: 404 });
     }
-
-    // Create contact log
-    const contactLog = await prisma.contactLog.create({
-      data: {
-        leadId: id,
-        type,
-        summary,
-        outcome,
-      },
-    });
-
-    // Update lead's lastContactedAt
-    await prisma.lead.update({
-      where: { id },
-      data: { lastContactedAt: new Date() },
-    });
 
     return NextResponse.json({
       contactLog,
@@ -94,6 +59,6 @@ export async function POST(request: Request, context: RouteContext) {
     });
   } catch (error) {
     console.error('Add contact log error:', error);
-    return NextResponse.json({ error: 'Failed to add contact log' }, { status: 500 });
+    return routeErrorResponse(error, 'Failed to add contact log');
   }
 }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import bcrypt from 'bcrypt';
 import { prisma } from '@/lib/db';
 import { checkRateLimit, getClientIp, RATE_LIMITS } from '@/lib/rate-limit';
+import { HttpError, parseRouteBody, routeErrorResponse } from '@/lib/route-utils';
 import { setPasswordSchema } from '@/lib/validations';
 
 export async function POST(request: NextRequest) {
@@ -16,20 +17,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    let rawBody;
-    try {
-      rawBody = await request.json();
-    } catch {
-      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
-    }
-    const parsed = setPasswordSchema.safeParse(rawBody);
-    if (!parsed.success) {
-      return NextResponse.json(
-        { error: parsed.error.issues[0]?.message ?? 'Invalid request body' },
-        { status: 400 }
-      );
-    }
-    const { token, password } = parsed.data;
+    const { token, password } = await parseRouteBody(request, setPasswordSchema);
 
     // Find user by invite token
     const user = await prisma.user.findUnique({
@@ -62,8 +50,10 @@ export async function POST(request: NextRequest) {
       message: 'Password set successfully. You can now login.',
     });
   } catch (error) {
-    console.error('Set password error:', error);
-    return NextResponse.json({ error: 'Failed to set password' }, { status: 500 });
+    if (!(error instanceof HttpError)) {
+      console.error('Set password error:', error);
+    }
+    return routeErrorResponse(error, 'Failed to set password');
   }
 }
 

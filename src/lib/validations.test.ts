@@ -33,6 +33,63 @@ describe('country defaults', () => {
   });
 });
 
+describe('business search validation', () => {
+  const requiredFields = { businessType: 'restaurant', city: 'Chicago' };
+
+  test('accepts city-centroid searches without coordinates', () => {
+    const parsed = businessSearchSchema.parse(requiredFields);
+
+    expect(parsed.searchLat).toBeUndefined();
+    expect(parsed.searchLng).toBeUndefined();
+    expect(parsed.zoneLabel).toBeUndefined();
+  });
+
+  test('accepts targeted searches with both coordinates and a zone label', () => {
+    expect(
+      businessSearchSchema.parse({
+        ...requiredFields,
+        searchLat: 41.881_832,
+        searchLng: -87.623_177,
+        zoneLabel: 'The Loop',
+      })
+    ).toMatchObject({
+      searchLat: 41.881_832,
+      searchLng: -87.623_177,
+      zoneLabel: 'The Loop',
+    });
+  });
+
+  test.each([
+    ['latitude only', { searchLat: 41.881_832 }, ['searchLng']],
+    ['longitude only', { searchLng: -87.623_177 }, ['searchLat']],
+  ])('rejects %s with the stable coordinate-pair issue first', (_case, coordinates, path) => {
+    const result = businessSearchSchema.safeParse({ ...requiredFields, ...coordinates });
+
+    expect(result.success).toBe(false);
+    if (result.success) throw new Error('Expected coordinate validation to fail');
+    expect(result.error.issues[0]).toMatchObject({
+      code: 'custom',
+      message: 'searchLat and searchLng must be provided together',
+      path,
+    });
+  });
+
+  test('rejects a zone label without targeted coordinates', () => {
+    const result = businessSearchSchema.safeParse({
+      ...requiredFields,
+      zoneLabel: 'The Loop',
+    });
+
+    expect(result.success).toBe(false);
+    if (result.success) throw new Error('Expected zone label validation to fail');
+    expect(result.error.issues[0]).toMatchObject({
+      code: 'custom',
+      message: 'zoneLabel requires searchLat and searchLng',
+      path: ['zoneLabel'],
+    });
+  });
+});
+
 describe('task validation', () => {
   test('accepts null when creating an unassigned task', () => {
     const task = createTaskSchema.parse({
