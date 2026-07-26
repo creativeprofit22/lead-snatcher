@@ -383,7 +383,6 @@ function HomeInner() {
           getSessionPayload={getSessionPayload}
           zones={zones}
           focusedZone={focusedZone}
-          focusedZoneId={focusedZoneId}
           rescanningZoneId={rescanningZoneId}
           zoneScanStatus={zoneScanStatus}
           marketDensity={marketDensity}

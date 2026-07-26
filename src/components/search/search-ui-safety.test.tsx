@@ -1,12 +1,21 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, renderHook, screen } from '@testing-library/react';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import type { Zone } from '@/lib/business/zone-contract';
 import { AreaDensityMeter } from './AreaDensityMeter';
 import { getIdleScore, IdleScoreDial } from './IdleScoreDial';
 import { RadarScan } from './RadarScan';
+import type { RadarPin, RadarZoneDot } from './radar-geometry';
 import { RegionPicker } from './RegionPicker';
 import { ZoneChipsStrip } from './ZoneChipsStrip';
+import {
+  RADAR_COMPLETE_HOLD_MS,
+  RADAR_ZONE_BLOOM_HOLD_MS,
+  RADAR_ZONE_STAGGER_MS,
+  RADAR_ZOOM_DURATION_MS,
+  useRadarScanSequence,
+} from './useRadarScanSequence';
+import { isDirectionalFallbackLabel, selectVisibleZoneChips } from './zone-presentation';
 
 vi.mock('@/components/animata/gauge-chart', () => ({
   default: ({ progress }: { progress: number }) => <div data-testid="gauge">{progress}</div>,
@@ -49,10 +58,22 @@ function zone(id: string, score: number): Zone {
   };
 }
 
-async function runRegionDebounce() {
+async function advanceTime(milliseconds: number) {
   await act(async () => {
-    await vi.advanceTimersByTimeAsync(700);
+    await vi.advanceTimersByTimeAsync(milliseconds);
   });
+}
+
+async function runRegionDebounce() {
+  await advanceTime(700);
+}
+
+function useFakeAnimationFrames() {
+  vi.useFakeTimers();
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) =>
+    window.setTimeout(() => callback(performance.now()), 16)
+  );
+  vi.stubGlobal('cancelAnimationFrame', (frame: number) => window.clearTimeout(frame));
 }
 
 describe('AreaDensityMeter', () => {
@@ -157,6 +178,30 @@ describe('RegionPicker', () => {
   });
 });
 
+describe('zone presentation', () => {
+  test('recognizes directional fallback labels without hiding named zones', () => {
+    expect(isDirectionalFallbackLabel('North')).toBe(true);
+    expect(isDirectionalFallbackLabel('SW Quadrant')).toBe(true);
+    expect(isDirectionalFallbackLabel('Mayfair')).toBe(false);
+  });
+
+  test('selects ranked eligible chips without mutation and replaces the capped rank with focus', () => {
+    const zones = Array.from({ length: 8 }, (_, index) => zone(String(index + 1), 100 - index));
+    zones.push({ ...zone('zero-score', 0) });
+    zones.push({
+      ...zone('no-amenities', 110),
+      amenities: { ...zone('no-amenities', 110).amenities, total: 0 },
+    });
+    const originalIds = zones.map(({ id }) => id);
+
+    const selection = selectVisibleZoneChips(zones, '8');
+
+    expect(selection.eligibleTotal).toBe(8);
+    expect(selection.visibleZones.map(({ id }) => id)).toEqual(['1', '2', '3', '4', '5', '6', '8']);
+    expect(zones.map(({ id }) => id)).toEqual(originalIds);
+  });
+});
+
 describe('ZoneChipsStrip', () => {
   test.each([{ zones: [] }, { zones: [zone('only', 70)] }])(
     'renders nothing for zero or one ranked zones',
@@ -198,10 +243,216 @@ describe('ZoneChipsStrip', () => {
     );
     expect(screen.queryByRole('button', { name: /Zone 7/i })).toBeNull();
     expect(screen.getByText('Viewing').parentElement?.textContent).toContain('Zone 8');
+    expect(screen.getByText('Showing 7 of 8 scanned zones')).toBeTruthy();
+  });
+
+  test('derives global disabled behavior from the rescanning zone ID', () => {
+    const onZoneSelect = vi.fn();
+    const zones = [zone('focused', 90), zone('rescanning', 80), zone('available', 70)];
+    const { rerender } = render(
+      <ZoneChipsStrip
+        zones={zones}
+        focusedZoneId="focused"
+        rescanningZoneId="rescanning"
+        onZoneSelect={onZoneSelect}
+      />
+    );
+
+    expect(
+      (screen.getByRole('button', { name: /Zone rescanning/i }) as HTMLButtonElement).disabled
+    ).toBe(true);
+    expect(
+      (screen.getByRole('button', { name: /Zone available/i }) as HTMLButtonElement).disabled
+    ).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: /Zone available/i }));
+    expect(onZoneSelect).not.toHaveBeenCalled();
+
+    rerender(<ZoneChipsStrip zones={zones} focusedZoneId="focused" onZoneSelect={onZoneSelect} />);
+    fireEvent.click(screen.getByRole('button', { name: /Zone available/i }));
+    expect(onZoneSelect).toHaveBeenCalledWith(expect.objectContaining({ id: 'available' }));
+  });
+});
+
+describe('useRadarScanSequence', () => {
+  const pin: RadarPin = { key: 'pin-1', x: 300, y: 250, angle: 180 };
+  const zoneDot: RadarZoneDot = {
+    id: 'zone-1',
+    label: 'Zone 1',
+    score: 80,
+    labeled: true,
+    x: 250,
+    y: 250,
+  };
+
+  test('keeps pending input in the sweep phase without completing', async () => {
+    useFakeAnimationFrames();
+    const onComplete = vi.fn();
+    const { result } = renderHook(() =>
+      useRadarScanSequence({
+        sequenceKey: 'pending',
+        resultsPending: true,
+        zoneDots: [],
+        pins: [],
+        onComplete,
+      })
+    );
+
+    await advanceTime(10_000);
+
+    expect(result.current.phase).toBe('sweep');
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
+  test('completes settled empty input once after the completion hold', async () => {
+    useFakeAnimationFrames();
+    const onComplete = vi.fn();
+    const { result } = renderHook(() =>
+      useRadarScanSequence({
+        sequenceKey: 'empty',
+        resultsPending: false,
+        zoneDots: [],
+        pins: [],
+        onComplete,
+      })
+    );
+
+    await advanceTime(0);
+    expect(result.current.phase).toBe('complete');
+    await advanceTime(RADAR_COMPLETE_HOLD_MS - 1);
+    expect(onComplete).not.toHaveBeenCalled();
+    await advanceTime(1);
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    await advanceTime(RADAR_COMPLETE_HOLD_MS);
+    expect(onComplete).toHaveBeenCalledTimes(1);
+  });
+
+  test('skips directly to pins when settled results have no zones', async () => {
+    useFakeAnimationFrames();
+    const { result } = renderHook(() =>
+      useRadarScanSequence({
+        sequenceKey: 'no-zones',
+        resultsPending: false,
+        zoneDots: [],
+        pins: [pin],
+      })
+    );
+
+    await advanceTime(0);
+    expect(result.current.phase).toBe('pins');
+    expect(result.current.bloomedCount).toBe(0);
+  });
+
+  test('orders bloom, zoom, pin reveal, and completion', async () => {
+    useFakeAnimationFrames();
+    const onComplete = vi.fn();
+    const { result } = renderHook(() =>
+      useRadarScanSequence({
+        sequenceKey: 'full',
+        resultsPending: false,
+        zoneDots: [zoneDot],
+        pins: [pin],
+        onComplete,
+      })
+    );
+    const bloomDuration = RADAR_ZONE_STAGGER_MS + RADAR_ZONE_BLOOM_HOLD_MS;
+
+    await advanceTime(0);
+    expect(result.current.phase).toBe('bloom');
+    await advanceTime(bloomDuration - 1);
+    expect(result.current.phase).toBe('bloom');
+    expect(result.current.bloomedCount).toBe(1);
+    await advanceTime(1);
+    expect(result.current.phase).toBe('zooming');
+    await advanceTime(RADAR_ZOOM_DURATION_MS);
+    expect(result.current.phase).toBe('pins');
+    await advanceTime(16);
+    expect(result.current.phase).toBe('complete');
+    expect(result.current.litPinIds.has(pin.key)).toBe(true);
+    expect(onComplete).not.toHaveBeenCalled();
+    await advanceTime(RADAR_COMPLETE_HOLD_MS);
+    expect(onComplete).toHaveBeenCalledTimes(1);
+  });
+
+  test('clears the completion hold when unmounted', async () => {
+    useFakeAnimationFrames();
+    const onComplete = vi.fn();
+    const quickPin = { ...pin, angle: 1 };
+    const { result, unmount } = renderHook(() =>
+      useRadarScanSequence({
+        sequenceKey: 'unmount',
+        resultsPending: false,
+        zoneDots: [],
+        pins: [quickPin],
+        onComplete,
+      })
+    );
+
+    await advanceTime(0);
+    await advanceTime(16);
+    expect(result.current.phase).toBe('complete');
+    unmount();
+    await advanceTime(RADAR_COMPLETE_HOLD_MS);
+
+    expect(onComplete).not.toHaveBeenCalled();
+  });
+
+  test('resets state and cancels stale completion when input is replaced', async () => {
+    useFakeAnimationFrames();
+    const onComplete = vi.fn();
+    const quickPin = { ...pin, angle: 1 };
+    const { result, rerender } = renderHook(
+      ({
+        sequenceKey,
+        resultsPending,
+        pins,
+      }: {
+        sequenceKey: string;
+        resultsPending: boolean;
+        pins: RadarPin[];
+      }) =>
+        useRadarScanSequence({
+          sequenceKey,
+          resultsPending,
+          zoneDots: [],
+          pins,
+          onComplete,
+        }),
+      { initialProps: { sequenceKey: 'first', resultsPending: false, pins: [quickPin] } }
+    );
+
+    await advanceTime(0);
+    await advanceTime(16);
+    expect(result.current.phase).toBe('complete');
+
+    rerender({ sequenceKey: 'replacement-pending', resultsPending: true, pins: [] });
+    await advanceTime(0);
+    expect(result.current.phase).toBe('sweep');
+    expect(result.current.litPinIds.size).toBe(0);
+    await advanceTime(RADAR_COMPLETE_HOLD_MS);
+    expect(onComplete).not.toHaveBeenCalled();
+
+    rerender({ sequenceKey: 'replacement-empty', resultsPending: false, pins: [] });
+    await advanceTime(0);
+    expect(result.current.phase).toBe('complete');
+    await advanceTime(RADAR_COMPLETE_HOLD_MS);
+    expect(onComplete).toHaveBeenCalledTimes(1);
   });
 });
 
 describe('RadarScan', () => {
+  test('completes a settled empty result set through the real coordinator', async () => {
+    useFakeAnimationFrames();
+    const onComplete = vi.fn();
+    render(
+      <RadarScan city="York" results={[]} zones={[]} focusedZoneId={null} onComplete={onComplete} />
+    );
+
+    await advanceTime(1);
+    expect(onComplete).not.toHaveBeenCalled();
+    await advanceTime(RADAR_COMPLETE_HOLD_MS);
+    expect(onComplete).toHaveBeenCalledTimes(1);
+  });
+
   test('locks and labels the authoritative focus when it ranks second by score', async () => {
     vi.useFakeTimers();
     render(
@@ -214,9 +465,8 @@ describe('RadarScan', () => {
       />
     );
 
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1_300);
-    });
+    await advanceTime(0);
+    await advanceTime(1_300);
 
     expect(screen.getByLabelText('Radar lock: Zone second')).toBeTruthy();
     expect(screen.queryByLabelText('Radar lock: Zone top')).toBeNull();

@@ -40,7 +40,6 @@ export interface SearchResultsViewProps {
   getSessionPayload: () => PersistedSearchPayload;
   zones: Zone[];
   focusedZone?: Zone;
-  focusedZoneId: string | null;
   rescanningZoneId: string | null;
   zoneScanStatus: ZoneScanStatus | null;
   marketDensity: SearchMarketDensity | null;
@@ -78,7 +77,6 @@ export function SearchResultsView({
   getSessionPayload,
   zones,
   focusedZone,
-  focusedZoneId,
   rescanningZoneId,
   zoneScanStatus,
   marketDensity,
@@ -133,10 +131,9 @@ export function SearchResultsView({
         {zones.length > 1 && (
           <ZoneChipsStrip
             zones={zones}
-            focusedZoneId={focusedZoneId}
+            focusedZoneId={focusedZone?.id ?? null}
             rescanningZoneId={rescanningZoneId}
             onZoneSelect={onZoneSelect}
-            disabled={!!rescanningZoneId}
           />
         )}
 

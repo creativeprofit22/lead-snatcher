@@ -4,6 +4,7 @@ import { motion } from 'motion/react';
 import { MapPin, Loader2, Radar, Gem, Building2, Shuffle, TrendingUp } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { Zone, ZoneArchetype } from '@/lib/business/zone-contract';
+import { isDirectionalFallbackLabel, selectVisibleZoneChips } from './zone-presentation';
 
 const ARCHETYPE_DISPLAY: Record<ZoneArchetype, { icon: LucideIcon; label: string; tone: string }> =
   {
@@ -18,44 +19,17 @@ interface ZoneChipsStripProps {
   focusedZoneId?: string | null;
   rescanningZoneId?: string | null;
   onZoneSelect: (zone: Zone) => void;
-  disabled?: boolean;
 }
-
-const MAX_CHIPS = 7;
-
-const DIRECTIONAL_FALLBACK_LABELS = new Set([
-  'SW Quadrant',
-  'South',
-  'SE Quadrant',
-  'West',
-  'Central',
-  'East',
-  'NW Quadrant',
-  'North',
-  'NE Quadrant',
-  'Zone',
-]);
 
 export function ZoneChipsStrip({
   zones,
   focusedZoneId,
   rescanningZoneId,
   onZoneSelect,
-  disabled,
 }: ZoneChipsStripProps) {
-  // Rank meaningful zones for presentation, then guarantee the authoritative
-  // focus remains visible even when it falls below the chip limit.
-  const ranked = [...zones]
-    .filter((zone) => zone.score > 0 && zone.amenities.total > 0)
-    .sort((a, b) => b.score - a.score);
+  const { visibleZones, eligibleTotal } = selectVisibleZoneChips(zones, focusedZoneId);
   const focusedZone = focusedZoneId ? zones.find((zone) => zone.id === focusedZoneId) : undefined;
-  const visibleZones = ranked.slice(0, MAX_CHIPS);
-
-  if (focusedZone && !visibleZones.some((zone) => zone.id === focusedZone.id)) {
-    if (visibleZones.length === MAX_CHIPS) visibleZones[MAX_CHIPS - 1] = focusedZone;
-    else visibleZones.push(focusedZone);
-  }
-
+  const isRescanningAnyZone = rescanningZoneId != null;
   if (visibleZones.length <= 1) return null;
 
   const activeZone = focusedZone
@@ -74,7 +48,9 @@ export function ZoneChipsStrip({
               Scanned Zones
             </div>
             <div className="text-[11px] text-white/50">
-              {visibleZones.length} zones · tap to jump scan
+              {visibleZones.length < eligibleTotal
+                ? `Showing ${visibleZones.length} of ${eligibleTotal} scanned zones`
+                : `${eligibleTotal} zones · tap to jump scan`}
             </div>
           </div>
         </div>
@@ -92,7 +68,7 @@ export function ZoneChipsStrip({
           const isActive = z.id === focusedZoneId;
           const isRescanning = rescanningZoneId === z.id;
           const isPremium = z.level === 'premium' || z.level === 'commercial';
-          const isDirectional = DIRECTIONAL_FALLBACK_LABELS.has(z.label);
+          const isDirectional = isDirectionalFallbackLabel(z.label);
           const arche = ARCHETYPE_DISPLAY[z.archetype];
           const ArcheIcon = arche.icon;
 
@@ -101,10 +77,10 @@ export function ZoneChipsStrip({
               key={z.id}
               type="button"
               onClick={() => {
-                if (disabled || isActive || isRescanning) return;
+                if (isRescanningAnyZone || isActive || isRescanning) return;
                 onZoneSelect(z);
               }}
-              disabled={disabled || isActive}
+              disabled={isRescanningAnyZone || isActive || isRescanning}
               initial={{ opacity: 0, y: 4 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: i * 0.04, duration: 0.22 }}

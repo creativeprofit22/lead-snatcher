@@ -81,16 +81,19 @@ vi.mock('./SaveSessionButton', () => ({
 vi.mock('./ZoneChipsStrip', () => ({
   ZoneChipsStrip: ({
     zones,
-    disabled,
+    focusedZoneId,
+    rescanningZoneId,
     onZoneSelect,
   }: {
     zones: Zone[];
-    disabled?: boolean;
+    focusedZoneId?: string | null;
+    rescanningZoneId?: string | null;
     onZoneSelect: (zone: Zone) => void;
   }) => (
     <button
       data-testid="zone-strip"
-      data-disabled={String(!!disabled)}
+      data-focused-zone-id={focusedZoneId ?? ''}
+      data-rescanning-zone-id={rescanningZoneId ?? ''}
       onClick={() => onZoneSelect(zones[1]!)}
     >
       Switch zone
@@ -337,7 +340,6 @@ function createProps(overrides: Partial<SearchResultsViewProps> = {}): SearchRes
     ),
     zones,
     focusedZone: zones[0],
-    focusedZoneId: 'central',
     rescanningZoneId: null,
     zoneScanStatus: 'ok',
     marketDensity: null,
@@ -424,9 +426,10 @@ describe('SearchResultsView', () => {
     expect(props.onZoneSelect).toHaveBeenCalledWith(zones[1]);
     expect(props.onSortChange).toHaveBeenCalledWith('rating');
     expect(props.onFiltersChange).toHaveBeenCalledWith({ ...filters, hasEmail: true });
+    expect(screen.getByTestId('zone-strip').dataset.focusedZoneId).toBe('central');
 
     rerender(<SearchResultsView {...props} rescanningZoneId="north" />);
-    expect(screen.getByTestId('zone-strip').getAttribute('data-disabled')).toBe('true');
+    expect(screen.getByTestId('zone-strip').dataset.rescanningZoneId).toBe('north');
     expect(container.querySelector('.grid')?.className).toContain('pointer-events-none opacity-40');
   });
 
