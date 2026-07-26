@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState, Suspense } from 'react';
 import Link from 'next/link';
-import { Settings, ArrowLeft, Gauge } from 'lucide-react';
+import { Settings, Gauge } from 'lucide-react';
 import { toast } from 'sonner';
 import { AnimatePresence } from 'motion/react';
 import {
@@ -10,19 +10,13 @@ import {
   BusinessTypeSelector,
   CityInput,
   RadarScan,
-  AreaDensityMeter,
-  ZoneChipsStrip,
   ResumeSearchCard,
   ActivityTicker,
-  SaveSessionButton,
   SavedSessionsPanel,
+  SearchResultsView,
 } from '@/components/search';
 import { PreLoader } from '@/components/preloader';
-import { SlidingNumber } from '@/components/motion-primitives/sliding-number';
-import { SaveLeadModal } from '@/components/leads';
-import { LeadResultCard } from '@/components/leads/LeadResultCard';
 import { BatchEnrichBar } from '@/components/leads/BatchEnrichBar';
-import { ErrorBanner } from '@/components/leads/ErrorBanner';
 import { EnrichmentExplainer, shouldShowExplainer } from '@/components/leads/EnrichmentExplainer';
 import { useEnrichmentStream } from '@/lib/hooks/useEnrichmentStream';
 import { useBusinessSearchController } from '@/lib/hooks/useBusinessSearchController';
@@ -32,11 +26,15 @@ import {
   useSearchSessionPersistence,
   type SearchSessionPayload,
 } from '@/lib/business/search-session-client';
-import { SEARCH_SNAPSHOT_VERSION } from '@/lib/business/search-snapshot';
+import {
+  SEARCH_SNAPSHOT_VERSION,
+  type PersistedSearchPayload,
+} from '@/lib/business/search-snapshot';
 import {
   filterAndSortResults,
   mergeEnrichmentResults,
   selectResultsById,
+  type SearchResultFilters,
   type SearchResultSort,
 } from '@/lib/business/derive-search-results';
 import { DEFAULT_COUNTRY_CODE, INDUSTRY_TYPES } from '@/lib/constants';
@@ -94,11 +92,13 @@ function HomeInner() {
   const focusedZone = focusedZoneId ? zones.find((zone) => zone.id === focusedZoneId) : undefined;
   // Filter & sort state
   const [sortBy, setSortBy] = useState<SearchResultSort>('fit');
-  const [filterHasEmail, setFilterHasEmail] = useState(false);
-  const [filterHasPhone, setFilterHasPhone] = useState(false);
-  const [filterHasSocial, setFilterHasSocial] = useState(false);
-  const [filterHasAds, setFilterHasAds] = useState(false);
-  const [filterMinBudget, setFilterMinBudget] = useState(0);
+  const [filters, setFilters] = useState<SearchResultFilters>({
+    hasEmail: false,
+    hasPhone: false,
+    hasSocial: false,
+    hasAds: false,
+    minBudget: 0,
+  });
 
   // Count-up for "N businesses found"
   const [resultsCount, setResultsCount] = useState(0);
@@ -257,23 +257,44 @@ function HomeInner() {
   };
 
   // Filter and sort results
-  const filteredResults = filterAndSortResults(
-    enrichedResults,
-    {
-      hasEmail: filterHasEmail,
-      hasPhone: filterHasPhone,
-      hasSocial: filterHasSocial,
-      hasAds: filterHasAds,
-      minBudget: filterMinBudget,
-    },
-    sortBy
-  );
+  const filteredResults = filterAndSortResults(enrichedResults, filters, sortBy);
+
+  const resultsIndustryLabel =
+    customIndustry.trim() ||
+    INDUSTRY_TYPES.find((type) => type.id === selectedIndustry)?.label ||
+    selectedIndustry ||
+    'Session';
+  const resultsTitle = `${resultsIndustryLabel} in ${city}`;
+  const getSessionPayload = (): PersistedSearchPayload => ({
+    version: SEARCH_SNAPSHOT_VERSION,
+    results: searchResults,
+    industry: (selectedIndustry ?? 'other') as IndustryType,
+    city: city.trim(),
+    country,
+    timestamp: Date.now(),
+    zones,
+    zoneBbox,
+    singleZone,
+    focusedZoneId,
+    zoneScanStatus: zoneScanStatus ?? undefined,
+    marketDensity,
+  });
 
   const handleBackToSearch = resetSearch;
 
   // Tap-to-rescan a different zone without leaving the results page.
   const handleZoneSwitch = (zone: Zone) => {
     void rescanZone(zone, persistSearch);
+  };
+
+  const handleRequestEnrichmentExplainer = (lead: BusinessSearchResult) =>
+    gateEnrichment(() => handleEnrichOne(lead));
+
+  const handleCloseSavedLeadModal = () => setSavedLeadModal({ isOpen: false, businessName: '' });
+
+  const handleViewSavedLeadCRM = () => {
+    handleCloseSavedLeadModal();
+    window.location.href = '/crm';
   };
 
   // Floating UI shared by both results view and home view: the batch
@@ -311,234 +332,43 @@ function HomeInner() {
   if (viewMode === 'results') {
     return (
       <>
-        <div className="min-h-screen px-3 sm:px-4 py-4 sm:py-8">
-          <div className="mx-auto max-w-7xl">
-            <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-              <div>
-                <button
-                  onClick={handleBackToSearch}
-                  className="mb-3 inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs font-medium text-white/70 transition-all hover:border-white/20 hover:bg-white/10 hover:text-white"
-                >
-                  <ArrowLeft className="h-3.5 w-3.5" />
-                  Back
-                </button>
-                <h1 className="text-lg sm:text-2xl font-semibold text-white">
-                  {customIndustry.trim() ||
-                    INDUSTRY_TYPES.find((t) => t.id === selectedIndustry)?.label ||
-                    selectedIndustry}{' '}
-                  in {city}
-                </h1>
-                <div className="mt-1 flex items-center gap-1.5 text-xs text-white/60 sm:text-sm">
-                  <SlidingNumber value={resultsCount} />
-                  <span>businesses found</span>
-                </div>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <SaveSessionButton
-                  defaultName={`${
-                    customIndustry.trim() ||
-                    INDUSTRY_TYPES.find((t) => t.id === selectedIndustry)?.label ||
-                    selectedIndustry ||
-                    'Session'
-                  } in ${city}`}
-                  getPayload={() => ({
-                    version: SEARCH_SNAPSHOT_VERSION,
-                    results: searchResults,
-                    industry: (selectedIndustry ?? 'other') as IndustryType,
-                    city: city.trim(),
-                    country,
-                    timestamp: Date.now(),
-                    zones,
-                    zoneBbox,
-                    singleZone,
-                    focusedZoneId,
-                    zoneScanStatus: zoneScanStatus ?? undefined,
-                    marketDensity,
-                  })}
-                />
-                <Link
-                  href="/crm"
-                  className="flex items-center gap-2 rounded-lg bg-accent text-accent-foreground px-4 py-2 text-sm font-medium hover:bg-accent-hover transition-colors shadow-[0_0_20px_oklch(0.65_0.18_250/0.25)]"
-                >
-                  View My Leads
-                </Link>
-              </div>
-            </div>
-
-            {zones.length > 1 && (
-              <ZoneChipsStrip
-                zones={zones}
-                focusedZoneId={focusedZoneId}
-                rescanningZoneId={rescanningZoneId}
-                onZoneSelect={handleZoneSwitch}
-                disabled={!!rescanningZoneId}
-              />
-            )}
-
-            {zoneScanStatus === 'unavailable' && marketDensity ? (
-              <div
-                role="status"
-                className="mb-6 rounded-xl border border-border-bright/50 bg-surface/70 p-5 backdrop-blur-sm"
-              >
-                <p className="font-mono text-xs uppercase tracking-[0.18em] text-amber-300">
-                  Market density unavailable
-                </p>
-                <p className="mt-2 text-sm leading-6 text-gray-300">
-                  {marketDensity.description}
-                </p>
-              </div>
-            ) : (
-              marketDensity &&
-              marketDensity.areaScore !== undefined &&
-              focusedZone && (
-                <div className="mb-6">
-                  <AreaDensityMeter
-                    score={marketDensity.areaScore}
-                    level={marketDensity.level}
-                    label={marketDensity.label}
-                    description={marketDensity.description}
-                    amenities={marketDensity.amenities}
-                    focusedZone={focusedZone}
-                    cityLabel={city}
-                    singleZone={singleZone}
-                  />
-                </div>
-              )
-            )}
-
-            {/* Filters & Sort — HUD panel */}
-            <div className="hud-panel mb-4 flex flex-col sm:flex-row items-start sm:items-center gap-3 p-3 bg-surface/60 border border-border-bright/50 rounded-xl backdrop-blur-sm">
-              {/* Sort */}
-              <div className="flex items-center gap-2">
-                <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-white/40">
-                  Sort
-                </span>
-                <select
-                  value={sortBy}
-                  onChange={(e) => setSortBy(e.target.value as SearchResultSort)}
-                  className="cursor-pointer rounded-lg border border-border-bright/60 bg-surface-elevated/80 px-2.5 py-1.5 text-xs text-white/85 outline-none transition-colors hover:bg-surface-hover/80 focus:border-sky-400/60"
-                >
-                  <option value="fit">Best Fit</option>
-                  <option value="score">Lead Score</option>
-                  <option value="contactPoints">Contact Points</option>
-                  <option value="reviews">Reviews</option>
-                  <option value="rating">Rating</option>
-                </select>
-              </div>
-
-              <div className="hidden h-5 w-px bg-border-bright/50 sm:block" />
-
-              {/* Filters */}
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-white/40">
-                  Filter
-                </span>
-                <FilterToggle
-                  label="Has Email"
-                  active={filterHasEmail}
-                  onClick={() => setFilterHasEmail(!filterHasEmail)}
-                />
-                <FilterToggle
-                  label="Has Phone"
-                  active={filterHasPhone}
-                  onClick={() => setFilterHasPhone(!filterHasPhone)}
-                />
-                <FilterToggle
-                  label="Has Social"
-                  active={filterHasSocial}
-                  onClick={() => setFilterHasSocial(!filterHasSocial)}
-                />
-                <FilterToggle
-                  label="Runs Ads"
-                  active={filterHasAds}
-                  onClick={() => setFilterHasAds(!filterHasAds)}
-                />
-                <select
-                  value={filterMinBudget}
-                  onChange={(e) => setFilterMinBudget(Number(e.target.value))}
-                  className="cursor-pointer rounded-lg border border-border-bright/60 bg-surface-elevated/80 px-2.5 py-1.5 text-xs text-white/85 outline-none transition-colors hover:bg-surface-hover/80 focus:border-sky-400/60"
-                >
-                  <option value={0}>Any Budget</option>
-                  <option value={500}>$500+</option>
-                  <option value={1500}>$1.5K+</option>
-                  <option value={3000}>$3K+</option>
-                  <option value={5000}>$5K+</option>
-                </select>
-              </div>
-
-              {/* Tier distribution readout */}
-              <TierDistribution results={filteredResults} total={searchResults.length} />
-            </div>
-
-            {searchBannerError && (
-              <ErrorBanner
-                message={searchBannerError.message}
-                severity={searchBannerError.severity}
-                action={
-                  searchBannerError.isAuthError ? { label: 'Log in', href: '/login' } : undefined
-                }
-                onDismiss={dismissSearchBanner}
-              />
-            )}
-
-            {enrichBannerError && (
-              <ErrorBanner
-                message={enrichBannerError.message}
-                severity={enrichBannerError.kind === 'rate_limited' ? 'warning' : 'error'}
-                action={
-                  enrichBannerError.kind === 'session_expired'
-                    ? { label: 'Log in', href: '/login' }
-                    : undefined
-                }
-                onDismiss={clearEnrichBannerError}
-              />
-            )}
-
-            <div
-              className={`grid gap-4 transition-opacity duration-300 ${
-                rescanningZoneId ? 'pointer-events-none opacity-40' : 'opacity-100'
-              }`}
-            >
-              <AnimatePresence mode="popLayout" initial={false}>
-                {filteredResults.map((business, index) => {
-                  const tier =
-                    business.leadScore >= 55 ? 'hot' : business.leadScore >= 35 ? 'mid' : 'cold';
-                  const rank = index + 1;
-                  return (
-                    <LeadResultCard
-                      key={business.placeId}
-                      lead={business}
-                      index={index}
-                      rank={rank}
-                      tier={tier}
-                      selected={selectedForEnrich.has(business.placeId)}
-                      onToggleSelection={() => toggleSelectForEnrich(business.placeId)}
-                      enrichmentStatus={enrichStatusMap[business.placeId] ?? 'idle'}
-                      enrichmentResult={enrichResultMap[business.placeId]}
-                      onEnrich={() => handleEnrichOne(business)}
-                      onRequestEnrichmentExplainer={() =>
-                        gateEnrichment(() => handleEnrichOne(business))
-                      }
-                      saveBusy={savingLeadIds.has(business.placeId)}
-                      onSave={() => handleSaveLead(business)}
-                    />
-                  );
-                })}
-              </AnimatePresence>
-            </div>
-          </div>
-
-          {/* Save Lead Confirmation Modal */}
-          <SaveLeadModal
-            isOpen={savedLeadModal.isOpen}
-            businessName={savedLeadModal.businessName}
-            onClose={() => setSavedLeadModal({ isOpen: false, businessName: '' })}
-            onViewCRM={() => {
-              setSavedLeadModal({ isOpen: false, businessName: '' });
-              window.location.href = '/crm';
-            }}
-          />
-        </div>
+        <SearchResultsView
+          title={resultsTitle}
+          city={city}
+          animatedResultsCount={resultsCount}
+          totalResults={searchResults.length}
+          filteredResults={filteredResults}
+          sortBy={sortBy}
+          filters={filters}
+          onSortChange={setSortBy}
+          onFiltersChange={setFilters}
+          defaultSessionName={resultsTitle}
+          getSessionPayload={getSessionPayload}
+          zones={zones}
+          focusedZone={focusedZone}
+          focusedZoneId={focusedZoneId}
+          rescanningZoneId={rescanningZoneId}
+          zoneScanStatus={zoneScanStatus}
+          marketDensity={marketDensity}
+          singleZone={singleZone}
+          onBack={handleBackToSearch}
+          onZoneSelect={handleZoneSwitch}
+          searchBannerError={searchBannerError}
+          onDismissSearchBanner={dismissSearchBanner}
+          enrichBannerError={enrichBannerError}
+          onDismissEnrichBanner={clearEnrichBannerError}
+          selectedForEnrich={selectedForEnrich}
+          enrichStatusMap={enrichStatusMap}
+          enrichResultMap={enrichResultMap}
+          savingLeadIds={savingLeadIds}
+          onToggleSelection={toggleSelectForEnrich}
+          onEnrichLead={handleEnrichOne}
+          onRequestEnrichmentExplainer={handleRequestEnrichmentExplainer}
+          onSaveLead={handleSaveLead}
+          savedLeadModal={savedLeadModal}
+          onCloseSavedLeadModal={handleCloseSavedLeadModal}
+          onViewSavedLeadCRM={handleViewSavedLeadCRM}
+        />
         {enrichmentFloatingUI}
       </>
     );
@@ -711,83 +541,5 @@ function HomeInner() {
         )}
       </AnimatePresence>
     </>
-  );
-}
-
-function FilterToggle({
-  label,
-  active,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={`filter-toggle relative rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-all ${
-        active
-          ? 'filter-toggle-active border-sky-400/60 bg-sky-500/15 text-sky-200 shadow-[0_0_18px_rgba(56,189,248,0.35)]'
-          : 'border-border-bright/45 bg-surface/40 text-white/50 hover:border-border-bright hover:bg-surface-hover/60 hover:text-white/85'
-      }`}
-    >
-      {label}
-    </button>
-  );
-}
-
-function TierDistribution({ results, total }: { results: BusinessSearchResult[]; total: number }) {
-  const hot = results.filter((b) => b.leadScore >= 55).length;
-  const mid = results.filter((b) => b.leadScore >= 35 && b.leadScore < 55).length;
-  const cold = results.filter((b) => b.leadScore < 35).length;
-  const shown = results.length;
-  const hotPct = shown > 0 ? (hot / shown) * 100 : 0;
-  const midPct = shown > 0 ? (mid / shown) * 100 : 0;
-  const coldPct = shown > 0 ? (cold / shown) * 100 : 0;
-
-  return (
-    <div className="tier-readout sm:ml-auto flex items-center gap-3">
-      <span className="inline-flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.18em] text-white/40">
-        <span className="relative inline-flex h-1.5 w-1.5">
-          <span className="absolute inline-flex h-full w-full rounded-full bg-sky-400 opacity-70 animate-ping" />
-          <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-sky-400" />
-        </span>
-        Live
-      </span>
-      <div className="tier-bar relative h-1.5 w-32 overflow-hidden rounded-full bg-white/5">
-        <div
-          className="absolute inset-y-0 left-0 bg-gradient-to-r from-orange-400 to-amber-400"
-          style={{ width: `${hotPct}%` }}
-        />
-        <div
-          className="absolute inset-y-0 bg-gradient-to-r from-sky-400 to-cyan-400"
-          style={{ left: `${hotPct}%`, width: `${midPct}%` }}
-        />
-        <div
-          className="absolute inset-y-0 bg-gradient-to-r from-slate-500 to-slate-400"
-          style={{ left: `${hotPct + midPct}%`, width: `${coldPct}%` }}
-        />
-      </div>
-      <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.14em]">
-        <span className="inline-flex items-center gap-1 text-orange-300">
-          <span className="h-1.5 w-1.5 rounded-full bg-orange-400 shadow-[0_0_6px_rgba(251,146,60,0.8)]" />
-          <span className="tabular-nums">{hot}</span>
-        </span>
-        <span className="inline-flex items-center gap-1 text-sky-300">
-          <span className="h-1.5 w-1.5 rounded-full bg-sky-400 shadow-[0_0_6px_rgba(56,189,248,0.7)]" />
-          <span className="tabular-nums">{mid}</span>
-        </span>
-        <span className="inline-flex items-center gap-1 text-slate-400">
-          <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
-          <span className="tabular-nums">{cold}</span>
-        </span>
-      </div>
-      <span className="font-mono text-[10px] text-white/35">
-        <span className="tabular-nums text-white/60">{shown}</span>
-        <span>/</span>
-        <span className="tabular-nums">{total}</span>
-      </span>
-    </div>
   );
 }

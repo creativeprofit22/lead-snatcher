@@ -10,3 +10,5 @@ export { IdleScoreDial } from './IdleScoreDial';
 export { SaveSessionButton } from './SaveSessionButton';
 export { SavedSessionsPanel } from './SavedSessionsPanel';
 export { RegionPicker } from './RegionPicker';
+export { SearchResultsControls, getLeadResultTier } from './SearchResultsControls';
+export { SearchResultsView, type SearchResultsViewProps } from './SearchResultsView';
